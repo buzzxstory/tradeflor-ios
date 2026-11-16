@@ -331,12 +331,17 @@ private struct AdminOfficialView: View {
             else if posts.isEmpty { Text("adm.official.none").font(.system(size: 13)).foregroundStyle(Theme.faint) }
             TFCard {
                 ForEach(Array(posts.enumerated()), id: \.element.id) { i, p in
-                    HStack(spacing: 10) {
-                        Image(systemName: p.kind == "video" ? "video" : "photo").foregroundStyle(Theme.accent).frame(width: 24)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(p.title?.isEmpty == false ? (p.title ?? "") : (p.caption ?? p.id)).font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(Theme.text).lineLimit(1)
-                            Text("\(NSLocalizedString("adm.state." + (p.state ?? "draft"), comment: "")) · \(p.views) \(NSLocalizedString("adm.views", comment: ""))")
+                    // card row (website OfficialAdmin.tsx): a 9:16 thumbnail, a readable name, two lines of caption, the time
+                    // that matters, views and type
+                    HStack(alignment: .top, spacing: 12) {
+                        OfficialThumb(token: token, post: p)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(OfficialRowText.name(p)).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                            if let c = OfficialRowText.caption(p) {
+                                Text(c).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(2)
+                            }
+                            Text(OfficialRowText.when(p)).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.accent)
+                            Text("\(NSLocalizedString("adm.state." + (p.state ?? "draft"), comment: "")) · \(p.views) \(NSLocalizedString("adm.views", comment: "")) · \(NSLocalizedString(p.kind == "video" ? "chats.kind.video" : "chats.kind.image", comment: ""))")
                                 .font(.system(size: 11)).foregroundStyle(Theme.faint)
                         }
                         Spacer()
@@ -378,5 +383,81 @@ private struct AdminOfficialView: View {
     private func load() async {
         all = (try? await APIClient.shared.stAdminOfficial(token: token)) ?? all
         loading = false
+    }
+}
+
+
+/// An Official post's thumbnail: the poster of a video (or "Preparing…" until the server has made it), the picture itself.
+private struct OfficialThumb: View {
+    let token: String
+    let post: AdminOfficialPost
+    @State private var image: UIImage?
+
+    private var waiting: Bool { post.kind == "video" && post.poster != true }
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                LinearGradient(colors: [Theme.hex(0x0A3445), Theme.hex(0x04121D)], startPoint: .top, endPoint: .bottom)
+                VStack(spacing: 4) {
+                    Image("BrandFlower").resizable().scaledToFit().frame(width: 22).opacity(0.7)
+                    if waiting { Text("adm.preparing").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.hex(0xC4D5DF)) }
+                }
+            }
+            if post.kind == "video" && image != nil {
+                Image(systemName: "play.fill").font(.system(size: 10)).foregroundStyle(.white)
+                    .frame(width: 22, height: 22).background(.black.opacity(0.5), in: Circle())
+            }
+        }
+        .frame(width: 54, height: 96)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.borderStrong, lineWidth: 1))
+        .task(id: post.id) {
+            guard !waiting else { return }
+            if let d = await APIClient.shared.statusMedia(token: token, id: "official-" + post.id, poster: post.kind == "video") {
+                image = UIImage(data: d)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+enum OfficialRowText {
+    /// The caption's first line when the name is only the uploaded file's name.
+    static func name(_ p: AdminOfficialPost) -> String {
+        let t = (p.title ?? "").trimmingCharacters(in: .whitespaces)
+        let looksLikeFile = t.isEmpty || t.range(of: #"\.[A-Za-z0-9]{2,5}$"#, options: .regularExpression) != nil
+        if looksLikeFile, let first = p.caption?.split(separator: "\n").first, !first.trimmingCharacters(in: .whitespaces).isEmpty {
+            return String(first)
+        }
+        return t.isEmpty ? NSLocalizedString("adm.untitled", comment: "") : t
+    }
+
+    /// Two lines of caption, without repeating what the name already shows.
+    static func caption(_ p: AdminOfficialPost) -> String? {
+        guard var c = p.caption?.trimmingCharacters(in: .whitespacesAndNewlines), !c.isEmpty else { return nil }
+        let n = name(p)
+        if c.hasPrefix(n) { c = String(c.dropFirst(n.count)).trimmingCharacters(in: .whitespacesAndNewlines) }
+        return c.isEmpty ? nil : c
+    }
+
+    /// The time that matters: "23 h left", "starts in 2 d", "ended 5 h ago", or when it was added.
+    static func when(_ p: AdminOfficialPost) -> String {
+        let now = Date().timeIntervalSince1970
+        func span(_ s: Double) -> String {
+            let s = max(0, s)
+            if s >= 86_400 { return String(format: NSLocalizedString("adm.span.d", comment: ""), Int(s / 86_400)) }
+            if s >= 3600 { return String(format: NSLocalizedString("adm.span.h", comment: ""), Int(s / 3600)) }
+            return String(format: NSLocalizedString("adm.span.m", comment: ""), max(1, Int(s / 60)))
+        }
+        switch p.state {
+        case "active": if let e = p.expires_at { return String(format: NSLocalizedString("adm.when.left", comment: ""), span(Double(e) - now)) }
+        case "scheduled": if let s = p.publish_at { return String(format: NSLocalizedString("adm.when.starts", comment: ""), span(Double(s) - now)) }
+        case "expired": if let e = p.expires_at { return String(format: NSLocalizedString("adm.when.ended", comment: ""), span(now - Double(e))) }
+        default: break
+        }
+        return String(format: NSLocalizedString("adm.when.added", comment: ""), AdminFmt.date(p.created_at))
     }
 }

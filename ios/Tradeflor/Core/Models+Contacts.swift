@@ -44,6 +44,8 @@ struct MutualSession: Decodable {
     let token: String?
     let state: String
     let expires_at: Int64
+    /// The server's clock when the code was made (a phone with a wrong clock still counts down correctly).
+    var server_now: Int64? = nil
 }
 
 struct MutualStatus: Decodable {

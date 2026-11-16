@@ -36,19 +36,43 @@ struct StatusCreatorSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("stx.share").font(.system(size: 14)).foregroundStyle(Theme.faint)
+                    // v2 start (website 58-status-creator.css): the market behind the moment and a lit ring around me
+                    StatusCreatorHero(token: token, userID: store.session?.userID ?? "", name: store.session?.username ?? "?")
+                    Text("stx.share").font(.system(size: 14)).foregroundStyle(Theme.faint).frame(maxWidth: .infinity)
+                    PhotosPicker(selection: $picked, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "photo.on.rectangle").font(.system(size: 20)).foregroundStyle(Theme.accent)
+                                .frame(width: 44, height: 44).background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("stx.tile.media").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
+                                Text("stx.tile.media.sub2").font(.system(size: 12)).foregroundStyle(Theme.faint)
+                            }
+                            Spacer()
+                            // a small photo stack
+                            ZStack {
+                                ForEach(0..<3, id: \.self) { k in
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(LinearGradient(colors: [Theme.hex(0x2FD9DC, 0.5 - Double(k) * 0.12), Theme.hex(0x0A3445)], startPoint: .top, endPoint: .bottom))
+                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.3), lineWidth: 1))
+                                        .frame(width: 30, height: 38)
+                                        .rotationEffect(.degrees(Double(k - 1) * 10))
+                                        .offset(x: CGFloat(k - 1) * 8)
+                                }
+                            }
+                            .frame(width: 60)
+                        }
+                        .padding(14)
+                        .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 16))
+                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.borderActive, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                        PhotosPicker(selection: $picked, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-                            tile("photo.on.rectangle", "stx.tile.media", "stx.tile.media.sub")
-                        }
-                        if CameraPicker.isAvailable {
-                            Button { showCamera = true } label: { tile("camera", "stx.tile.camera", "stx.tile.camera.sub") }
-                        }
-                        Button { showText = true } label: { tile("textformat", "stx.tile.text", "stx.tile.text.sub") }
+                        Button { showCamera = true } label: { tile("camera", "stx.tile.camera", "stx.tile.camera.sub", Theme.hex(0x2FD9DC)) }
+                        Button { showText = true } label: { tile("textformat", "stx.tile.text", "stx.tile.text.sub", Theme.hex(0xF2C14E)) }
                         PhotosPicker(selection: $layoutPicked, maxSelectionCount: 6, matching: .images) {
-                            tile("square.grid.2x2", "stx.tile.layout", "stx.tile.layout.sub")
+                            tile("square.grid.2x2", "stx.tile.layout", "stx.tile.layout.sub", Theme.hex(0xA78BFA))
                         }
-                        Button { showVoice = true } label: { tile("mic", "stx.tile.voice", "stx.tile.voice.sub") }
+                        Button { showVoice = true } label: { tile("mic", "stx.tile.voice", "stx.tile.voice.sub", Theme.hex(0xF472B6)) }
                     }
                     .buttonStyle(.plain)
 
@@ -166,16 +190,17 @@ struct StatusCreatorSheet: View {
         }
     }
 
-    private func tile(_ icon: String, _ title: String, _ sub: String) -> some View {
+    private func tile(_ icon: String, _ title: String, _ sub: String, _ tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: icon).font(.system(size: 20)).foregroundStyle(Theme.accent)
-                .frame(width: 40, height: 40).background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+            Image(systemName: icon).font(.system(size: 20)).foregroundStyle(tint)
+                .frame(width: 40, height: 40).background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
             Text(LocalizedStringKey(title)).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.text)
             Text(LocalizedStringKey(sub)).font(.system(size: 12)).foregroundStyle(Theme.faint)
         }
         .frame(maxWidth: .infinity, minHeight: 110, alignment: .leading)
         .padding(12)
         .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(alignment: .top) { Capsule().fill(tint.opacity(0.8)).frame(height: 2).padding(.horizontal, 18) }
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.borderStrong, lineWidth: 1))
     }
 
@@ -446,5 +471,55 @@ struct VoiceStatusRecorder: View {
         player = try? AVAudioPlayer(data: d.data)
         player?.play()
         playing = true
+    }
+}
+
+
+/// The status creator's start: a soft market line and candles behind a slowly rotating lit ring around my picture.
+struct StatusCreatorHero: View {
+    let token: String
+    let userID: String
+    let name: String
+    @State private var spin = false
+
+    var body: some View {
+        ZStack {
+            Canvas { ctx, size in
+                let w = size.width, h = size.height
+                func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x / 390 * w, y: y / 300 * h) }
+                var line = Path()
+                line.move(to: pt(0, 210))
+                line.addCurve(to: pt(90, 196), control1: pt(40, 200), control2: pt(60, 220))
+                line.addCurve(to: pt(170, 168), control1: pt(120, 172), control2: pt(140, 150))
+                line.addCurve(to: pt(250, 132), control1: pt(200, 186), control2: pt(220, 120))
+                line.addCurve(to: pt(340, 84), control1: pt(280, 144), control2: pt(310, 70))
+                line.addCurve(to: pt(390, 48), control1: pt(370, 98), control2: pt(380, 52))
+                var area = line
+                area.addLine(to: pt(390, 300)); area.addLine(to: pt(0, 300)); area.closeSubpath()
+                ctx.fill(area, with: .linearGradient(Gradient(colors: [Theme.hex(0x2FD9DC, 0.16), .clear]), startPoint: .zero, endPoint: CGPoint(x: 0, y: h)))
+                ctx.stroke(line, with: .linearGradient(Gradient(stops: [.init(color: Theme.hex(0x2FD9DC, 0), location: 0), .init(color: Theme.hex(0x2FD9DC, 0.55), location: 0.35),
+                                                                        .init(color: Theme.hex(0xF2C14E, 0.45), location: 1)]),
+                                                       startPoint: .zero, endPoint: CGPoint(x: w, y: 0)), lineWidth: 2)
+                let candles: [(CGFloat, CGFloat, CGFloat, UInt32)] = [(28, 176, 30, 0x2BD47D), (58, 168, 22, 0xF0525B), (300, 64, 34, 0x2BD47D), (326, 58, 26, 0xF2C14E), (352, 40, 30, 0x2BD47D)]
+                for (x, y, ch, c) in candles {
+                    var wick = Path(); wick.move(to: pt(x, y - 8)); wick.addLine(to: pt(x, y + ch + 8))
+                    ctx.stroke(wick, with: .color(Theme.hex(c, 0.5)), lineWidth: 1.2)
+                    ctx.fill(Path(roundedRect: CGRect(origin: pt(x - 4, y), size: CGSize(width: 8 / 390 * w, height: ch / 300 * h)), cornerRadius: 1.5), with: .color(Theme.hex(c, 0.5)))
+                }
+            }
+            ZStack {
+                Circle()
+                    .stroke(AngularGradient(colors: [Theme.hex(0x2FD9DC), Theme.hex(0xF2C14E), Theme.hex(0x2FD9DC, 0.1), Theme.hex(0x2FD9DC)], center: .center), lineWidth: 3)
+                    .frame(width: 104, height: 104)
+                    .rotationEffect(.degrees(spin ? 360 : 0))
+                    .shadow(color: Theme.hex(0x2FD9DC, 0.5), radius: 10)
+                Avatar(token: token, userID: userID, avatarID: nil, title: name, size: 90)
+            }
+            .offset(y: -6)
+        }
+        .frame(height: 170)
+        .frame(maxWidth: .infinity)
+        .accessibilityHidden(true)
+        .onAppear { withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) { spin = true } }
     }
 }

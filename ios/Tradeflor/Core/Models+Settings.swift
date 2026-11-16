@@ -91,6 +91,10 @@ struct AdminOfficialPost: Decodable, Identifiable {
     let state: String?
     let created_at: Int64
     let views: Int
+    var poster: Bool? = nil
+    var publish_at: Int64? = nil
+    var expires_at: Int64? = nil
+    var created_by: String? = nil
 }
 
 /// GET /calendar/saved row with its reminder.

@@ -288,76 +288,224 @@ struct MyQRView: View {
 struct MutualConnectView: View {
     let onOpen: (ConversationSummary) -> Void
     @EnvironmentObject private var store: SessionStore
+    @Environment(\.dismiss) private var dismiss
     @State private var session: MutualSession?
+    @State private var deadline: Date?
     @State private var status: MutualStatus?
     @State private var now = Date()
+    @State private var busy = false
+    @State private var error: String?
 
     private var token: String { store.session?.token ?? "" }
+    private var left: Int { deadline.map { max(0, Int(ceil($0.timeIntervalSince(now)))) } ?? 0 }
+    private var expired: Bool { deadline != nil && left == 0 }
+    private let cyan = Theme.hex(0x35E6F2)
 
+    // Website MutualConnect.tsx / 61-mutual-connect.css: always dark, midnight navy and teal light, a white QR tile in four
+    // cyan corners, "Expires in 57s" on the server's clock, single use, Generate New Code (one request at a time).
     var body: some View {
-        SettingsPage(title: NSLocalizedString("fc.mutual", comment: "")) {
-            VStack(spacing: 14) {
-                Text("fc.mutual.lead").font(.system(size: 13)).foregroundStyle(Theme.faint).multilineTextAlignment(.center)
-                if let s = session, let tok = s.token {
-                    let left = max(0, Double(s.expires_at) - now.timeIntervalSince1970)
-                    if left > 0 && status?.state != "accepted" {
-                        FlashConnectView.qrCard("https://app.tradeflor.com/?mutual=\(tok)")
-                        Text(String(format: "%d s", Int(left))).font(.system(size: 18, weight: .bold, design: .monospaced)).foregroundStyle(Theme.accent)
-                    } else if status?.state != "accepted" && status?.state != "claimed" {
-                        Text("fc.expired").foregroundStyle(Theme.faint)
+        ZStack {
+            LinearGradient(colors: [Theme.hex(0x082231), Theme.hex(0x061A27), Theme.hex(0x04121D)], startPoint: .top, endPoint: .bottom)
+            RadialGradient(colors: [Theme.hex(0x127080, 0.34), .clear], center: UnitPoint(x: 0.5, y: 0.46), startRadius: 0, endRadius: 360)
+            RadialGradient(colors: [Theme.hex(0x0A5C6E, 0.32), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 320)
+            VStack(spacing: 0) {
+                HStack {
+                    round("chevron.left", "fc.back") { dismiss() }
+                    Spacer()
+                    HStack(spacing: 10) {
+                        Image("BrandFlower").resizable().scaledToFit().frame(width: 36, height: 36)
+                        Text("TRADEFLOR").font(.system(size: 20, weight: .heavy)).tracking(3).foregroundStyle(Theme.hex(0xEEF6FA))
                     }
-                    if let st = status {
-                        if st.state == "claimed", let peer = st.peer {
-                            Text(String(format: NSLocalizedString("fc.wants", comment: ""), peer.title)).foregroundStyle(Theme.text)
-                            HStack {
-                                Button { Task { await decide(false) } } label: {
-                                    Text("new.decline").padding(.horizontal, 18).frame(height: 40).foregroundStyle(Theme.muted)
-                                        .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1))
-                                }
-                                Button { Task { await decide(true) } } label: {
-                                    Text("new.accept").bold().padding(.horizontal, 18).frame(height: 40).foregroundStyle(Theme.onAccent)
-                                        .background(Theme.accent, in: Capsule())
-                                }
-                            }
-                        } else if st.state == "accepted" {
-                            Text("fc.connected").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.online)
-                            if let peer = st.peer {
-                                Button { Task { if let c = await APIClient.shared.ctOpenChat(token: token, userID: peer.user_id) { onOpen(c) } } } label: {
-                                    Text("ct.message").bold().foregroundStyle(Theme.onAccent).padding(.horizontal, 22).frame(height: 42)
-                                        .background(Theme.accent, in: Capsule())
-                                }
-                            }
-                        } else if st.state == "declined" {
-                            Text("fc.not.confirmed").foregroundStyle(Theme.faint)
-                        }
-                    }
-                    Button { Task { await start() } } label: { Text("fc.newcode").foregroundStyle(Theme.accent) }
-                } else {
-                    ProgressView().tint(Theme.accent)
+                    Spacer()
+                    round("xmark", "chat.close") { dismiss() }
                 }
+                .padding(.top, 8)
+                ScrollView {
+                    VStack(spacing: 16) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "qrcode.viewfinder").font(.system(size: 28)).foregroundStyle(cyan)
+                            (Text("Mutual ").foregroundColor(Theme.hex(0xF2F8FB)) + Text("Connect").foregroundColor(cyan))
+                                .font(.system(size: 30, weight: .heavy))
+                        }
+                        .padding(.top, 18)
+                        Text("mc.lead").font(.system(size: 15)).foregroundStyle(Theme.hex(0xC4D5DF)).multilineTextAlignment(.center)
+                        stage.padding(.top, 8)
+                        meta
+                        if let error { Text(error).font(.system(size: 13)).foregroundStyle(Theme.hex(0xFF8A8A)).multilineTextAlignment(.center) }
+                        decision
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                Button { Task { await start() } } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 20, weight: .semibold))
+                            .rotationEffect(.degrees(busy ? 360 : 0)).animation(busy ? .linear(duration: 0.9).repeatForever(autoreverses: false) : .default, value: busy)
+                        Text(LocalizedStringKey(busy ? "mc.generating" : "mc.generate")).font(.system(size: 17, weight: .bold))
+                    }
+                    .foregroundStyle(Theme.hex(0x03222B))
+                    .frame(maxWidth: .infinity).frame(height: 58)
+                    .background(LinearGradient(colors: [Theme.hex(0x5FF2FA), Theme.hex(0x16C9DA)], startPoint: .top, endPoint: .bottom), in: Capsule())
+                    .shadow(color: cyan.opacity(0.35), radius: 14, y: 6)
+                }
+                .disabled(busy)
+                .padding(.bottom, 16)
             }
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 22)
         }
+        .ignoresSafeArea(edges: .horizontal)
+        .navigationBarBackButtonHidden(true)
+        .toolbar(.hidden, for: .navigationBar)
+        .preferredColorScheme(.dark)
         .task { await start() }
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                try? await Task.sleep(nanoseconds: 250_000_000)
                 now = Date()
-                if let s = session, status?.state != "accepted", Int(now.timeIntervalSince1970) % 2 == 0 {
+                if let s = session, status?.state != "accepted", Int(now.timeIntervalSince1970 * 4) % 8 == 0 {
                     status = try? await APIClient.shared.ctMutualStatus(token: token, sessionID: s.id)
                 }
             }
         }
     }
 
+    private func round(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.hex(0xF2F8FB))
+                .frame(width: 48, height: 48).background(Theme.hex(0x041019, 0.7), in: Circle())
+                .overlay(Circle().stroke(Color.white.opacity(0.14), lineWidth: 1))
+        }
+        .accessibilityLabel(Text(LocalizedStringKey(label)))
+    }
+
+    private var stage: some View {
+        let side: CGFloat = min(268, UIScreen.main.bounds.width * 0.62)
+        return ZStack {
+            Circle().fill(RadialGradient(colors: [cyan.opacity(0.22), .clear], center: .center, startRadius: 0, endRadius: side * 0.9))
+                .frame(width: side * 1.6, height: side * 1.6)
+            Group {
+                if let tok = session?.token, !expired {
+                    if let qr = TFQR.image("https://app.tradeflor.com/?mutual=\(tok)") {
+                        Image(uiImage: qr).interpolation(.none).resizable().padding(14)
+                            .overlay(Image("BrandFlower").resizable().scaledToFit().frame(width: side * 0.16)
+                                .padding(5).background(.white, in: RoundedRectangle(cornerRadius: 8)))
+                            .accessibilityLabel(Text("mc.qr"))
+                    }
+                } else if expired {
+                    VStack(spacing: 6) {
+                        Image(systemName: "clock").font(.system(size: 34)).foregroundStyle(Theme.hex(0x4A5A64))
+                        Text("mc.expired.title").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.hex(0x0B1F2A))
+                        Text("mc.expired.sub").font(.system(size: 12)).foregroundStyle(Theme.hex(0x4A5A64)).multilineTextAlignment(.center)
+                    }
+                    .padding(16)
+                } else {
+                    VStack(spacing: 10) {
+                        ProgressView().tint(Theme.hex(0x0B6E7A))
+                        Text(LocalizedStringKey(error == nil ? "mc.creating" : "mc.nocode")).font(.system(size: 13)).foregroundStyle(Theme.hex(0x4A5A64))
+                    }
+                }
+            }
+            .frame(width: side, height: side)
+            .background(.white, in: RoundedRectangle(cornerRadius: 22))
+            .opacity(expired ? 0.92 : 1)
+            // the four cyan corners
+            ForEach(0..<4, id: \.self) { k in
+                CornerMark().stroke(cyan, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .frame(width: 34, height: 34)
+                    .rotationEffect(.degrees(Double(k) * 90))
+                    .offset(x: (k == 0 || k == 3 ? -1 : 1) * (side / 2 + 12), y: (k < 2 ? -1 : 1) * (side / 2 + 12))
+                    .shadow(color: cyan.opacity(0.6), radius: 6)
+            }
+        }
+        .frame(height: side + 60)
+    }
+
+    private var meta: some View {
+        HStack(spacing: 14) {
+            Group {
+                if session != nil && !expired {
+                    (Text("mc.expires.in") + Text(" \(left)s").bold()).foregroundColor(left <= 10 ? Theme.hex(0xFFB35C) : Theme.hex(0xC4D5DF))
+                } else if expired {
+                    Text("mc.expired").bold().foregroundColor(Theme.hex(0xFF8A8A))
+                } else {
+                    Text("mc.expires.dash").foregroundColor(Theme.hex(0xC4D5DF))
+                }
+            }
+            .font(.system(size: 15))
+            Rectangle().fill(Color.white.opacity(0.2)).frame(width: 1, height: 18)
+            Label("mc.single", systemImage: "checkmark.shield").font(.system(size: 15)).foregroundStyle(Theme.hex(0xC4D5DF))
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private var decision: some View {
+        if let st = status {
+            if st.state == "claimed", let peer = st.peer {
+                VStack(spacing: 10) {
+                    Text(String(format: NSLocalizedString("fc.wants", comment: ""), peer.title)).foregroundStyle(Theme.hex(0xF2F8FB))
+                    HStack {
+                        Button { Task { await decide(false) } } label: {
+                            Text("new.decline").padding(.horizontal, 18).frame(height: 42).foregroundStyle(Theme.hex(0xC4D5DF))
+                                .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                        }
+                        Button { Task { await decide(true) } } label: {
+                            Text("new.accept").bold().padding(.horizontal, 18).frame(height: 42).foregroundStyle(Theme.hex(0x03222B))
+                                .background(cyan, in: Capsule())
+                        }
+                    }
+                }
+            } else if st.state == "accepted" {
+                VStack(spacing: 10) {
+                    Text("fc.connected").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.hex(0x3FE0A0))
+                    if let peer = st.peer {
+                        Button { Task { if let c = await APIClient.shared.ctOpenChat(token: token, userID: peer.user_id) { onOpen(c) } } } label: {
+                            Text("ct.message").bold().foregroundStyle(Theme.hex(0x03222B)).padding(.horizontal, 22).frame(height: 42).background(cyan, in: Capsule())
+                        }
+                    }
+                }
+            } else if st.state == "declined" {
+                Text("fc.not.confirmed").foregroundStyle(Theme.hex(0xC4D5DF))
+            }
+        }
+    }
+
+    /// A new code (one request at a time); the countdown runs against the server's clock.
     private func start() async {
-        status = nil
-        session = try? await APIClient.shared.ctStartMutual(token: token)
+        guard !busy else { return }
+        busy = true
+        error = nil
+        defer { busy = false }
+        do {
+            let s = try await APIClient.shared.ctStartMutual(token: token)
+            let got = Date().timeIntervalSince1970
+            let offset = s.server_now.map { Double($0) - got } ?? 0
+            session = s
+            status = nil
+            deadline = Date(timeIntervalSince1970: Double(s.expires_at) - offset)
+            now = Date()
+        } catch APIError.rateLimited {
+            error = NSLocalizedString("mc.err.rate", comment: "")
+        } catch APIError.refused(let why) {
+            error = why.isEmpty ? NSLocalizedString("mc.err", comment: "") : why
+        } catch {
+            self.error = NSLocalizedString("mc.err", comment: "")
+        }
     }
 
     private func decide(_ accept: Bool) async {
         guard let s = session else { return }
         status = try? await APIClient.shared.ctDecideMutual(token: token, sessionID: s.id, accept: accept)
+    }
+}
+
+/// One corner of the QR frame (top-left; rotated for the others).
+private struct CornerMark: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX, y: r.minY + 8))
+        p.addQuadCurve(to: CGPoint(x: r.minX + 8, y: r.minY), control: CGPoint(x: r.minX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+        return p
     }
 }
 
