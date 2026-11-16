@@ -7,7 +7,15 @@ import UIKit
 enum ImagePrep {
     static let maxSide: CGFloat = 2560
 
-    static func jpeg(from image: UIImage) -> Data? {
+    /// Standard quality (the website's MediaSendSheet): 1600 px at JPEG 0.85. HD keeps the full size.
+    static func jpeg(from image: UIImage, hd: Bool) -> Data? {
+        if hd { return jpeg(from: image, maxSide: 8192, startQuality: 0.92) }
+        return jpeg(from: image, maxSide: 1600, startQuality: 0.85)
+    }
+
+    static func jpeg(from image: UIImage) -> Data? { jpeg(from: image, maxSide: maxSide, startQuality: 0.82) }
+
+    static func jpeg(from image: UIImage, maxSide: CGFloat, startQuality: CGFloat) -> Data? {
         let size = image.size
         let longest = max(size.width, size.height)
         guard longest > 0 else { return nil }
@@ -19,7 +27,7 @@ enum ImagePrep {
         let drawn = UIGraphicsImageRenderer(size: target, format: format).image { _ in
             image.draw(in: CGRect(origin: .zero, size: target))
         }
-        var quality: CGFloat = 0.82
+        var quality: CGFloat = startQuality
         var data = drawn.jpegData(compressionQuality: quality)
         while let d = data, d.count > 9_500_000, quality > 0.4 {
             quality -= 0.15

@@ -21,21 +21,21 @@ struct StatusStrip: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 14) {
+            HStack(alignment: .top, spacing: 10) {
                 item(name: NSLocalizedString("status.mine", comment: ""), ring: mine.map { $0.posts.isEmpty ? .none : .seen } ?? .none, plus: true) {
-                    Avatar(token: token, userID: me, avatarID: myAvatar, title: store.session?.username ?? "?", size: 49)
+                    Avatar(token: token, userID: me, avatarID: myAvatar, title: store.session?.username ?? "?", size: 47)
                 } action: {
                     if let m = mine, !m.posts.isEmpty { open = StatusOpen(groups: [m], index: 0) } else { manage = true }
                 }
                 if let o = official, let posts = o.posts, !posts.isEmpty {
                     item(name: "TRADEFLOR", sub: "Official", verified: true, ring: o.all_seen ? .seen : .unseen) {
                         ZStack { Theme.card; Image("BrandFlower").resizable().scaledToFit().padding(7) }
-                            .frame(width: 49, height: 49).clipShape(Circle())
+                            .frame(width: 47, height: 47).clipShape(Circle())
                     } action: { openOfficial = true }
                 }
                 ForEach(others) { g in
                     item(name: g.title, ring: g.all_seen ? .seen : .unseen) {
-                        Avatar(token: token, userID: g.user_id, avatarID: nil, title: g.title, size: 49)
+                        Avatar(token: token, userID: g.user_id, avatarID: nil, title: g.title, size: 47)
                     } action: {
                         if let i = others.firstIndex(of: g) { open = StatusOpen(groups: others, index: i) }
                     }
@@ -74,19 +74,15 @@ struct StatusStrip: View {
                             .offset(x: 2, y: 2)
                     }
                 }
-                VStack(spacing: 0) {
-                    Text(name).font(.system(size: 11, weight: sub == nil ? .regular : .bold)).foregroundStyle(sub == nil ? Theme.faint : Theme.text)
-                    if let sub {
-                        HStack(spacing: 2) {
-                            Text(sub).font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.text)
-                            if verified { Image(systemName: "checkmark.seal.fill").font(.system(size: 9)).foregroundStyle(Theme.verified) }
-                        }
-                    }
+                // one line per name; TRADEFLOR Official on one line with its verified badge (website 63-chats-polish.css)
+                HStack(spacing: 3) {
+                    Text(sub.map { name + " " + $0 } ?? name).font(.system(size: 11, weight: sub == nil ? .regular : .bold))
+                        .foregroundStyle(sub == nil ? Theme.faint : Theme.text)
+                    if verified { Image(systemName: "checkmark.seal.fill").font(.system(size: 9)).foregroundStyle(Theme.verified) }
                 }
                 .lineLimit(1)
-                .minimumScaleFactor(0.85)
-                .fixedSize(horizontal: sub != nil, vertical: false)
-                .frame(maxWidth: sub != nil ? 80 : 66)
+                .truncationMode(.tail)
+                .frame(maxWidth: sub != nil ? 132 : 60)
             }
         }
         .buttonStyle(.plain)

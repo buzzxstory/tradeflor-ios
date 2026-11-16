@@ -28,6 +28,9 @@ struct ConversationSummary: Decodable, Identifiable, Hashable {
     let unread_count: Int
     let last_message_kind: String?
     var last_file_type: String? = nil
+    var last_duration_ms: Int64? = nil
+    var last_message_status: String? = nil
+    var last_call_state: String? = nil
     var disappear_secs: Int? = nil
 
     var id: String { conversation_id }

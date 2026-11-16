@@ -31,7 +31,7 @@ enum ChatThemeStyle {
 
     /// The conversation background for a theme id ("" = the default starfield).
     static func background(_ id: String) -> AnyView {
-        if id.isEmpty { return AnyView(Starfield()) }
+        if id.isEmpty || id == "tradeflor" { return AnyView(ChatDefaultWallpaper()) }
         let t = item(id)
         return AnyView(
             ZStack {

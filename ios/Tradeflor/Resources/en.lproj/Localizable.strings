@@ -1190,3 +1190,17 @@
 "adm.off.d" = "%d days";
 "adm.off.publish" = "Publish now";
 "adm.off.draft" = "Save draft";
+"chats.kind.voice.len" = "Voice message (%@)";
+"chats.kind.video" = "Video";
+"chats.kind.audio" = "Audio";
+"receipt.sent" = "Sent";
+"receipt.delivered" = "Delivered";
+"receipt.read" = "Read";
+"media.caption" = "Add a caption…";
+"media.hd.on" = "HD quality on";
+"media.hd.off" = "Standard quality (tap for HD)";
+"media.play" = "Play video";
+"media.item" = "Item %d of %d";
+"media.remove" = "Remove";
+"media.add" = "Add more";
+"media.send.n" = "Send %d";

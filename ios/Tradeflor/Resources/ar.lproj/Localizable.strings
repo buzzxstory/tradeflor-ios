@@ -1190,3 +1190,17 @@
 "adm.off.d" = "%d أيام";
 "adm.off.publish" = "نشر الآن";
 "adm.off.draft" = "حفظ كمسودة";
+"chats.kind.voice.len" = "رسالة صوتية (%@)";
+"chats.kind.video" = "فيديو";
+"chats.kind.audio" = "صوت";
+"receipt.sent" = "أُرسلت";
+"receipt.delivered" = "وصلت";
+"receipt.read" = "قُرئت";
+"media.caption" = "أضف تعليقاً…";
+"media.hd.on" = "جودة HD مفعّلة";
+"media.hd.off" = "جودة عادية (اضغط لـ HD)";
+"media.play" = "تشغيل الفيديو";
+"media.item" = "العنصر %d من %d";
+"media.remove" = "إزالة";
+"media.add" = "إضافة المزيد";
+"media.send.n" = "إرسال %d";

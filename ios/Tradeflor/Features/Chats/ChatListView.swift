@@ -82,7 +82,7 @@ struct ChatListView: View {
                 }
             }
             .refreshable { await load() }
-            .background(Theme.panelGradient.ignoresSafeArea())
+            .background(ChatsWallpaper())
             .sheet(isPresented: $showFolderEditor) { FolderEditorView(token: token, chats: chats) { Task { await reloadFolders() } } }
             .sheet(item: $editingFolder) { f in FolderEditorView(token: token, chats: chats, editing: f) { Task { await reloadFolders() } } }
             .sheet(isPresented: $showManageFolders) { ManageFoldersView(token: token, chats: chats) { Task { await reloadFolders() } } }
@@ -147,7 +147,7 @@ struct ChatListView: View {
         HStack(spacing: 10) {
             Text("chats.title").font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.text)
             Spacer()
-            SquareIconButton(systemName: "qrcode.viewfinder") { showFlash = true }
+            GlassIconButton(systemName: "qrcode.viewfinder") { showFlash = true }
                 .accessibilityLabel(Text("fc.title"))
                 .sheet(isPresented: $showFlash) {
                     FlashConnectView { c in
@@ -157,7 +157,7 @@ struct ChatListView: View {
                         }
                     }
                 }
-            SquareIconButton(systemName: "person.badge.plus") { showContacts = true }
+            GlassIconButton(systemName: "person.badge.plus") { showContacts = true }
                 .accessibilityLabel(Text("ct.title"))
                 .accessibilityIdentifier("chats.new")
                 .sheet(isPresented: $showContacts) {
@@ -176,6 +176,10 @@ struct ChatListView: View {
 
     /// All chats / Unread / my Smart Folders (made on the website; the same rules decide what is in them).
     private var chipsRow: some View {
+        chipsStrip.modifier(EndFade())
+    }
+
+    private var chipsStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 7) {
                 FilterChip(title: NSLocalizedString("folders.all", comment: ""), selected: filter == "all") { filter = "all" }
@@ -400,13 +404,19 @@ struct ChatRow: View {
                     }
                 }
                 HStack(spacing: 5) {
-                    if chat.last_message_mine && chat.last_message_kind != "call" {
-                        Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.faint)
+                    if let st = ownStatus {
+                        Image(systemName: st == "sent" ? "checkmark" : "checkmark.circle")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(st == "read" ? Theme.accent : Theme.faint)
+                            .overlay(alignment: .leading) {
+                                if st != "sent" { Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(st == "read" ? Theme.accent : Theme.faint).offset(x: -4) }
+                            }
+                            .accessibilityLabel(Text(LocalizedStringKey("receipt." + st)))
                     }
                     if let icon = previewIcon {
-                        Image(systemName: icon).font(.system(size: 12)).foregroundStyle(Theme.accent)
+                        Image(systemName: icon).font(.system(size: 12)).foregroundStyle(callMissed ? Theme.danger : Theme.accent)
                     }
-                    Text(preview).font(.system(size: 15)).foregroundStyle(Theme.muted).lineLimit(1)
+                    Text(preview).font(.system(size: 15)).foregroundStyle(callMissed ? Theme.danger : Theme.muted).lineLimit(1)
                     Spacer(minLength: 6)
                     if muted { Image(systemName: "bell.slash.fill").font(.system(size: 11)).foregroundStyle(Theme.faint) }
                     if chat.unread_count > 0 {
@@ -447,15 +457,53 @@ struct ChatRow: View {
         return f
     }()
 
+    // The second line of the row, as the website (shared/lib/chatPreview.ts): WhatsApp words, never a bare file name.
+    private var kind: String { chat.last_message_kind ?? "text" }
+
+    /// The server's labels start with an emoji ("🖼 Photo", "🎥 Video"); with an icon in front it is dropped.
+    private var stripped: String {
+        // compared by Unicode scalar: "🖼️" (with its variation selector) is one Character but not equal to "🖼"
+        let leads: Set<UInt32> = [0x1F5BC, 0x1F4F7, 0x1F4CE, 0x1F4C4, 0x1F3A5, 0x1F3B5, 0x1F3A4]
+        var scalars = Substring(chat.last_message).unicodeScalars[...]
+        guard let first = scalars.first, leads.contains(first.value) else { return chat.last_message }
+        scalars = scalars.dropFirst()
+        if scalars.first?.value == 0xFE0F { scalars = scalars.dropFirst() }
+        return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: .whitespaces)
+    }
+
+    private var fileKind: String {
+        let n = stripped.lowercased()
+        if chat.last_file_type == "video_note" || n.hasPrefix("videonote_") { return "video_note" }
+        if chat.last_file_type == "video" || [".mp4", ".mov", ".webm", ".m4v", ".mkv", ".3gp", ".avi"].contains(where: n.hasSuffix) { return "video" }
+        if chat.last_file_type == "audio" || [".mp3", ".m4a", ".ogg", ".wav", ".aac", ".flac", ".opus", ".amr"].contains(where: n.hasSuffix) { return "audio" }
+        return "document"
+    }
+
+    /// My latest message's delivery state (sent / delivered / read), from the real receipts.
+    private var ownStatus: String? {
+        guard chat.last_message_mine, kind != "call", kind != "locked", let s = chat.last_message_status,
+              ["sent", "delivered", "read"].contains(s) else { return nil }
+        return s
+    }
+
+    private var callMissed: Bool {
+        kind == "call" && (chat.last_call_state == "missed" || chat.last_call_state == "failed"
+            || (chat.last_call_state == nil && (chat.last_message.hasPrefix("Missed") || chat.last_message.hasPrefix("Voice call failed"))))
+    }
+
     private var previewIcon: String? {
-        switch chat.last_message_kind {
-        case "call": return "phone"
+        switch kind {
+        case "call": return callMissed ? "phone.arrow.down.left" : "phone"
         case "voice": return "mic"
-        case "image": return "photo"
+        case "image": return "camera"
         case "location": return "location"
+        case "locked": return "lock"
+        case "signal": return "chart.line.uptrend.xyaxis"
         case "file":
-            switch chat.last_file_type {
-            case "video_note", "video": return "video"
+            switch fileKind {
+            case "video_note": return "video.circle"
+            case "video": return "video"
+            case "audio": return "music.note"
             default: return "doc"
             }
         default: return nil
@@ -463,14 +511,25 @@ struct ChatRow: View {
     }
 
     private var preview: String {
-        switch chat.last_message_kind {
-        case "voice": return NSLocalizedString("chats.kind.voice", comment: "")
-        case "image": return chat.last_message.isEmpty ? NSLocalizedString("chats.kind.image", comment: "") : chat.last_message
+        switch kind {
+        case "voice":
+            if let ms = chat.last_duration_ms, ms > 0 {
+                return String(format: NSLocalizedString("chats.kind.voice.len", comment: ""), VoiceBubble.length(ms))
+            }
+            return NSLocalizedString("chats.kind.voice", comment: "")
+        case "image": return stripped.isEmpty ? NSLocalizedString("chats.kind.image", comment: "") : stripped
         case "file":
-            if chat.last_file_type == "video_note" { return NSLocalizedString("note.video", comment: "") }
-            return chat.last_message.isEmpty ? NSLocalizedString("chats.kind.file", comment: "") : chat.last_message
-        case "locked": return NSLocalizedString("chats.kind.locked", comment: "")
+            let t = stripped
+            let looksLikeName = t.isEmpty || t.range(of: #"\.[A-Za-z0-9]{2,5}$"#, options: .regularExpression) != nil
+            switch fileKind {
+            case "video_note": return NSLocalizedString("note.video", comment: "")
+            case "video": return looksLikeName ? NSLocalizedString("chats.kind.video", comment: "") : t
+            case "audio": return looksLikeName ? NSLocalizedString("chats.kind.audio", comment: "") : t
+            default: return t.isEmpty ? NSLocalizedString("chats.kind.file", comment: "") : t
+            }
+        case "locked": return chat.last_message.isEmpty ? NSLocalizedString("chats.kind.locked", comment: "") : chat.last_message
         case "location": return NSLocalizedString("location.live", comment: "")
+        case "signal": return chat.last_message.isEmpty ? NSLocalizedString("notify.signal", comment: "") : chat.last_message
         default: return chat.last_message
         }
     }

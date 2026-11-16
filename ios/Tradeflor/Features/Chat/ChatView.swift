@@ -18,6 +18,7 @@ struct ChatView: View {
     @State private var draft = ""
     @FocusState private var composerFocused: Bool
     @State private var picked: [PhotosPickerItem] = []
+    @State private var reviewing: MediaBatch?
     @State private var showCamera = false
     @State private var viewing: ViewedPhoto?
     @State private var watching: ViewedPhoto?
@@ -424,12 +425,18 @@ struct ChatView: View {
         .onChange(of: picked) { items in
             guard !items.isEmpty else { return }
             picked = []
+            // review full screen first: a caption each, add / remove, HD (website MediaSendSheet)
             Task {
-                for item in items {
-                    if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
-                        if let movie = try? await item.loadTransferable(type: PickedMovie.self) { await sendVideo(movie.url) }
-                    } else if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) {
-                        await sendPhoto(img)
+                let drafts = await MediaDrafts.load(items)
+                if !drafts.isEmpty { reviewing = MediaBatch(items: drafts) }
+            }
+        }
+        .fullScreenCover(item: $reviewing) { batch in
+            MediaSendSheet(items: batch.items, title: chat.title) { drafts, hd in
+                Task {
+                    for d in drafts {
+                        if let url = d.videoURL { await sendVideo(url, caption: d.caption) }
+                        else if let img = d.image { await sendPhoto(img, caption: d.caption, hd: hd) }
                     }
                 }
             }
@@ -1223,9 +1230,9 @@ struct ChatView: View {
         return m.body.isEmpty ? NSLocalizedString("notice.changed", comment: "") : m.body
     }
 
-    private func sendVideo(_ url: URL) async {
+    private func sendVideo(_ url: URL, caption: String = "") async {
         let key = UUID().uuidString.lowercased()
-        let placeholder = PendingMessage(id: key, body: "", date: Date(), video: Data())
+        let placeholder = PendingMessage(id: key, body: caption.trimmingCharacters(in: .whitespacesAndNewlines), date: Date(), video: Data())
         pending.append(placeholder) // shows "sending video" while it is re-encoded
         guard let out = await VideoPrep.mp4(from: url) else {
             if let i = pending.firstIndex(where: { $0.id == key }) { pending[i].failed = true }
@@ -1236,12 +1243,13 @@ struct ChatView: View {
         if let p = pending.first(where: { $0.id == key }) { await deliver(p) }
     }
 
-    private func sendPhoto(_ img: UIImage) async {
+    private func sendPhoto(_ img: UIImage, caption: String = "", hd: Bool = false) async {
         // Encoding a 12 MP photo takes a moment: off the main thread.
-        let encoded = await Task.detached(priority: .userInitiated) { ImagePrep.jpeg(from: img) }.value
+        let encoded = await Task.detached(priority: .userInitiated) { ImagePrep.jpeg(from: img, hd: hd) }.value
         guard let jpeg = encoded else { return }
         let preview = UIImage(data: jpeg) ?? img
-        let p = PendingMessage(id: UUID().uuidString.lowercased(), body: "", date: Date(), image: preview, jpeg: jpeg)
+        let p = PendingMessage(id: UUID().uuidString.lowercased(), body: caption.trimmingCharacters(in: .whitespacesAndNewlines),
+                               date: Date(), image: preview, jpeg: jpeg)
         pending.append(p)
         await deliver(p)
     }
