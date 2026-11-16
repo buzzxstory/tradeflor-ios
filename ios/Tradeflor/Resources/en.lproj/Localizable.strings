@@ -1055,3 +1055,6 @@
 "focus.banner.all" = "Showing all messages";
 "focus.banner.showall" = "Show all";
 "focus.banner.back" = "Focus";
+"chat.voice.slide" = "Slide to cancel";
+"chat.voice.lock" = "Slide up to lock";
+"chat.voice.hold" = "Hold to record, release to send";

@@ -1055,3 +1055,6 @@
 "focus.banner.all" = "عرض كل الرسائل";
 "focus.banner.showall" = "عرض الكل";
 "focus.banner.back" = "تركيز";
+"chat.voice.slide" = "اسحب للإلغاء";
+"chat.voice.lock" = "اسحب للأعلى للقفل";
+"chat.voice.hold" = "اضغط مطولاً للتسجيل، وارفع إصبعك للإرسال";

@@ -73,6 +73,11 @@ struct ChatView: View {
     @State private var jumpTarget: String?
     @State private var themeID = ""
     @State private var focusDoc: FocusDoc?
+    // hold-to-record voice: press = record, release = send, slide left = cancel, slide up = lock (hands free)
+    @State private var micPressed = false
+    @State private var holdRec = false
+    @State private var holdReleased = false
+    @State private var holdDrag: CGSize = .zero
     @State private var focusPages: [Message] = []
     @State private var focusShowAll = false
     @State private var showFocus = false
@@ -551,7 +556,7 @@ struct ChatView: View {
 
     private var composerBar: some View {
         Group {
-            if recorder.recording {
+            if recorder.recording && !holdRec {
                 RecordingBar(recorder: recorder, onCancel: { recorder.cancel() }, onSend: { Task { await sendVoice() } })
             } else {
                 typingBar
@@ -599,6 +604,9 @@ struct ChatView: View {
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.borderStrong, lineWidth: 1))
             }
             HStack(alignment: .center, spacing: 8) {
+                if holdRec {
+                    holdStrip
+                } else {
                 Menu {
                     if isGroup {
                         Button { showPoll = true } label: { Label("poll.new", systemImage: "chart.bar") }
@@ -652,7 +660,11 @@ struct ChatView: View {
                     Button { showCamera = true } label: { composerIcon("camera") }
                         .accessibilityLabel(Text("chat.camera"))
                 }
-                Image(systemName: draftIsEmpty ? "mic" : "paperplane.fill")
+                }
+                if draftIsEmpty {
+                    micButton
+                } else {
+                Image(systemName: "paperplane.fill")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Theme.hex(0xF4FBFD))
                     .frame(width: 48, height: 48)
@@ -674,8 +686,121 @@ struct ChatView: View {
                     .accessibilityLabel(Text(draftIsEmpty ? "chat.voice.record" : "chat.send"))
                     .accessibilityAddTraits(.isButton)
                     .accessibilityIdentifier(draftIsEmpty ? "chat.mic" : "chat.send")
+                }
             }
         }
+    }
+
+    private var holdStrip: some View {
+        HStack(spacing: 10) {
+            Circle().fill(Color.red).frame(width: 9, height: 9)
+                .opacity(Int(recorder.elapsed * 2) % 2 == 0 ? 1 : 0.3)
+            Text(VoiceBubble.length(Int64(recorder.elapsed * 1000))).monospacedDigit().foregroundStyle(Theme.text)
+            Spacer(minLength: 6)
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left")
+                Text("chat.voice.slide")
+            }
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(Theme.muted)
+            .opacity(max(0.25, 1 + Double(holdDrag.width) / 140))
+            .offset(x: max(-80, holdDrag.width * 0.6))
+            Spacer(minLength: 6)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 48)
+        .background(Theme.inputGradient, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(Color.red.opacity(0.6), lineWidth: 1.5))
+    }
+
+    private var micButton: some View {
+        Image(systemName: "mic.fill")
+            .font(.system(size: 20, weight: .semibold))
+            .foregroundStyle(Theme.hex(0xF4FBFD))
+            .frame(width: 48, height: 48)
+            .background(holdRec ? AnyShapeStyle(Color.red) : AnyShapeStyle(Theme.sendGradient), in: Circle())
+            .shadow(color: Theme.hex(0x00C8DC, 0.28), radius: 9, y: 4)
+            .scaleEffect(holdRec ? 1.35 : 1)
+            .offset(x: holdRec ? max(-60, holdDrag.width * 0.4) : 0, y: holdRec ? max(-60, holdDrag.height * 0.4) : 0)
+            .overlay(alignment: .top) {
+                if holdRec {
+                    VStack(spacing: 4) {
+                        Image(systemName: holdDrag.height < -50 ? "lock.fill" : "lock.open")
+                        Image(systemName: "chevron.up")
+                    }
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Theme.text)
+                    .padding(.vertical, 10).padding(.horizontal, 8)
+                    .background(Theme.card, in: Capsule())
+                    .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1))
+                    .offset(y: -96)
+                    .accessibilityLabel(Text("chat.voice.lock"))
+                }
+            }
+            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: holdRec)
+            .contentShape(Circle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { v in
+                        if !micPressed {
+                            micPressed = true
+                            holdReleased = false
+                            holdDrag = .zero
+                            VoicePlayer.shared.stop()
+                            Task {
+                                try? await Task.sleep(nanoseconds: 250_000_000)
+                                guard micPressed, !holdReleased else { return }
+                                holdRec = true
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                await recorder.start()
+                                // released (or cancelled) while the microphone was starting
+                                if holdReleased || !holdRec { recorder.cancel(); holdRec = false }
+                            }
+                            return
+                        }
+                        guard holdRec else { return }
+                        holdDrag = CGSize(width: min(0, v.translation.width), height: min(0, v.translation.height))
+                        if holdDrag.width < -120 {
+                            // slide left: cancel
+                            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                            recorder.cancel()
+                            endHold()
+                        } else if holdDrag.height < -90 {
+                            // slide up: lock, keep recording hands free (the bar with delete / send)
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            endHold()
+                        }
+                    }
+                    .onEnded { _ in
+                        guard micPressed else { return }
+                        micPressed = false
+                        if holdReleased { return } // already cancelled or locked while dragging
+                        let wasHolding = holdRec
+                        holdReleased = true
+                        if wasHolding {
+                            let long = recorder.elapsed >= 0.6
+                            holdRec = false
+                            holdDrag = .zero
+                            if recorder.recording {
+                                if long { Task { await sendVoice() } } else { recorder.cancel(); flash("chat.voice.hold") }
+                            }
+                        } else {
+                            // a quick tap: record hands free (stop with the bar's send / delete)
+                            Task { await recorder.start() }
+                        }
+                    }
+            )
+            .accessibilityLabel(Text("chat.voice.record"))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { Task { await recorder.start() } }
+            .accessibilityIdentifier("chat.mic")
+    }
+
+    /// Leaves hold mode without touching the recording (cancelled or locked by the caller).
+    private func endHold() {
+        holdRec = false
+        holdDrag = .zero
+        holdReleased = true
     }
 
     // MARK: web parity helpers

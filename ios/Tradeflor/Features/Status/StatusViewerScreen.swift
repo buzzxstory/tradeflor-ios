@@ -17,6 +17,7 @@ struct StatusViewerScreen: View {
     @State private var ready = false
     @State private var image: UIImage?
     @State private var player: AVPlayer?
+    @State private var musicPlayer: AVPlayer?
     @State private var drag: CGFloat = 0
     @State private var showViewers = false
     @State private var confirmDelete = false
@@ -84,7 +85,7 @@ struct StatusViewerScreen: View {
         .confirmationDialog(Text("status.delete.confirm"), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("status.delete", role: .destructive) { Task { await deleteCurrent() } }
         }
-        .onDisappear { player?.pause(); onClose() }
+        .onDisappear { player?.pause(); musicPlayer?.pause(); musicPlayer = nil; onClose() }
     }
 
     @ViewBuilder private var content: some View {
@@ -152,10 +153,11 @@ struct StatusViewerScreen: View {
                 Image(systemName: userPaused ? "play.fill" : "pause.fill").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).frame(width: 36, height: 40)
             }
             .accessibilityLabel(Text(LocalizedStringKey(userPaused ? "stx.play" : "stx.pause")))
-            if post?.kind == "video" || post?.kind == "voice" {
+            if post?.kind == "video" || post?.kind == "voice" || post?.music != nil {
                 Button {
                     muted.toggle()
                     player?.isMuted = muted
+                    musicPlayer?.isMuted = muted
                 } label: {
                     Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).frame(width: 36, height: 40)
                 }
@@ -179,6 +181,13 @@ struct StatusViewerScreen: View {
 
     @ViewBuilder private var footer: some View {
         VStack(spacing: 10) {
+            if let m = post?.music, !m.isEmpty {
+                Label(StatusMusic.title(m), systemImage: "music.note")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 12).frame(height: 30)
+                    .background(.black.opacity(0.45), in: Capsule())
+                    .accessibilityLabel(Text(String(format: NSLocalizedString("stx.music.on", comment: ""), StatusMusic.title(m))))
+            }
             if let c = post?.caption, !c.isEmpty {
                 Text(c)
                     .foregroundStyle(.white)
@@ -228,6 +237,8 @@ struct StatusViewerScreen: View {
     private func show() async {
         player?.pause()
         player = nil
+        musicPlayer?.pause()
+        musicPlayer = nil
         image = nil
         progress = 0
         ready = false
@@ -249,6 +260,16 @@ struct StatusViewerScreen: View {
         default:
             break
         }
+        // the status's music (the app's own library): plays while it is on screen; photos and text stay 15 s to hear it
+        if let m = post.music, !m.isEmpty, let url = APIClient.shared.stMusicURL(m) {
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try? AVAudioSession.sharedInstance().setActive(true)
+            let mp = AVPlayer(url: url)
+            mp.isMuted = muted
+            musicPlayer = mp
+            if post.kind != "video" && post.kind != "voice" { seconds = 15 } else { mp.volume = 0.5 }
+            if !paused { mp.play() }
+        }
         ready = true
         // advance on a clock (pausing holds it)
         let start = Date()
@@ -269,7 +290,7 @@ struct StatusViewerScreen: View {
 
     private func setPaused(_ v: Bool) {
         paused = v
-        if v { player?.pause() } else { player?.play() }
+        if v { player?.pause(); musicPlayer?.pause() } else { player?.play(); musicPlayer?.play() }
     }
 
     private func next() {
