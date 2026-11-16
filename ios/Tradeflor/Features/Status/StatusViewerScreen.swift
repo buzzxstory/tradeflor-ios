@@ -292,7 +292,13 @@ struct StatusViewerScreen: View {
             let pl = AVPlayer(playerItem: AVPlayerItem(asset: asset))
             pl.isMuted = muted
             player = pl
-            if let d = try? await asset.load(.duration), d.seconds.isFinite, d.seconds > 0 { seconds = min(d.seconds, 60) }
+            let opened = Date()
+            if let d = try? await asset.load(.duration), d.seconds.isFinite, d.seconds > 0 {
+                seconds = min(d.seconds, 60)
+                if post.kind == "video" { MediaLog.record(id: post.id, ok: true, ms: Int(Date().timeIntervalSince(opened) * 1000)) }
+            } else if post.kind == "video" {
+                MediaLog.record(id: post.id, ok: false, ms: Int(Date().timeIntervalSince(opened) * 1000))
+            }
             if !paused { pl.play() }
         default:
             break

@@ -783,6 +783,7 @@ struct CallsPage: View {
             TFSectionLabel(text: NSLocalizedString("set.c.device", comment: ""))
             TFCard {
                 TFToggleRow(icon: "bell.and.waves.left.and.right", title: NSLocalizedString("set.c.ring", comment: ""), isOn: $ring)
+                    .onChange(of: ring) { _ in CallManager.shared.applyRingSetting() }
                 TFDivider()
                 TFKeyValue(key: NSLocalizedString("set.c.mic", comment: ""), value: NSLocalizedString("set.c.bydevice", comment: ""))
                 TFDivider()
@@ -869,6 +870,9 @@ struct AppearancePage: View {
 
 struct AboutPage: View {
     @State private var note: String?
+    @ObservedObject private var stats = DeliveryStats.shared
+    @State private var mediaLog = MediaLog.read()
+    @State private var showLog = false
     var body: some View {
         SettingsPage(title: NSLocalizedString("settings.about", comment: "")) {
             VStack(spacing: 10) {
@@ -883,6 +887,30 @@ struct AboutPage: View {
                 }
                 TFDivider()
                 TFKeyValue(key: NSLocalizedString("set.server", comment: ""), value: AppConfig.apiBase.host ?? "")
+                TFDivider()
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("about.live").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                    Text(stats.summary).font(.system(size: 12)).foregroundStyle(Theme.faint)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.vertical, 10)
+                TFDivider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("about.medialog").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                    Text(mediaLog.last.map(MediaLog.diagnose) ?? NSLocalizedString("about.medialog.none", comment: ""))
+                        .font(.system(size: 12)).foregroundStyle(Theme.faint)
+                    if !mediaLog.isEmpty {
+                        if showLog {
+                            Text(MediaLog.text(mediaLog)).font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.muted).textSelection(.enabled)
+                        }
+                        HStack(spacing: 16) {
+                            Button(LocalizedStringKey(showLog ? "about.hide" : "about.show")) { showLog.toggle() }
+                            Button("set.copy") { UIPasteboard.general.string = MediaLog.text(mediaLog); note = NSLocalizedString("set.copied", comment: "") }
+                            Button("about.clear") { MediaLog.clear(); mediaLog = []; showLog = false }
+                        }
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.vertical, 10)
             }
             if let note { Text(note).font(.system(size: 12)).foregroundStyle(Theme.accent) }
         }

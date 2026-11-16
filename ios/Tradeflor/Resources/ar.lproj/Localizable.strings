@@ -1248,3 +1248,16 @@
 "silent.on" = "النشر الصامت مفعّل — لن يُنبَّه المشتركون";
 "silent.off" = "تنبيه المشتركين عند النشر";
 "grp.picture.view" = "عرض صورة المجموعة";
+"about.live" = "التسليم المباشر";
+"about.measuring" = "جارٍ القياس…";
+"about.delivery" = "الرسائل %@ عادةً، %@ لأبطأ 5%%";
+"about.reconnects" = "إعادة الاتصال %d";
+"about.reconnects.last" = " (الأخيرة %@)";
+"about.medialog" = "سجل فيديو الحالات";
+"about.medialog.none" = "لم يُفتح أي فيديو بعد";
+"about.medialog.ok" = "آخر فيديو جاهز خلال %@";
+"about.medialog.fail" = "فشل آخر فيديو بعد %@";
+"about.show" = "عرض";
+"about.hide" = "إخفاء";
+"about.clear" = "مسح";
+"lock.forgot.reset" = "نسيت الرمز؟ عيّن رمزاً جديداً بكلمة مرور حسابك";

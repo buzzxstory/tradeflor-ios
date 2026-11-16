@@ -163,6 +163,7 @@ struct RootView: View {
             live.start(token: s.token)
             CallManager.shared.attach(live: live, token: s.token, userID: s.userID)
             LocalNotifier.shared.attach(live: live, token: s.token, userID: s.userID)
+            DeliveryStats.shared.attach(live, me: s.userID)
         } else {
             CallManager.shared.detach()
             LocalNotifier.shared.detach()

@@ -93,6 +93,15 @@ final class CallManager: NSObject, ObservableObject {
         live.calls.receive(on: RunLoop.main).sink { [weak self] ev in self?.handle(ev.type, ev.data) }.store(in: &subs)
         live.opened.receive(on: RunLoop.main).sink { [weak self] in self?.send("call.sync", [:]) }.store(in: &subs)
         Task { enabled = (try? await APIClient.shared.callsEnabled(token: token)) ?? false }
+        applyRingSetting()
+    }
+
+    /// Settings › Calls › Ring for incoming calls.
+    func applyRingSetting() {
+        let ring = UserDefaults.standard.object(forKey: "tf.calls.ring") as? Bool ?? true
+        let cfg = provider.configuration
+        cfg.ringtoneSound = ring ? nil : "silence.wav"
+        provider.configuration = cfg
     }
 
     func detach() {

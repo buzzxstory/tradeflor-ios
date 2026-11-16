@@ -81,6 +81,7 @@ struct UnlockSheet: View {
     let token: String
     let onUnlocked: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @State private var resettingPIN = false
     @State private var pin = ""
     @State private var remember = true
     @State private var busy = false
@@ -124,7 +125,10 @@ struct UnlockSheet: View {
                 .background(Theme.accent, in: RoundedRectangle(cornerRadius: 14))
                 .disabled(busy || pin.count < 6)
                 .opacity(pin.count < 6 ? 0.6 : 1)
-                Text("lock.forgot").font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button { resettingPIN = true } label: {
+                    Text("lock.forgot.reset").font(.caption.weight(.semibold)).foregroundStyle(Theme.accent).multilineTextAlignment(.center)
+                }
+                .sheet(isPresented: $resettingPIN) { SetLockPINView() }
                 Spacer()
             }
             .padding(.horizontal, 24)

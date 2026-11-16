@@ -1248,3 +1248,16 @@
 "silent.on" = "Silent post is on — subscribers won't be notified";
 "silent.off" = "Notify subscribers when you post";
 "grp.picture.view" = "View group picture";
+"about.live" = "Live delivery";
+"about.measuring" = "measuring…";
+"about.delivery" = "messages %@ typical, %@ slowest 5%%";
+"about.reconnects" = "reconnects %d";
+"about.reconnects.last" = " (last %@)";
+"about.medialog" = "Status video log";
+"about.medialog.none" = "No video opened yet";
+"about.medialog.ok" = "Last video ready in %@";
+"about.medialog.fail" = "Last video failed after %@";
+"about.show" = "Show";
+"about.hide" = "Hide";
+"about.clear" = "Clear";
+"lock.forgot.reset" = "Forgot the PIN? Set a new one with your account password";
