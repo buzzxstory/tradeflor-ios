@@ -38,7 +38,12 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         me = userID
         subs.removeAll()
         UNUserNotificationCenter.current().delegate = self
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        var ask = true
+        #if DEBUG
+        // CI screenshots: no permission prompt over the screens
+        if ProcessInfo.processInfo.environment["TF_CI_USERNAME"] != nil { ask = false }
+        #endif
+        if ask { UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in } }
         live.messages.receive(on: RunLoop.main).sink { [weak self] m in Task { await self?.consider(m) } }.store(in: &subs)
         Task { await refresh() }
     }
