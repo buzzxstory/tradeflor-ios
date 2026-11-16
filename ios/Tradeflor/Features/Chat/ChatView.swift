@@ -747,7 +747,8 @@ struct ChatView: View {
                 } else {
                 Menu {
                     if isGroup {
-                        Button { showPoll = true } label: { Label("poll.new", systemImage: "chart.bar") }
+                        // polls are created by the owner and admins only (server release 3c3d2a8); every member still votes
+                        if isAdmin { Button { showPoll = true } label: { Label("poll.new", systemImage: "chart.bar") } }
                         if groupCanSignals { Button { showSignal = true } label: { Label("signal.new", systemImage: "chart.line.uptrend.xyaxis") } }
                     }
                     if !isGroup || groupCanSendMedia {
