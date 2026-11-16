@@ -214,6 +214,7 @@ struct JoinGroupView: View {
     @State private var link = ""
     @State private var busy = false
     @State private var info: String?
+    @State private var requested = false
 
     var body: some View {
         NavigationStack {
@@ -230,9 +231,11 @@ struct JoinGroupView: View {
             .navigationTitle(Text("group.join"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } }
+                if !requested { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
                 ToolbarItem(placement: .confirmationAction) {
-                    if busy { ProgressView() } else {
+                    if requested {
+                        Button("id.done") { dismiss() }.bold()
+                    } else if busy { ProgressView() } else {
                         Button("group.join.go") { Task { await join() } }.disabled(link.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }
@@ -247,7 +250,9 @@ struct JoinGroupView: View {
         do {
             let id = try await APIClient.shared.joinGroup(token: token, link: link)
             if id.isEmpty {
-                info = NSLocalizedString("group.join.pending", comment: "")
+                // asked to join: the owner or an admin decides
+                info = NSLocalizedString("group.request.sent", comment: "")
+                requested = true
             } else {
                 dismiss()
                 onJoined(id)
@@ -277,6 +282,8 @@ struct GroupInfoView: View {
     @State private var cropping: PickedImage?
     @State private var viewingPicture: String?
     @State private var profileFor: MemberProfileRef?
+    @State private var reporting = false
+    @State private var addingToFolder = false
     @State private var showAudit = false
     @State private var newLink: String?
     @State private var inviteHours = 0
@@ -367,6 +374,8 @@ struct GroupInfoView: View {
             GroupPictureViewer(token: token, groupID: groupID, avatarID: viewingPicture ?? "")
         }
         .sheet(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store) }
+        .sheet(isPresented: $reporting) { ReportGroupSheet(groupID: groupID, groupName: group?.name ?? "").environmentObject(store) }
+        .sheet(isPresented: $addingToFolder) { AddToFolderSheet(conversationID: groupID).environmentObject(store) }
         .fullScreenCover(item: $cropping) { p in
             AvatarEditor(image: p.image) { jpeg in
                 Task { await run { try await APIClient.shared.grpUploadAvatar(token: token, id: groupID, jpeg: jpeg) } }
@@ -412,9 +421,12 @@ struct GroupInfoView: View {
             }
             if owner { actionButton("slider.horizontal.3", "grp.manage") { manage = true } }
             Menu {
+                if admin { Button { tab = 1 } label: { Label("grp.add.members", systemImage: "person.badge.plus") } }
+                Button { addingToFolder = true } label: { Label("folder.addto", systemImage: "folder.badge.plus") }
                 if let h = g.handle, !h.isEmpty {
                     Button { copy("https://app.tradeflor.com/g/\(h)") } label: { Label("grp.copy.link", systemImage: "link") }
                 }
+                if !owner { Button { reporting = true } label: { Label("report.title", systemImage: "exclamationmark.bubble") } }
                 Button(role: .destructive) { confirmLeave = true } label: { Label("grp.leave", systemImage: "rectangle.portrait.and.arrow.right") }
             } label: {
                 actionLabel("ellipsis", "grp.more")

@@ -22,6 +22,8 @@ final class LiveConnection: ObservableObject {
     @Published private(set) var online: Set<String> = []
     /// Fires every time the socket (re)opens, so calls can send call.sync.
     let opened = PassthroughSubject<Void, Never>()
+    /// Someone asked to join a group I own or run: conversation_id, group, name, user_id.
+    let joinRequests = PassthroughSubject<[String: String], Never>()
 
     private var token: String?
     private var task: URLSessionWebSocketTask?
@@ -143,6 +145,12 @@ final class LiveConnection: ObservableObject {
                 }
             default:
                 online = Set((d["online"] as? [String]) ?? [])
+            }
+            return
+        }
+        if env.type == "join_request" {
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let d = obj["data"] as? [String: String] {
+                joinRequests.send(d)
             }
             return
         }

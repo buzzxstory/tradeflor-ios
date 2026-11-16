@@ -45,6 +45,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         #endif
         if ask { UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in } }
         live.messages.receive(on: RunLoop.main).sink { [weak self] m in Task { await self?.consider(m) } }.store(in: &subs)
+        live.joinRequests.receive(on: RunLoop.main).sink { [weak self] d in Task { await self?.joinRequested(d) } }.store(in: &subs)
         Task { await refresh() }
     }
 
@@ -136,6 +137,21 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         notified.append(m.id)
         if notified.count > 300 { notified.removeFirst(100) }
         try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: m.id, content: content, trigger: nil))
+    }
+
+    /// Someone asked to join a group I own or run (website: one notice per request).
+    private func joinRequested(_ d: [String: String]) async {
+        guard let conv = d["conversation_id"] else { return }
+        if Date().timeIntervalSince(refreshedAt) > 120 { await refresh() }
+        guard flag("notifications.enabled") else { return }
+        let content = UNMutableNotificationContent()
+        content.title = d["group"] ?? titles[conv] ?? NSLocalizedString("notify.group", comment: "")
+        content.body = flag("notifications.previews")
+            ? String(format: NSLocalizedString("join.asked", comment: ""), d["name"] ?? NSLocalizedString("notify.someone", comment: ""))
+            : NSLocalizedString("notify.generic", comment: "")
+        if flag("notifications.sound") { content.sound = .default }
+        content.userInfo = ["conversation_id": conv]
+        try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "joinreq|\(conv)|\(d["user_id"] ?? "")", content: content, trigger: nil))
     }
 
     /// Clears a chat's notifications once it is opened.

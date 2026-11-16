@@ -14,6 +14,7 @@ struct AdminCenterPage: View {
         var t: [(String, String)] = []
         if me.users == true { t += [("overview", "adm.overview"), ("users", "adm.users")] }
         if me.content == true { t += [("official", "adm.official"), ("library", "adm.library")] }
+        if me.users == true { t.append(("reports", "adm.reports")) }
         if me.audit == true { t.append(("audit", "adm.audit")) }
         t.append(("settings", "adm.settings"))
         return t
@@ -33,6 +34,7 @@ struct AdminCenterPage: View {
                 case "users": AdminUsersView(me: me)
                 case "official": AdminOfficialView(library: false, me: me)
                 case "library": AdminOfficialView(library: true, me: me)
+                case "reports": AdminReportsView()
                 case "audit": AdminAuditView(onOpenUser: open)
                 case "settings": AdminSettingsView(me: me, onOpenUser: open)
                 default: AdminOverviewView(onOpenUser: open)

@@ -80,6 +80,7 @@ struct ChatView: View {
     @State private var silentPost = false
     @State private var profileFor: MemberProfileRef?
     @State private var memberAvatars: [String: String] = [:]
+    @State private var joinWaiting = 0
     /// Members whose names look like another member's (website nameSkeleton.ts).
     private var lookAlike: Set<String> { NameSkeleton.lookAlikeIDs(members) }
     @State private var groupStatus: StatusGroup?
@@ -124,6 +125,23 @@ struct ChatView: View {
                 FocusBanner(showingAll: focusShowAll, onToggle: { focusShowAll.toggle() }, onEdit: { showFocus = true })
             }
             if isGroup && !pins.isEmpty && !selecting && !pinsHidden { pinnedBar }
+            if isGroup && isAdmin && joinWaiting > 0 && !selecting {
+                Button { showInfo = true } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "person.badge.plus").foregroundStyle(Theme.accent)
+                        Text(joinWaiting == 1 ? NSLocalizedString("join.waiting.one", comment: "")
+                             : String(format: NSLocalizedString("join.waiting.n", comment: ""), joinWaiting))
+                            .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
+                        Text("· ").foregroundStyle(Theme.faint)
+                        Text("join.review").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14).frame(height: 40)
+                    .background(Theme.header)
+                    .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
+                }
+                .buttonStyle(.plain)
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 6) {
@@ -359,6 +377,15 @@ struct ChatView: View {
             }
         }
         .task { if isGroup { await loadGroupStatus() } }
+        // join requests waiting: on open, when someone asks (live), and every minute
+        .task {
+            while isGroup && !Task.isCancelled {
+                if isAdmin { await loadJoinWaiting() }
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+            }
+        }
+        .onReceive(live.joinRequests) { d in if d["conversation_id"] == chat.conversation_id { Task { await loadJoinWaiting() } } }
+        .onChange(of: showInfo) { open in if !open { Task { await loadJoinWaiting() } } }
         #if DEBUG
         // CI only: TF_CI_GROUP_INFO=1 opens Group Info over the group chat, for a screenshot
         .task {
@@ -1073,6 +1100,11 @@ struct ChatView: View {
         memberNames = Dictionary(list.map { ($0.user_id, $0.title) }, uniquingKeysWith: { a, _ in a })
         memberRoles = Dictionary(list.filter { $0.role != "member" }.map { ($0.user_id, $0.role) }, uniquingKeysWith: { a, _ in a })
         memberAvatars = Dictionary(list.compactMap { p in (p.avatar_id?.isEmpty == false) ? (p.user_id, p.avatar_id!) : nil }, uniquingKeysWith: { a, _ in a })
+    }
+
+    private func loadJoinWaiting() async {
+        guard isGroup, isAdmin else { joinWaiting = 0; return }
+        joinWaiting = await APIClient.shared.grpJoinRequests(token: token, id: chat.conversation_id).count
     }
 
     private func loadGroupStatus() async {

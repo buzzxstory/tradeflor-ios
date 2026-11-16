@@ -80,23 +80,37 @@ struct RemoteImage: View {
     var contentMode: ContentMode = .fill
     @State private var image: UIImage?
     @State private var failed = false
+    @State private var attempt = 0
 
     var body: some View {
         ZStack {
             if let image {
                 Image(uiImage: image).resizable().aspectRatio(contentMode: contentMode)
             } else if failed {
-                Image(systemName: "photo").font(.title).foregroundStyle(.secondary)
+                // a picture that did not come (sleep, a server update, a dropped connection): a calm retry, never a broken image
+                VStack(spacing: 6) {
+                    Image(systemName: "arrow.clockwise").font(.title3)
+                    Text("photo.retry").font(.caption)
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture { failed = false; attempt += 1 }
+                .accessibilityAddTraits(.isButton)
             } else {
                 ProgressView()
             }
         }
-        .task(id: fileID + (thumb ? "t" : "f")) {
-            if let d = await APIClient.shared.file(token: token, fileID: fileID, thumb: thumb), let img = UIImage(data: d) {
-                image = img
-            } else {
-                failed = true
+        .task(id: fileID + (thumb ? "t" : "f") + String(attempt)) {
+            for wait in [0, 1_000_000_000, 3_000_000_000] as [UInt64] {
+                if wait > 0 { try? await Task.sleep(nanoseconds: wait) }
+                if Task.isCancelled { return }
+                if let d = await APIClient.shared.file(token: token, fileID: fileID, thumb: thumb), let img = UIImage(data: d) {
+                    image = img
+                    return
+                }
             }
+            failed = true
         }
     }
 }
