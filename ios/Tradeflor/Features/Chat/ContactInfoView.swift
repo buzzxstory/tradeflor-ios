@@ -193,7 +193,7 @@ struct ScheduleSheet: View {
 
     private func act(_ work: () async throws -> Void) async {
         do { try await work() } catch APIError.refused(let why) { error = why } catch {
-            error = NSLocalizedString("chat.action.failed", comment: "")
+            self.error = NSLocalizedString("chat.action.failed", comment: "")
         }
         await reload()
     }
