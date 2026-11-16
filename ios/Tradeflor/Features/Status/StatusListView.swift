@@ -277,7 +277,14 @@ enum StatusStyle {
 
     static func background(_ style: String?) -> some View {
         let bg = parts(style).0
-        return LinearGradient(colors: bg.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+        // light and grain over the colour (website 58-status-creator.css .tx-surface), in the composer and the viewer
+        return ZStack {
+            LinearGradient(colors: bg.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            RadialGradient(colors: [.white.opacity(0.26), .clear], center: UnitPoint(x: 0.18, y: 0.12), startRadius: 0, endRadius: 320)
+            RadialGradient(colors: [.black.opacity(0.28), .clear], center: UnitPoint(x: 0.92, y: 0.92), startRadius: 0, endRadius: 300)
+            RadialGradient(colors: [.white.opacity(0.1), .clear], center: UnitPoint(x: 0.85, y: 0.18), startRadius: 0, endRadius: 200)
+            StatusGrain().opacity(0.16).blendMode(.overlay)
+        }
     }
 
     /// Large for a few words, smaller as the text grows.
@@ -290,5 +297,23 @@ enum StatusStyle {
         case ..<360: return 21
         default: return 17
         }
+    }
+}
+
+/// Fine film grain over text statuses (a fixed pattern).
+struct StatusGrain: View {
+    var body: some View {
+        Canvas { ctx, size in
+            var rng = SeededRandom(seed: 42)
+            let count = Int(size.width * size.height / 36)
+            for _ in 0..<count {
+                let x = rng.next() * size.width, y = rng.next() * size.height
+                let v = rng.next()
+                ctx.fill(Path(CGRect(x: x, y: y, width: 1.2, height: 1.2)), with: .color(v > 0.5 ? .white : .black))
+            }
+        }
+        .drawingGroup()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }

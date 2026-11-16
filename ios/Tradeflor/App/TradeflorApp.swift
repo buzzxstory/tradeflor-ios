@@ -105,6 +105,31 @@ struct RootView: View {
                     .background(Color.green.opacity(0.85))
                 }
                 .accessibilityLabel(Text("call.return"))
+            } else if !calls.showScreen && calls.phase == .ended {
+                // end-of-call notice (website CallOverlay): a compact card with the person's picture, name and outcome
+                HStack(spacing: 10) {
+                    if let pid = calls.peerID {
+                        Avatar(token: store.session?.token ?? "", userID: pid, avatarID: nil, title: calls.peerName, size: 36)
+                    } else {
+                        Image(systemName: "phone.down.fill").frame(width: 36, height: 36).background(Theme.card, in: Circle())
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(calls.peerName).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                        HStack(spacing: 4) {
+                            Text(LocalizedStringKey(CallScreen.endedKey(calls.endReason)))
+                            if let d = calls.lastDuration, d >= 1 { Text("· " + VoiceBubble.length(Int64(d * 1000))).monospacedDigit() }
+                        }
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Theme.card, in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.borderStrong, lineWidth: 1))
+                .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+                .padding(.horizontal, 12).padding(.top, 4)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .accessibilityElement(children: .combine)
             }
         }
         .fullScreenCover(isPresented: $needsSetup) { IdentitySetupView { needsSetup = false } }

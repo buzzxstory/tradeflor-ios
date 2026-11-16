@@ -35,6 +35,8 @@ final class CallManager: NSObject, ObservableObject {
     /// Active call whose connection dropped: trying to get it back (ICE restart).
     @Published private(set) var reconnecting = false
     @Published private(set) var peerID: String?
+    /// How long the call that just ended lasted (shown on the end-of-call card).
+    @Published private(set) var lastDuration: TimeInterval?
 
     private var live: LiveConnection?
     private var token = ""
@@ -512,6 +514,7 @@ final class CallManager: NSObject, ObservableObject {
             callController.request(CXTransaction(action: CXEndCallAction(call: uuid))) { _ in }
         }
         callID = nil
+        lastDuration = connectedAt.map { Date().timeIntervalSince($0) }
         phase = .ended
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_800_000_000)
