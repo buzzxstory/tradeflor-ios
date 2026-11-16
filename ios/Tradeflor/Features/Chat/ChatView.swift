@@ -79,6 +79,7 @@ struct ChatView: View {
     @State private var outboxLoaded = false
     @State private var silentPost = false
     @State private var profileFor: MemberProfileRef?
+    @State private var memberAvatars: [String: String] = [:]
     /// Members whose names look like another member's (website nameSkeleton.ts).
     private var lookAlike: Set<String> { NameSkeleton.lookAlikeIDs(members) }
     @State private var groupStatus: StatusGroup?
@@ -158,7 +159,7 @@ struct ChatView: View {
                                            roleTag: isGroup ? roleOf(m.sender_id) : nil,
                                            asGroup: asGroup,
                                            senderAvatar: isGroup && !asGroup && m.sender_id != me && (i == 0 || rows[i - 1].sender_id != m.sender_id)
-                                               ? AnyView(Avatar(token: token, userID: m.sender_id, avatarID: nil, title: memberNames[m.sender_id] ?? "?", size: 34))
+                                               ? AnyView(Avatar(token: token, userID: m.sender_id, avatarID: memberAvatars[m.sender_id], title: memberNames[m.sender_id] ?? "?", size: 34))
                                                : nil,
                                            avatarSlot: isGroup && !asGroup,
                                            handle: lookIDs.contains(m.sender_id) ? members.first { $0.user_id == m.sender_id }?.username : nil),
@@ -477,10 +478,7 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar) // full height for the conversation, like other messengers
         .task {
-            if isGroup, let list = try? await APIClient.shared.groupMembers(token: token, groupID: chat.conversation_id) {
-                members = list
-                memberNames = Dictionary(list.map { ($0.user_id, $0.title) }, uniquingKeysWith: { a, _ in a })
-            }
+            if isGroup { await loadPeople() }
             await loadMeta()
             themeID = await ChatThemeStore.load(token: token, conversationID: chat.conversation_id)
         }
@@ -1052,9 +1050,6 @@ struct ChatView: View {
             groupComments = g.comments
             memberCount = g.memberCount
             pins = await APIClient.shared.chGroupPins(token: token, groupID: chat.conversation_id)
-            if let full = try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/members", token: token) {
-                memberRoles = Dictionary(full.filter { $0.role != "member" }.map { ($0.user_id, $0.role) }, uniquingKeysWith: { a, _ in a })
-            }
             if let doc = try? await APIClient.shared.getFocus(token: token, groupID: chat.conversation_id) {
                 focusDoc = doc
                 await loadFocusPages()
@@ -1065,6 +1060,19 @@ struct ChatView: View {
         if let prefs = try? await APIClient.shared.prefs(token: token), let mine = prefs.first(where: { $0.conversation_id == chat.conversation_id }) {
             muted = mine.muted
         }
+    }
+
+    /// Who is who in the group. Everyone may read the people who posted (GET /groups/{id}/senders, website listGroupSenders);
+    /// only the owner and admins may read the whole member directory (/members), which adds those who never posted.
+    private func loadPeople() async {
+        var all: [String: GroupMemberFull] = [:]
+        for p in (try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/senders", token: token)) ?? [] { all[p.user_id] = p }
+        for p in (try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/members", token: token)) ?? [] { all[p.user_id] = p }
+        let list = Array(all.values)
+        members = list.map { GroupMember(user_id: $0.user_id, username: $0.username, display_name: $0.display_name) }
+        memberNames = Dictionary(list.map { ($0.user_id, $0.title) }, uniquingKeysWith: { a, _ in a })
+        memberRoles = Dictionary(list.filter { $0.role != "member" }.map { ($0.user_id, $0.role) }, uniquingKeysWith: { a, _ in a })
+        memberAvatars = Dictionary(list.compactMap { p in (p.avatar_id?.isEmpty == false) ? (p.user_id, p.avatar_id!) : nil }, uniquingKeysWith: { a, _ in a })
     }
 
     private func loadGroupStatus() async {

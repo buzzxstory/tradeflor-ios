@@ -223,7 +223,7 @@ struct GroupSummary: Decodable, Identifiable, Hashable {
     /// A group opens in the same chat screen as a private chat.
     var asConversation: ConversationSummary {
         ConversationSummary(conversation_id: conversation_id, peer_id: "", peer_username: name, peer_display_name: name,
-                            peer_avatar_id: nil, last_message: last_message, last_message_at: last_message_at,
+                            peer_avatar_id: avatar_id, last_message: last_message, last_message_at: last_message_at,
                             last_message_mine: false, unread_count: unread_count, last_message_kind: last_message_kind)
     }
 }

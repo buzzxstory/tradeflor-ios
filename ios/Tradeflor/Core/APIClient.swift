@@ -298,8 +298,14 @@ final class APIClient {
         return list
     }
 
+    /// The people of a group this account may see: everyone who posted (any member may read it), plus the whole directory
+    /// for the owner and admins (the server refuses /members to ordinary members).
     func groupMembers(token: String, groupID: String) async throws -> [GroupMember] {
-        try decodeList(GroupMember.self, try await getJSON("groups/\(groupID)/members", token: token))
+        var out = (try? decodeList(GroupMember.self, try await getJSON("groups/\(groupID)/senders", token: token))) ?? []
+        if let all = try? decodeList(GroupMember.self, try await getJSON("groups/\(groupID)/members", token: token)) {
+            for m in all where !out.contains(where: { $0.user_id == m.user_id }) { out.append(m) }
+        }
+        return out
     }
 
     /// Groups count reads by sequence number (the newest message I have seen).
