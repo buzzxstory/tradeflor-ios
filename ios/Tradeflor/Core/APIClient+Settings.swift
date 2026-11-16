@@ -118,7 +118,7 @@ extension APIClient {
     // MARK: status uploads (voice, music)
 
     /// Multipart POST /status for a photo / video / voice note, with optional caption and music.
-    func stPostStatus(token: String, file: Data, fileName: String, mime: String, caption: String = "",
+    func stPostStatus(token: String, groupID: String? = nil, file: Data, fileName: String, mime: String, caption: String = "",
                       music: String? = nil, voiceMs: Int? = nil) async throws {
         let boundary = "tf-\(UUID().uuidString)"
         var body = Data()
@@ -127,6 +127,7 @@ extension APIClient {
         }
         field("caption", caption)
         if let music, !music.isEmpty { field("music", music) }
+        if let groupID, !groupID.isEmpty { field("group_id", groupID) } // a status for a group (owner and admins)
         if let voiceMs {
             field("kind", "voice")
             field("duration_ms", String(voiceMs))
@@ -146,7 +147,7 @@ extension APIClient {
     }
 
     /// A text status with an optional track.
-    func stPostTextStatus(token: String, text: String, bg: String, font: String, music: String?) async throws {
+    func stPostTextStatus(token: String, groupID: String? = nil, text: String, bg: String, font: String, music: String?) async throws {
         let boundary = "tf-\(UUID().uuidString)"
         var body = Data()
         func field(_ name: String, _ value: String) {
@@ -157,6 +158,7 @@ extension APIClient {
         field("bg", bg)
         field("font", font)
         if let music, !music.isEmpty { field("music", music) }
+        if let groupID, !groupID.isEmpty { field("group_id", groupID) }
         body.append(Data("--\(boundary)--\r\n".utf8))
         var req = request("status", method: "POST", token: token, body: nil)
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")

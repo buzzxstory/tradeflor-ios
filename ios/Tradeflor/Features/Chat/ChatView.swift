@@ -76,6 +76,14 @@ struct ChatView: View {
     @State private var focusDoc: FocusDoc?
     @State private var openDoc: LocalDoc?
     @State private var pinsHidden = false
+    @State private var outboxLoaded = false
+    @State private var silentPost = false
+    /// Members whose names look like another member's (website nameSkeleton.ts).
+    private var lookAlike: Set<String> { NameSkeleton.lookAlikeIDs(members) }
+    @State private var groupStatus: StatusGroup?
+    @State private var watchingGroupStatus = false
+    @State private var addingGroupStatus = false
+    @Environment(\.scenePhase) private var scenePhase
     @State private var openingDoc = false
     // hold-to-record voice: press = record, release = send, slide left = cancel, slide up = lock (hands free)
     @State private var micPressed = false
@@ -126,14 +134,16 @@ struct ChatView: View {
                             .padding(.vertical, 8)
                         }
                         let rows = shown
+                        let lookIDs = lookAlike
                         ForEach(Array(rows.enumerated()), id: \.element.id) { i, m in
                             if i == 0 || !sameDay(rows[i - 1], m) {
                                 DayDivider(date: m.date)
                             }
+                            let asGroup = isGroup && roleOf(m.sender_id) == "owner"
                             MessageRow(message: m, mine: m.sender_id == me, myID: me, peerName: chat.title,
-                                       senderName: isGroup && m.sender_id != me
-                                           && (i == 0 || messages[i - 1].sender_id != m.sender_id)
-                                           ? (memberNames[m.sender_id] ?? "") : nil,
+                                       senderName: isGroup && (m.sender_id != me || asGroup)
+                                           && (i == 0 || rows[i - 1].sender_id != m.sender_id)
+                                           ? (asGroup ? chat.title : (memberNames[m.sender_id] ?? "")) : nil,
                                        onReply: { replyingTo = m; composerFocused = true },
                                        onReact: { e in Task { await react(m, e) } },
                                        onCopy: { UIPasteboard.general.string = displayText(m); flash("chat.copied") },
@@ -144,7 +154,9 @@ struct ChatView: View {
                                            pinned: pins.contains { $0.message_id == m.id },
                                            selecting: selecting, selected: selected.contains(m.id),
                                            highlighted: searchOpen && searchHits.indices.contains(searchIndex) && searchHits[searchIndex].id == m.id,
-                                           roleTag: isGroup ? roleOf(m.sender_id) : nil),
+                                           roleTag: isGroup ? roleOf(m.sender_id) : nil,
+                                           asGroup: asGroup,
+                                           handle: lookIDs.contains(m.sender_id) ? members.first { $0.user_id == m.sender_id }?.username : nil),
                                        actions: MessageRowActions(
                                            copyLink: {
                                                UIPasteboard.general.string = "tradeflor://chat/\(chat.conversation_id)/message/\(m.id)"
@@ -156,7 +168,15 @@ struct ChatView: View {
                                            report: { flash("chat.report.soon") },
                                            moreReactions: { reactTarget = m; showEmoji = true },
                                            comments: { commentsFor = m },
-                                           save: m.file_id == nil ? nil : { Task { await saveAttachment(m) } })) {
+                                           save: m.file_id == nil ? nil : { Task { await saveAttachment(m) } },
+                                           openReply: m.reply_to_id == nil ? nil : {
+                                               if let id = m.reply_to_id, messages.contains(where: { $0.id == id }) {
+                                                   searchText = ""
+                                                   jumpTarget = id
+                                               } else {
+                                                   flash("chat.reply.notloaded")
+                                               }
+                                           })) {
                                 messageContent(m)
                             }
                             .id(m.id)
@@ -179,6 +199,22 @@ struct ChatView: View {
                             }
                             .id(p.id)
                             .onTapGesture { if p.failed { Task { await deliver(p) } } }
+                            .overlay(alignment: .bottomTrailing) {
+                                if p.failed {
+                                    // "Not sent · Retry" (website FailedBadge), with Delete in the menu
+                                    Text("chat.notsent.retry").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.danger)
+                                        .padding(.horizontal, 8).padding(.vertical, 3).background(Theme.card, in: Capsule())
+                                        .offset(y: 16)
+                                        .allowsHitTesting(false)
+                                }
+                            }
+                            .padding(.bottom, p.failed ? 18 : 0)
+                            .contextMenu {
+                                if p.failed {
+                                    Button { Task { await deliver(p) } } label: { Label("chat.retry", systemImage: "arrow.clockwise") }
+                                    Button(role: .destructive) { pending.removeAll { $0.id == p.id } } label: { Label("chat.delete", systemImage: "trash") }
+                                }
+                            }
                         }
                         Color.clear.frame(height: 1).id("bottom")
                             .onAppear { bottomVisible = true; newWhileAway = 0 }
@@ -301,6 +337,16 @@ struct ChatView: View {
             }
         }
         .sheet(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft) }
+        .sheet(isPresented: $addingGroupStatus) {
+            StatusCreatorSheet(onPosted: { Task { await loadGroupStatus() } }, groupID: chat.conversation_id, groupName: chat.title)
+                .environmentObject(store)
+        }
+        .fullScreenCover(isPresented: $watchingGroupStatus) {
+            if let g = groupStatus {
+                StatusViewerScreen(groups: [g], startGroup: 0, token: token) { Task { await loadGroupStatus() } }
+            }
+        }
+        .task { if isGroup { await loadGroupStatus() } }
         .fullScreenCover(item: $openDoc) { d in DocumentPreview(url: d.url).ignoresSafeArea() }
         .sheet(isPresented: $showFocus) {
             if let doc = focusDoc {
@@ -412,6 +458,20 @@ struct ChatView: View {
             themeID = await ChatThemeStore.load(token: token, conversationID: chat.conversation_id)
         }
         .task { await loadNewest() }
+        // after a dropped connection or a return to the app: catch up so nothing sent meanwhile is missing
+        .onReceive(live.opened) { _ in Task { await loadNewest(quiet: true) } }
+        .onChange(of: scenePhase) { p in if p == .active { Task { await loadNewest(quiet: true) } } }
+        // unsent messages are kept on the device and sent again when the chat opens (same idempotency key)
+        .onChange(of: pending) { list in
+            if outboxLoaded { OutboxStore.save(account: me, conversation: chat.conversation_id, list) }
+        }
+        .task {
+            guard !outboxLoaded else { return }
+            let saved = OutboxStore.load(account: me, conversation: chat.conversation_id).filter { s in !pending.contains { $0.id == s.id } }
+            pending.append(contentsOf: saved)
+            outboxLoaded = true
+            for p in saved { await deliver(p) }
+        }
         .onReceive(live.messages) { m in
             guard m.conversation_id == chat.conversation_id else { return }
             merge([m])
@@ -544,6 +604,12 @@ struct ChatView: View {
             Menu {
                 if isGroup { Button { showInfo = true } label: { Label("group.info", systemImage: "info.circle") } }
                 if isGroup && focusDoc != nil { Button { showFocus = true } label: { Label("focus.title", systemImage: "scope") } }
+                if isGroup, groupStatus != nil {
+                    Button { watchingGroupStatus = true } label: { Label("gst.watch", systemImage: "circle.dashed") }
+                }
+                if isGroup && isAdmin {
+                    Button { addingGroupStatus = true } label: { Label("gst.add", systemImage: "plus.circle.dashed") }
+                }
                 Button { showSchedule = true } label: { Label("chat.scheduled", systemImage: "clock") }
                 if muted {
                     Button { Task { await mute(seconds: 0) } } label: { Label("chats.unmute", systemImage: "bell") }
@@ -668,6 +734,14 @@ struct ChatView: View {
                         .padding(.horizontal, 4)
                         .accessibilityIdentifier("chat.composer")
                     Button { reactTarget = nil; showEmoji = true } label: { composerIcon("face.smiling") }
+                    if isGroup && isAdmin {
+                        // silent post (website GroupsView): kept as the control it will be once push notifications exist
+                        Button {
+                            silentPost.toggle()
+                            flash(silentPost ? "silent.on" : "silent.off")
+                        } label: { composerIcon(silentPost ? "bell.slash" : "bell") }
+                        .accessibilityLabel(Text(LocalizedStringKey(silentPost ? "silent.on" : "silent.off")))
+                    }
                         .accessibilityLabel(Text("chat.emoji"))
                 }
                 .padding(.horizontal, 4)
@@ -964,6 +1038,11 @@ struct ChatView: View {
         if let prefs = try? await APIClient.shared.prefs(token: token), let mine = prefs.first(where: { $0.conversation_id == chat.conversation_id }) {
             muted = mine.muted
         }
+    }
+
+    private func loadGroupStatus() async {
+        let feed = (try? await APIClient.shared.statusFeed(token: token)) ?? []
+        groupStatus = feed.first { $0.group_id == chat.conversation_id && !$0.posts.isEmpty }
     }
 
     private func loadFocusPages() async {
@@ -1425,16 +1504,33 @@ struct Bubble: View {
     }()
 
     var body: some View {
+        let jumbo = faded ? 0 : TextLook.emojiCount(text)
         HStack {
             if mine { Spacer(minLength: 48) }
+            if jumbo > 0 {
+                // 1-3 emoji alone: large, without a bubble (website emoji.ts jumboClass)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(text).font(.system(size: jumbo == 1 ? 60 : (jumbo == 2 ? 48 : 40)))
+                    HStack(spacing: 4) {
+                        if let date { Text(Self.time.string(from: date)) }
+                        if let state { tick(state) }
+                    }
+                    .font(.caption2).foregroundStyle(Theme.muted)
+                    .padding(.horizontal, 8).padding(.vertical, 2).background(Theme.card.opacity(0.7), in: Capsule())
+                }
+            } else {
             VStack(alignment: .trailing, spacing: 3) {
-                Text(text)
+                Text(TextLook.linked(text))
                     .font(.body)
                     .italic(faded)
                     .foregroundStyle(Theme.text)
+                    .tint(Theme.accent)
                     .opacity(faded ? 0.7 : 1)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
+                    // an Arabic message reads right to left in its own bubble (website bidi.ts)
+                    .multilineTextAlignment(TextLook.isArabic(text) ? .trailing : .leading)
+                    .environment(\.layoutDirection, TextLook.isArabic(text) ? .rightToLeft : .leftToRight)
                 HStack(spacing: 4) {
                     if let date { Text(Self.time.string(from: date)) }
                     if let state { tick(state) }
@@ -1446,6 +1542,7 @@ struct Bubble: View {
             .padding(.vertical, 8)
             .tfBubble(mine: mine)
             .fixedSize(horizontal: false, vertical: true)
+            }
             if !mine { Spacer(minLength: 48) }
         }
     }
@@ -1467,4 +1564,59 @@ struct Bubble: View {
 struct ExportFile: Identifiable {
     let url: URL
     var id: String { url.absoluteString }
+}
+
+
+/// Message text helpers shared by the bubbles (website Linkify.tsx, bidi.ts, emoji.ts).
+enum TextLook {
+    private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    /// Every web address in the text is a link (Tradeflor links open inside the app).
+    static func linked(_ text: String) -> AttributedString {
+        var out = AttributedString(text)
+        guard let detector, text.contains(".") else { return out }
+        for m in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let url = m.url, let r = Range(m.range, in: text),
+                  let lo = AttributedString.Index(r.lowerBound, within: out), let hi = AttributedString.Index(r.upperBound, within: out) else { continue }
+            out[lo..<hi].link = url
+            out[lo..<hi].underlineStyle = .single
+        }
+        return out
+    }
+
+    static func isArabic(_ text: String) -> Bool {
+        text.unicodeScalars.contains { (0x0600...0x06FF).contains($0.value) }
+    }
+
+    /// 1-3 emoji and nothing else: how many; otherwise 0.
+    static func emojiCount(_ text: String) -> Int {
+        let chars = text.filter { !$0.isWhitespace }
+        guard !chars.isEmpty, chars.count <= 3 else { return 0 }
+        for c in chars {
+            guard let f = c.unicodeScalars.first else { return 0 }
+            let isEmoji = f.properties.isEmojiPresentation || (f.properties.isEmoji && c.unicodeScalars.count > 1)
+            if !isEmoji { return 0 }
+        }
+        return chars.count
+    }
+}
+
+
+/// Names that look alike (accents, case, spacing, look-alike letters and digits) map to the same skeleton.
+enum NameSkeleton {
+    static func skeleton(_ name: String) -> String {
+        let folded = name.folding(options: [.diacriticInsensitive, .caseInsensitive, .widthInsensitive], locale: nil).lowercased()
+        let map: [Character: Character] = ["0": "o", "1": "l", "i": "l", "|": "l", "3": "e", "5": "s", "$": "s", "@": "a", "4": "a",
+                                           "\u{0430}": "a", "\u{0435}": "e", "\u{043E}": "o", "\u{0440}": "p", "\u{0441}": "c", "\u{0445}": "x"]
+        return String(folded.compactMap { c -> Character? in
+            if c.isWhitespace || c == "_" || c == "." || c == "-" { return nil }
+            return map[c] ?? c
+        })
+    }
+
+    static func lookAlikeIDs(_ members: [GroupMember]) -> Set<String> {
+        var byKey: [String: [String]] = [:]
+        for m in members { byKey[skeleton(m.title), default: []].append(m.user_id) }
+        return Set(byKey.values.filter { $0.count > 1 }.flatMap { $0 })
+    }
 }

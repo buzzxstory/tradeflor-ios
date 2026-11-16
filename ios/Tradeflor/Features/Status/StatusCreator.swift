@@ -7,6 +7,9 @@ import UniformTypeIdentifiers
 /// Photos & videos, Camera, Text, Layout and Voice note; a queue with a caption per item; Add music; Post status.
 struct StatusCreatorSheet: View {
     let onPosted: () -> Void
+    /// A status for this group (its owner and admins), else my own.
+    var groupID: String? = nil
+    var groupName: String? = nil
     @EnvironmentObject private var store: SessionStore
     @Environment(\.dismiss) private var dismiss
 
@@ -117,7 +120,7 @@ struct StatusCreatorSheet: View {
                 .padding(16)
             }
             .background(Starfield())
-            .navigationTitle(Text("stx.new"))
+            .navigationTitle(groupName.map { Text(String(format: NSLocalizedString("stx.new.group", comment: ""), $0)) } ?? Text("stx.new"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Theme.header, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
@@ -154,7 +157,7 @@ struct StatusCreatorSheet: View {
             TextStatusComposer { text, bg, font in
                 Task {
                     do {
-                        try await APIClient.shared.stPostTextStatus(token: token, text: text, bg: bg, font: font, music: music)
+                        try await APIClient.shared.stPostTextStatus(token: token, groupID: groupID, text: text, bg: bg, font: font, music: music)
                         onPosted()
                         dismiss()
                     } catch APIError.refused(let why) {
@@ -169,7 +172,7 @@ struct StatusCreatorSheet: View {
             VoiceStatusRecorder { data, ms in
                 Task {
                     do {
-                        try await APIClient.shared.stPostStatus(token: token, file: data, fileName: "voice.m4a", mime: "audio/mp4", voiceMs: ms)
+                        try await APIClient.shared.stPostStatus(token: token, groupID: groupID, file: data, fileName: "voice.m4a", mime: "audio/mp4", voiceMs: ms)
                         onPosted()
                         dismiss()
                     } catch APIError.refused(let why) {
@@ -215,14 +218,14 @@ struct StatusCreatorSheet: View {
                 if let img = it.image {
                     let encoded = await Task.detached(priority: .userInitiated) { ImagePrep.jpeg(from: img) }.value
                     guard let jpeg = encoded else { continue }
-                    try await APIClient.shared.stPostStatus(token: token, file: jpeg, fileName: "status.jpg", mime: "image/jpeg",
+                    try await APIClient.shared.stPostStatus(token: token, groupID: groupID, file: jpeg, fileName: "status.jpg", mime: "image/jpeg",
                                                             caption: it.caption, music: music)
                 } else if let url = it.videoURL {
                     guard let out = await VideoPrep.mp4(from: url, maxBytes: 29_000_000) else {
                         problem = NSLocalizedString("status.video.toolarge", comment: "")
                         continue
                     }
-                    try await APIClient.shared.stPostStatus(token: token, file: out.data, fileName: "status.mp4", mime: "video/mp4",
+                    try await APIClient.shared.stPostStatus(token: token, groupID: groupID, file: out.data, fileName: "status.mp4", mime: "video/mp4",
                                                             caption: it.caption, music: nil)
                 }
                 items.removeAll { $0.id == it.id }

@@ -275,6 +275,7 @@ struct GroupInfoView: View {
     @State private var audit: [GrpAudit] = []
     @State private var stats: GrpMediaStats?
     @State private var cropping: PickedImage?
+    @State private var viewingPicture: String?
     @State private var showAudit = false
     @State private var newLink: String?
     @State private var inviteHours = 0
@@ -361,6 +362,9 @@ struct GroupInfoView: View {
                 cropping = PickedImage(image: img)
             }
         }
+        .fullScreenCover(isPresented: Binding(get: { viewingPicture != nil }, set: { if !$0 { viewingPicture = nil } })) {
+            GroupPictureViewer(token: token, groupID: groupID, avatarID: viewingPicture ?? "")
+        }
         .fullScreenCover(item: $cropping) { p in
             AvatarEditor(image: p.image) { jpeg in
                 Task { await run { try await APIClient.shared.grpUploadAvatar(token: token, id: groupID, jpeg: jpeg) } }
@@ -373,6 +377,9 @@ struct GroupInfoView: View {
     @ViewBuilder private func infoTab(_ g: GrpInfo) -> some View {
         VStack(spacing: 8) {
             Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id, size: 96)
+                .onTapGesture { if let a = g.avatar_id, !a.isEmpty { viewingPicture = a } }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint(Text("grp.picture.view"))
             if owner {
                 HStack(spacing: 14) {
                     PhotosPicker(selection: $avatarItem, matching: .images) {
@@ -929,5 +936,28 @@ struct GroupInfoView: View {
             requests = await APIClient.shared.grpJoinRequests(token: token, id: groupID)
             audit = await APIClient.shared.grpAudit(token: token, id: groupID)
         }
+    }
+}
+
+
+/// "View group picture" (website GroupInfoPanel / PictureViewer): the group's logo full screen.
+struct GroupPictureViewer: View {
+    let token: String
+    let groupID: String
+    let avatarID: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+            if let image { Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else { ProgressView().tint(.white).frame(maxWidth: .infinity, maxHeight: .infinity) }
+            Button { dismiss() } label: {
+                Image(systemName: "xmark").font(.system(size: 17, weight: .bold)).foregroundStyle(.white).frame(width: 44, height: 44)
+            }
+            .accessibilityLabel(Text("chat.close"))
+        }
+        .task { if let d = await APIClient.shared.groupAvatar(token: token, groupID: groupID, avatarID: avatarID) { image = UIImage(data: d) } }
     }
 }

@@ -10,6 +10,10 @@ struct MessageRowOptions {
     var selected = false
     var highlighted = false
     var roleTag: String? = nil
+    /// The owner speaks as the group (website GroupsView): the group's name with a megaphone mark, no Owner pill.
+    var asGroup = false
+    /// A member whose name looks like another member's: their real @username beside it.
+    var handle: String? = nil
 }
 
 /// The extra long-press actions (MessageContextMenu.tsx).
@@ -23,6 +27,8 @@ struct MessageRowActions {
     var comments: () -> Void = {}
     /// Save As... (photos and videos to Photos, documents to Files / share); nil when the message has no attachment.
     var save: (() -> Void)?
+    /// Tapping the quoted message goes to the original.
+    var openReply: (() -> Void)?
 }
 
 /// Wraps any message bubble with what all of them share: sender + role tag (groups), "Forwarded", the quoted
@@ -70,8 +76,13 @@ struct MessageRow<Content: View>: View {
         VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
             if let senderName, !senderName.isEmpty {
                 HStack(spacing: 5) {
-                    Text(senderName).font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
-                    if let r = options.roleTag {
+                    if options.asGroup {
+                        Image(systemName: "megaphone.fill").font(.system(size: 11)).foregroundStyle(Theme.gold)
+                            .accessibilityLabel(Text("group.voice"))
+                    }
+                    Text(senderName).font(.caption.weight(.semibold)).foregroundStyle(options.asGroup ? Theme.gold : Theme.accent)
+                    if let h = options.handle { Text("@" + h).font(.caption2).foregroundStyle(Theme.faint) }
+                    if let r = options.roleTag, !options.asGroup {
                         Text(LocalizedStringKey("group.role." + r)).font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.gold)
                             .padding(.horizontal, 5).padding(.vertical, 1).overlay(Capsule().stroke(Theme.gold.opacity(0.6), lineWidth: 1))
                     }
@@ -95,6 +106,10 @@ struct MessageRow<Content: View>: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .background(Theme.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 10))
+                .contentShape(Rectangle())
+                .onTapGesture { if !options.selecting { actions.openReply?() } }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint(Text("chat.reply.goto"))
                 .frame(maxWidth: 260, alignment: mine ? .trailing : .leading)
             }
             content()

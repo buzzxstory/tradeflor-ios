@@ -1236,3 +1236,15 @@
 "adm.when.starts" = "starts in %@";
 "adm.when.ended" = "ended %@ ago";
 "adm.when.added" = "added %@";
+"chat.reply.goto" = "Go to the original message";
+"chat.reply.notloaded" = "The original message is further back. Load older messages to see it.";
+"chat.notsent.retry" = "Not sent · Tap to retry";
+"chat.retry" = "Retry";
+"stx.new.group" = "Status for %@";
+"gst.add" = "Add a status for this group";
+"gst.watch" = "Watch the group's status";
+"gst.watch.named" = "%@: watch the group's status";
+"group.voice" = "Posted by the group";
+"silent.on" = "Silent post is on — subscribers won't be notified";
+"silent.off" = "Notify subscribers when you post";
+"grp.picture.view" = "View group picture";

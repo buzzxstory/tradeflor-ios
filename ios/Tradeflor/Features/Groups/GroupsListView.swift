@@ -7,6 +7,8 @@ struct GroupsListView: View {
     @EnvironmentObject private var store: SessionStore
     @EnvironmentObject private var live: LiveConnection
     @State private var groups: [GroupSummary] = []
+    @State private var groupStatuses: [String: StatusGroup] = [:]
+    @State private var watchGroup: StatusGroup?
     @State private var extras: [String: GrpListExtra] = [:]
     @State private var prefs: [String: ConversationPrefs] = [:]
     @State private var folders: [ChatFolder] = []
@@ -63,6 +65,9 @@ struct GroupsListView: View {
             .background(Theme.panelGradient.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: GroupSummary.self) { g in ChatView(chat: g.asConversation, canSend: g.can_send) }
+            .fullScreenCover(item: $watchGroup) { st in
+                StatusViewerScreen(groups: [st], startGroup: 0, token: token) { Task { await load() } }
+            }
             .onReceive(LocalNotifier.shared.$tappedConversation) { id in
                 guard let id, id.hasPrefix("grp_") else { return }
                 Task {
@@ -190,7 +195,18 @@ struct GroupsListView: View {
         let muted = p?.muted ?? false
         let mentions = extras[g.conversation_id]?.unread_mentions ?? 0
         return HStack(spacing: 16) {
-            Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id)
+            Group {
+                if let st = groupStatuses[g.conversation_id] {
+                    // the group's status: a ring on its picture (accent = new, grey = seen); tap it to watch
+                    Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id, size: 48)
+                        .padding(3)
+                        .overlay(Circle().stroke(st.all_seen ? Theme.faint.opacity(0.4) : Theme.accent, lineWidth: 2.5))
+                        .highPriorityGesture(TapGesture().onEnded { watchGroup = st })
+                        .accessibilityLabel(Text(String(format: NSLocalizedString("gst.watch.named", comment: ""), g.name)))
+                } else {
+                    Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id)
+                }
+            }
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(g.name).font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
@@ -306,6 +322,11 @@ struct GroupsListView: View {
         do {
             groups = try await APIClient.shared.groups(token: token)
             BadgeStore.shared.groups = groups.filter { $0.unread_count > 0 }.count
+            if let feed = try? await APIClient.shared.statusFeed(token: token) {
+                var map: [String: StatusGroup] = [:]
+                for s in feed { if let gid = s.group_id, !s.posts.isEmpty { map[gid] = s } }
+                groupStatuses = map
+            }
         } catch APIError.badCredentials {
             store.sessionExpired()
             return
