@@ -77,7 +77,7 @@ struct TradeFlorView: View {
         .fullScreenCover(item: $open) { o in
             StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) { Task { await load() } }
         }
-        .sheet(isPresented: $manage, onDismiss: { Task { await load() } }) { StatusListView() }
+        .sheet(isPresented: $manage, onDismiss: { Task { await load() } }) { StatusCreatorSheet { Task { await load() } } }
     }
 
     // MARK: pieces

@@ -14,8 +14,12 @@ struct ChatListView: View {
     @State private var path: [ConversationSummary] = []
     @State private var ciOpened = false
     @State private var showNew = false
+    @State private var showFlash = false
+    @State private var showContacts = false
     @State private var folders: [ChatFolder] = []
     @State private var filter = "all" // all | unread | <folder id>
+    @State private var prefs: [String: ConversationPrefs] = [:]
+    @State private var showArchived = false
 
     /// Live events refresh the list at once; this slow poll only covers a socket that is down.
     private let refreshEvery: UInt64 = 30
@@ -23,14 +27,22 @@ struct ChatListView: View {
 
     private var shown: [ConversationSummary] {
         let q = query.trimmingCharacters(in: .whitespaces)
-        let base: [ConversationSummary]
+        let visible = chats.filter { showArchived == (prefs[$0.conversation_id]?.archived ?? false) }
+        var base: [ConversationSummary]
         switch filter {
-        case "all": base = chats
-        case "unread": base = chats.filter { $0.unread_count > 0 }
+        case "all": base = visible
+        case "unread": base = visible.filter { isUnread($0) }
         default:
             if let f = folders.first(where: { $0.id == filter }) {
-                base = chats.filter { f.contains(id: $0.conversation_id, title: $0.title, unread: $0.unread_count > 0) }
-            } else { base = chats }
+                base = visible.filter { f.contains(id: $0.conversation_id, title: $0.title, unread: isUnread($0)) }
+            } else { base = visible }
+        }
+        // pinned first (newest pin on top), then by the last message
+        base.sort { a, b in
+            let pa = prefs[a.conversation_id]?.pinned_at ?? 0, pb = prefs[b.conversation_id]?.pinned_at ?? 0
+            if (pa > 0) != (pb > 0) { return pa > 0 }
+            if pa > 0 && pa != pb { return pa > pb }
+            return a.last_message_at > b.last_message_at
         }
         guard !q.isEmpty else { return base }
         return base.filter {
@@ -85,11 +97,27 @@ struct ChatListView: View {
         HStack(spacing: 10) {
             Text("chats.title").font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.text)
             Spacer()
-            SquareIconButton(systemName: "qrcode.viewfinder") { showNew = true }
-                .accessibilityLabel(Text("new.title"))
-            SquareIconButton(systemName: "person.badge.plus") { showNew = true }
-                .accessibilityLabel(Text("new.title"))
+            SquareIconButton(systemName: "qrcode.viewfinder") { showFlash = true }
+                .accessibilityLabel(Text("fc.title"))
+                .sheet(isPresented: $showFlash) {
+                    FlashConnectView { c in
+                        Task {
+                            await load(quiet: true)
+                            path = [c]
+                        }
+                    }
+                }
+            SquareIconButton(systemName: "person.badge.plus") { showContacts = true }
+                .accessibilityLabel(Text("ct.title"))
                 .accessibilityIdentifier("chats.new")
+                .sheet(isPresented: $showContacts) {
+                    ContactsPanel { c in
+                        Task {
+                            await load(quiet: true)
+                            path = [c]
+                        }
+                    }
+                }
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
@@ -123,19 +151,91 @@ struct ChatListView: View {
             Text("chats.empty").font(.system(size: 13)).foregroundStyle(Theme.faint).padding(.top, 40)
         } else {
             LazyVStack(spacing: 0) {
-                ForEach(shown) { c in
-                    NavigationLink(value: c) {
-                        ChatRow(chat: c, token: token, online: live.online.contains(c.peer_id))
+                if !showArchived && archivedCount > 0 {
+                    Button { showArchived = true } label: {
+                        HStack(spacing: 16) {
+                            Image(systemName: "archivebox").font(.system(size: 20)).foregroundStyle(Theme.accent)
+                                .frame(width: 54, height: 40)
+                            Text("chats.archived").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text)
+                            Spacer()
+                            Text("\(archivedCount)").font(.system(size: 13)).foregroundStyle(Theme.faint)
+                        }
+                        .padding(.leading, 15).padding(.trailing, 14).frame(height: 56)
+                        .overlay(alignment: .top) { Rectangle().fill(Theme.rowRule).frame(height: 1) }
                     }
                     .buttonStyle(.plain)
+                }
+                if showArchived {
+                    Button { showArchived = false } label: {
+                        HStack {
+                            Image(systemName: "chevron.backward")
+                            Text("chats.archived").font(.system(size: 16, weight: .bold))
+                            Spacer()
+                        }
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 16).frame(height: 44)
+                    }
+                    .buttonStyle(.plain)
+                }
+                ForEach(shown) { c in
+                    NavigationLink(value: c) {
+                        ChatRow(chat: c, token: token, online: live.online.contains(c.peer_id),
+                                pinned: prefs[c.conversation_id]?.pinned ?? false, muted: prefs[c.conversation_id]?.muted ?? false,
+                                markedUnread: prefs[c.conversation_id]?.marked_unread ?? false)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu { rowMenu(c) }
                 }
             }
             .accessibilityIdentifier("chats.list")
         }
     }
 
+    private var archivedCount: Int { chats.filter { prefs[$0.conversation_id]?.archived ?? false }.count }
+
+    private func isUnread(_ c: ConversationSummary) -> Bool { c.unread_count > 0 || (prefs[c.conversation_id]?.marked_unread ?? false) }
+
+    /// Long-press on a chat (the website's row menu): pin, mute, mark as unread, archive.
+    @ViewBuilder private func rowMenu(_ c: ConversationSummary) -> some View {
+        let p = prefs[c.conversation_id]
+        Button { change(c) { try await APIClient.shared.setPrefs(token: token, conversationID: c.conversation_id, pinned: !(p?.pinned ?? false)) } } label: {
+            Label(LocalizedStringKey((p?.pinned ?? false) ? "chats.unpin" : "chats.pin"), systemImage: (p?.pinned ?? false) ? "pin.slash" : "pin")
+        }
+        if p?.muted ?? false {
+            Button { change(c) { try await APIClient.shared.setPrefs(token: token, conversationID: c.conversation_id, unmute: true) } } label: {
+                Label("chats.unmute", systemImage: "bell")
+            }
+        } else {
+            Menu {
+                Button("mute.8h") { change(c) { try await APIClient.shared.setPrefs(token: token, conversationID: c.conversation_id, muteSeconds: 8 * 3600) } }
+                Button("mute.1w") { change(c) { try await APIClient.shared.setPrefs(token: token, conversationID: c.conversation_id, muteSeconds: 7 * 86400) } }
+                Button("mute.always") { change(c) { try await APIClient.shared.setPrefs(token: token, conversationID: c.conversation_id, muteForever: true) } }
+            } label: { Label("chats.mute", systemImage: "bell.slash") }
+        }
+        Button { change(c) { try await APIClient.shared.setPrefs(token: token, conversationID: c.conversation_id, markedUnread: !isUnread(c)) } } label: {
+            Label(LocalizedStringKey(isUnread(c) ? "chats.markread" : "chats.markunread"), systemImage: isUnread(c) ? "envelope.open" : "envelope.badge")
+        }
+        Button { change(c) { try await APIClient.shared.setPrefs(token: token, conversationID: c.conversation_id, archived: !(p?.archived ?? false)) } } label: {
+            Label(LocalizedStringKey((p?.archived ?? false) ? "chats.unarchive" : "chats.archive"), systemImage: "archivebox")
+        }
+    }
+
+    private func change(_ c: ConversationSummary, _ work: @escaping () async throws -> Void) {
+        Task {
+            try? await work()
+            await loadPrefs()
+        }
+    }
+
+    private func loadPrefs() async {
+        if let list = try? await APIClient.shared.prefs(token: token) {
+            prefs = Dictionary(list.map { ($0.conversation_id, $0) }, uniquingKeysWith: { a, _ in a })
+        }
+    }
+
     private func load(quiet: Bool = false) async {
         guard !token.isEmpty else { return }
+        await loadPrefs()
         if !quiet { loading = true }
         defer { loading = false }
         do {
@@ -169,6 +269,9 @@ struct ChatRow: View {
     let chat: ConversationSummary
     let token: String
     var online = false
+    var pinned = false
+    var muted = false
+    var markedUnread = false
 
     var body: some View {
         HStack(spacing: 16) {
@@ -191,13 +294,18 @@ struct ChatRow: View {
                     }
                     Text(preview).font(.system(size: 15)).foregroundStyle(Theme.muted).lineLimit(1)
                     Spacer(minLength: 6)
+                    if muted { Image(systemName: "bell.slash.fill").font(.system(size: 11)).foregroundStyle(Theme.faint) }
                     if chat.unread_count > 0 {
                         Text("\(chat.unread_count)")
                             .font(.system(size: 12, weight: .bold))
                             .foregroundStyle(Theme.onAccent)
                             .padding(.horizontal, 7)
                             .frame(minWidth: 22, minHeight: 22)
-                            .background(Theme.accent, in: Capsule())
+                            .background(muted ? AnyShapeStyle(Theme.faint) : AnyShapeStyle(Theme.accent), in: Capsule())
+                    } else if markedUnread {
+                        Circle().fill(Theme.accent).frame(width: 12, height: 12)
+                    } else if pinned {
+                        Image(systemName: "pin.fill").font(.system(size: 12)).foregroundStyle(Theme.accent).rotationEffect(.degrees(45))
                     }
                 }
             }

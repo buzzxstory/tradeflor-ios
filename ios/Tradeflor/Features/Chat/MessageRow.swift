@@ -1,7 +1,31 @@
 import SwiftUI
 
-/// Wraps any message bubble with what all of them share: "Forwarded", the quoted message it replies to, the
-/// reactions under it, and the long-press menu (react, reply, copy, forward, delete).
+/// Per-row state from the conversation (the website's message row flags).
+struct MessageRowOptions {
+    var isGroup = false
+    var restricted = false
+    var canPin = false
+    var pinned = false
+    var selecting = false
+    var selected = false
+    var highlighted = false
+    var roleTag: String? = nil
+}
+
+/// The extra long-press actions (MessageContextMenu.tsx).
+struct MessageRowActions {
+    var copyLink: () -> Void = {}
+    var select: () -> Void = {}
+    var toggleSelect: () -> Void = {}
+    var pin: (Bool) -> Void = { _ in }
+    var report: () -> Void = {}
+    var moreReactions: () -> Void = {}
+    var comments: () -> Void = {}
+}
+
+/// Wraps any message bubble with what all of them share: sender + role tag (groups), "Forwarded", the quoted
+/// message, reactions, views / comments (group posts), selection, and the website's long-press menu:
+/// quick reactions, Reply, Copy Text, Copy Message Link, Forward, Pin (group admins), Report, Delete, Select.
 struct MessageRow<Content: View>: View {
     let message: Message
     let mine: Bool
@@ -13,9 +37,11 @@ struct MessageRow<Content: View>: View {
     let onCopy: () -> Void
     let onForward: () -> Void
     let onDelete: (_ everyone: Bool) -> Void
+    var options = MessageRowOptions()
+    var actions = MessageRowActions()
     @ViewBuilder let content: () -> Content
 
-    static var quickEmoji: [String] { ["👍", "❤️", "😂", "😮", "😢", "🙏"] }
+    static var quickEmoji: [String] { ["❤️", "🔥", "👏", "👍", "😂", "😮", "😡"] }
 
     static func expiry(_ unix: Int64) -> String {
         let f = DateFormatter()
@@ -25,13 +51,34 @@ struct MessageRow<Content: View>: View {
     }
 
     var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            if options.selecting {
+                Image(systemName: options.selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22)).foregroundStyle(options.selected ? Theme.accent : Theme.faint)
+                    .accessibilityLabel(Text(LocalizedStringKey(options.selected ? "select.deselect" : "select.select")))
+            }
+            column
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if options.selecting { actions.toggleSelect() } }
+        .background(options.highlighted ? Theme.gold.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var column: some View {
         VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
             if let senderName, !senderName.isEmpty {
-                Text(senderName).font(.caption.weight(.semibold)).foregroundStyle(Theme.accent).padding(.horizontal, 10)
+                HStack(spacing: 5) {
+                    Text(senderName).font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                    if let r = options.roleTag {
+                        Text(LocalizedStringKey("group.role." + r)).font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.gold)
+                            .padding(.horizontal, 5).padding(.vertical, 1).overlay(Capsule().stroke(Theme.gold.opacity(0.6), lineWidth: 1))
+                    }
+                }
+                .padding(.horizontal, 10)
             }
             if message.forwarded == true && !message.isDeleted {
                 Label("chat.forwarded", systemImage: "arrowshape.turn.up.right.fill")
-                    .font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 8)
+                    .font(.caption2).foregroundStyle(Theme.faint).padding(.horizontal, 8)
             }
             if let snippet = message.reply_snippet, !snippet.isEmpty, !message.isDeleted {
                 HStack(spacing: 6) {
@@ -39,7 +86,7 @@ struct MessageRow<Content: View>: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(message.reply_sender_id == myID ? NSLocalizedString("chat.you", comment: "") : peerName)
                             .font(.caption2.weight(.semibold)).foregroundStyle(Theme.accent)
-                        Text(snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        Text(snippet).font(.caption).foregroundStyle(Theme.faint).lineLimit(2)
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
@@ -49,12 +96,38 @@ struct MessageRow<Content: View>: View {
                 .frame(maxWidth: 260, alignment: mine ? .trailing : .leading)
             }
             content()
-                .contextMenu { if !message.isDeleted && message.kind != "notice" { menu } }
-            if let exp = message.expires_at, exp > 0 {
-                Label(Self.expiry(exp), systemImage: "timer").font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 8)
+                .contextMenu { if !message.isDeleted && message.kind != "notice" && message.kind != "call" && !options.selecting { menu } }
+                .allowsHitTesting(!options.selecting)
+            HStack(spacing: 10) {
+                if let exp = message.expires_at, exp > 0 {
+                    Label(Self.expiry(exp), systemImage: "timer").font(.caption2).foregroundStyle(Theme.faint)
+                }
+                if options.isGroup, let v = message.views, v > 0 {
+                    Label("\(v)", systemImage: "eye").font(.caption2).foregroundStyle(Theme.faint)
+                }
+                if options.pinned {
+                    Image(systemName: "pin.fill").font(.caption2).foregroundStyle(Theme.accent)
+                }
+            }
+            .padding(.horizontal, 8)
+            if options.isGroup, let c = message.comments {
+                Button(action: actions.comments) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                        Text(c.count == 0 ? NSLocalizedString("comments.leave", comment: "") : String(format: NSLocalizedString("comments.n", comment: ""), c.count))
+                        Spacer()
+                        Image(systemName: "chevron.forward")
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 12).frame(maxWidth: 280, minHeight: 36)
+                    .background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.borderStrong, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
             }
             let reactions = message.reactionList(me: myID)
-            if !reactions.isEmpty {
+            if !reactions.isEmpty && message.kind != "poll" {
                 HStack(spacing: 4) {
                     ForEach(reactions, id: \.emoji) { r in
                         Button { onReact(r.emoji) } label: {
@@ -69,7 +142,7 @@ struct MessageRow<Content: View>: View {
                     }
                 }
                 .padding(.horizontal, 8)
-                .offset(y: -6)
+                .offset(y: -4)
             }
         }
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
@@ -81,16 +154,26 @@ struct MessageRow<Content: View>: View {
                 Button(e) { onReact(e) }
             }
         }
+        Button { actions.moreReactions() } label: { Label("chat.more.reactions", systemImage: "face.smiling") }
         Button { onReply() } label: { Label("chat.reply", systemImage: "arrowshape.turn.up.left") }
-        if message.kind == "text" {
-            Button { onCopy() } label: { Label("chat.copy", systemImage: "doc.on.doc") }
+        if message.kind == "text" && !options.restricted {
+            Button { onCopy() } label: { Label("chat.copy.text", systemImage: "doc.on.doc") }
         }
-        Button { onForward() } label: { Label("chat.forward", systemImage: "arrowshape.turn.up.right") }
+        Button { actions.copyLink() } label: { Label("chat.copy.link", systemImage: "link") }
+        if !options.restricted {
+            Button { onForward() } label: { Label("chat.forward", systemImage: "arrowshape.turn.up.right") }
+        }
+        if options.canPin {
+            Button { actions.pin(!options.pinned) } label: {
+                Label(LocalizedStringKey(options.pinned ? "chat.unpin" : "chat.pin"), systemImage: options.pinned ? "pin.slash" : "pin")
+            }
+        }
+        if options.isGroup && !mine {
+            Button { actions.report() } label: { Label("chat.report", systemImage: "exclamationmark.bubble") }
+        }
+        Button { actions.select() } label: { Label("chat.select", systemImage: "checkmark.circle") }
         Divider()
-        Button(role: .destructive) { onDelete(false) } label: { Label("chat.delete.me", systemImage: "trash") }
-        if mine {
-            Button(role: .destructive) { onDelete(true) } label: { Label("chat.delete.everyone", systemImage: "trash.fill") }
-        }
+        Button(role: .destructive) { onDelete(false) } label: { Label("chat.delete", systemImage: "trash") }
     }
 }
 

@@ -50,7 +50,7 @@ struct StatusStrip: View {
         .fullScreenCover(isPresented: $openOfficial, onDismiss: { Task { await load() } }) {
             OfficialViewer(token: token, posts: official?.posts ?? [])
         }
-        .sheet(isPresented: $manage, onDismiss: { Task { await load() } }) { StatusListView() }
+        .sheet(isPresented: $manage, onDismiss: { Task { await load() } }) { StatusCreatorSheet { Task { await load() } } }
     }
 
     enum Ring { case none, seen, unseen }

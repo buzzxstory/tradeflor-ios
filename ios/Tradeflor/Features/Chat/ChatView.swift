@@ -36,6 +36,48 @@ struct ChatView: View {
     private var isGroup: Bool { chat.conversation_id.hasPrefix("grp_") }
     @ObservedObject private var calls = CallManager.shared
     @State private var showUnlock = false
+    // web parity: select mode, in-chat search, delete dialog, polls/signals/comments, attach sheets, group meta
+    @State private var selecting = false
+    @State private var selected: Set<String> = []
+    @State private var searchOpen = false
+    @State private var searchText = ""
+    @State private var searchIndex = 0
+    @State private var deleteTargets: [Message] = []
+    @State private var showDelete = false
+    @State private var showPoll = false
+    @State private var showSignal = false
+    @State private var commentsFor: Message?
+    @State private var showEmoji = false
+    @State private var showLocationSheet = false
+    @State private var showPhotoPicker = false
+    @State private var showDocPicker = false
+    @State private var showMute = false
+    @State private var muted = false
+    @State private var restricted = false
+    @State private var myRole = "member"
+    @State private var groupCanSendMedia = true
+    @State private var groupCanSignals = false
+    @State private var groupComments = false
+    @State private var memberCount = 0
+    @State private var pins: [GroupPinRef] = []
+    @State private var pinIndex = 0
+    @State private var members: [GroupMember] = []
+    @State private var bottomVisible = true
+    @State private var newWhileAway = 0
+    @State private var confirmLeave = false
+    @State private var confirmDeleteGroup = false
+    @State private var exportURL: URL?
+    @State private var toast: String?
+    @State private var reactTarget: Message?
+    @State private var memberRoles: [String: String] = [:]
+    @State private var jumpTarget: String?
+    @State private var themeID = ""
+    private var isAdmin: Bool { myRole == "owner" || myRole == "admin" }
+    private var searchHits: [Message] {
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return [] }
+        return messages.filter { !$0.isDeleted && $0.body.localizedCaseInsensitiveContains(q) }
+    }
 
     @Environment(\.dismiss) private var dismissView
     private let pageSize = 50
@@ -44,7 +86,9 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
+            if selecting { selectHead } else { topBar }
+            if searchOpen { searchBar }
+            if isGroup && !pins.isEmpty && !selecting { pinnedBar }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 6) {
@@ -66,9 +110,26 @@ struct ChatView: View {
                                            ? (memberNames[m.sender_id] ?? "") : nil,
                                        onReply: { replyingTo = m; composerFocused = true },
                                        onReact: { e in Task { await react(m, e) } },
-                                       onCopy: { UIPasteboard.general.string = displayText(m) },
+                                       onCopy: { UIPasteboard.general.string = displayText(m); flash("chat.copied") },
                                        onForward: { forwarding = m },
-                                       onDelete: { everyone in Task { await delete(m, everyone: everyone) } }) {
+                                       onDelete: { _ in deleteTargets = [m]; showDelete = true },
+                                       options: MessageRowOptions(
+                                           isGroup: isGroup, restricted: restricted, canPin: isGroup && isAdmin,
+                                           pinned: pins.contains { $0.message_id == m.id },
+                                           selecting: selecting, selected: selected.contains(m.id),
+                                           highlighted: searchOpen && searchHits.indices.contains(searchIndex) && searchHits[searchIndex].id == m.id,
+                                           roleTag: isGroup ? roleOf(m.sender_id) : nil),
+                                       actions: MessageRowActions(
+                                           copyLink: {
+                                               UIPasteboard.general.string = "tradeflor://chat/\(chat.conversation_id)/message/\(m.id)"
+                                               flash("chat.link.copied")
+                                           },
+                                           select: { selecting = true; selected = [m.id] },
+                                           toggleSelect: { if selected.contains(m.id) { selected.remove(m.id) } else { selected.insert(m.id) } },
+                                           pin: { on in Task { await setPin(m, on) } },
+                                           report: { flash("chat.report.soon") },
+                                           moreReactions: { reactTarget = m; showEmoji = true },
+                                           comments: { commentsFor = m })) {
                                 messageContent(m)
                             }
                             .id(m.id)
@@ -93,11 +154,47 @@ struct ChatView: View {
                             .onTapGesture { if p.failed { Task { await deliver(p) } } }
                         }
                         Color.clear.frame(height: 1).id("bottom")
+                            .onAppear { bottomVisible = true; newWhileAway = 0 }
+                            .onDisappear { bottomVisible = false }
                     }
                     .padding(.horizontal, 10)
                     .padding(.top, 8)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .overlay(alignment: .bottomTrailing) {
+                    if !bottomVisible && !messages.isEmpty {
+                        Button { scrollToBottom(proxy) } label: {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
+                                    .frame(width: 42, height: 42).background(Theme.card, in: Circle())
+                                    .overlay(Circle().stroke(Theme.borderStrong, lineWidth: 1))
+                                if newWhileAway > 0 {
+                                    Text("\(newWhileAway)").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.onAccent)
+                                        .padding(.horizontal, 5).frame(minHeight: 18).background(Theme.accent, in: Capsule()).offset(x: 4, y: -4)
+                                }
+                            }
+                        }
+                        .padding(14)
+                        .accessibilityLabel(Text("chat.jump"))
+                    }
+                }
+                .overlay(alignment: .top) {
+                    if let toast {
+                        Text(toast).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
+                            .padding(.horizontal, 14).padding(.vertical, 8).background(Theme.card, in: Capsule())
+                            .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1)).padding(.top, 10)
+                    }
+                }
+                .onChange(of: jumpTarget) { t in
+                    if let t { withAnimation { proxy.scrollTo(t, anchor: .center) }; jumpTarget = nil }
+                }
+                .onChange(of: searchIndex) { _ in
+                    if searchHits.indices.contains(searchIndex) { withAnimation { proxy.scrollTo(searchHits[searchIndex].id, anchor: .center) } }
+                }
+                .onChange(of: searchText) { _ in
+                    searchIndex = max(0, searchHits.count - 1)
+                    if let last = searchHits.last { withAnimation { proxy.scrollTo(last.id, anchor: .center) } }
+                }
                 .overlay {
                     if loading && messages.isEmpty {
                         ProgressView()
@@ -114,20 +211,36 @@ struct ChatView: View {
                         .padding()
                     } else if let problem, messages.isEmpty {
                         Text(problem).foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
+                    } else if !loading && messages.isEmpty && pending.isEmpty && canSend {
+                        VStack(spacing: 10) {
+                            Text("chat.empty.title").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
+                            Text("chat.empty.sub").font(.system(size: 13)).foregroundStyle(Theme.faint).multilineTextAlignment(.center)
+                            Button {
+                                draft = "👋"
+                                Task { await sendDraft() }
+                            } label: { Text("👋").font(.system(size: 54)) }
+                            .accessibilityLabel(Text("chat.greet"))
+                        }
+                        .padding(24)
+                        .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 20))
+                        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Theme.borderStrong, lineWidth: 1))
+                        .padding(30)
                     }
                 }
                 .onChange(of: messages.last?.id) { _ in scrollToBottom(proxy) }
                 .onChange(of: pending.count) { _ in scrollToBottom(proxy) }
                 .onChange(of: composerFocused) { f in if f { scrollToBottom(proxy) } }
             }
-            if canSend {
+            if selecting {
+                selectBar
+            } else if canSend {
                 composer
             } else {
                 Text("group.readonly").font(.footnote).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity).padding(.vertical, 14).background(.bar)
             }
         }
-        .background(Starfield())
+        .background(ChatThemeStyle.background(themeID).ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .onReceive(live.typing) { t in
             guard t.conversation == chat.conversation_id, t.user != me else { return }
@@ -147,8 +260,18 @@ struct ChatView: View {
                 }
             }
         }
-        .sheet(isPresented: $showInfo) {
-            if isGroup { GroupInfoView(groupID: chat.conversation_id) } else { ContactInfoView(chat: chat) }
+        .sheet(isPresented: $showInfo, onDismiss: {
+            Task {
+                themeID = await ChatThemeStore.load(token: token, conversationID: chat.conversation_id)
+                await loadMeta()
+            }
+        }) {
+            if isGroup {
+                GroupInfoView(groupID: chat.conversation_id).environmentObject(store).environmentObject(live)
+            } else {
+                ContactInfoView(chat: chat, onSearch: { showInfo = false; searchOpen = true })
+                    .environmentObject(store).environmentObject(live)
+            }
         }
         .sheet(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft) }
         .fullScreenCover(isPresented: $showNoteRecorder) {
@@ -161,18 +284,101 @@ struct ChatView: View {
         .sheet(item: $forwarding) { m in
             ForwardSheet(token: token, message: m) { forwarding = nil }
         }
+        .sheet(isPresented: $showPoll) {
+            PollComposer { q, opts, multi in
+                do {
+                    let m = try await APIClient.shared.chCreatePoll(token: token, groupID: chat.conversation_id, question: q, options: opts, multiple: multi)
+                    merge([m])
+                    return nil
+                } catch APIError.refused(let why) { return why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why
+                } catch { return NSLocalizedString("chat.action.failed", comment: "") }
+            }
+        }
+        .sheet(isPresented: $showSignal) {
+            SignalComposer { sym, dir, entry, sl, tp in
+                do {
+                    let m = try await APIClient.shared.chSendSignal(token: token, conversationID: chat.conversation_id, symbol: sym,
+                                                                     direction: dir, entry: entry, stopLoss: sl, takeProfit: tp)
+                    merge([m])
+                    return nil
+                } catch APIError.refused(let why) { return why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why
+                } catch { return NSLocalizedString("chat.action.failed", comment: "") }
+            }
+        }
+        .sheet(item: $commentsFor) { m in
+            CommentsSheet(token: token, groupID: chat.conversation_id, postID: m.id, me: me, isAdmin: isAdmin, names: memberNames)
+        }
+        .sheet(isPresented: $showEmoji) {
+            EmojiPickerSheet { e in
+                if let t = reactTarget {
+                    reactTarget = nil
+                    showEmoji = false
+                    Task { await react(t, e) }
+                } else {
+                    draft += e
+                }
+            }
+        }
+        .sheet(isPresented: $showLocationSheet) {
+            ShareLocationSheet { minutes in location.start(token: token, conversationID: chat.conversation_id, minutes: minutes) }
+        }
+        .photosPicker(isPresented: $showPhotoPicker, selection: $picked, maxSelectionCount: 10, matching: .any(of: [.images, .videos]))
+        .fileImporter(isPresented: $showDocPicker, allowedContentTypes: [.item]) { result in
+            if case let .success(url) = result { Task { await sendDocument(url) } }
+        }
+        .confirmationDialog(Text(LocalizedStringKey(deleteTargets.count > 1 ? "chat.delete.many" : "chat.delete.one")),
+                            isPresented: $showDelete, titleVisibility: .visible) {
+            if !deleteTargets.isEmpty && deleteTargets.allSatisfy({ $0.sender_id == me }) {
+                Button("chat.unsend", role: .destructive) { Task { await deleteSelected(everyone: true) } }
+            }
+            Button("chat.delete.me", role: .destructive) { Task { await deleteSelected(everyone: false) } }
+        }
+        .confirmationDialog(Text("mute.title"), isPresented: $showMute, titleVisibility: .visible) {
+            Button("mute.8h") { Task { await mute(seconds: 8 * 3600) } }
+            Button("mute.1d") { Task { await mute(seconds: 86400) } }
+            Button("mute.1w") { Task { await mute(seconds: 7 * 86400) } }
+            Button("mute.always") { Task { await mute(seconds: -1) } }
+        }
+        .confirmationDialog(Text(LocalizedStringKey(myRole == "owner" ? "group.owner.leave" : "group.leave.confirm")),
+                            isPresented: $confirmLeave, titleVisibility: .visible) {
+            if myRole != "owner" {
+                Button("group.leave", role: .destructive) {
+                    Task {
+                        try? await APIClient.shared.removeGroupMember(token: token, id: chat.conversation_id, userID: "")
+                        dismissView()
+                    }
+                }
+            }
+        }
+        .confirmationDialog(Text("group.delete.confirm"), isPresented: $confirmDeleteGroup, titleVisibility: .visible) {
+            Button("group.delete", role: .destructive) {
+                Task {
+                    _ = try? await APIClient.shared.postJSON("groups/\(chat.conversation_id)/delete", token: token, body: [:])
+                    dismissView()
+                }
+            }
+        }
+        .sheet(item: Binding(get: { exportURL.map { ExportFile(url: $0) } }, set: { if $0 == nil { exportURL = nil } })) { f in
+            ShareLink(item: f.url) { Label("group.export", systemImage: "square.and.arrow.up") }
+                .padding(30)
+                .presentationDetents([.height(160)])
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar) // full height for the conversation, like other messengers
         .task {
             if isGroup, let list = try? await APIClient.shared.groupMembers(token: token, groupID: chat.conversation_id) {
+                members = list
                 memberNames = Dictionary(list.map { ($0.user_id, $0.title) }, uniquingKeysWith: { a, _ in a })
             }
+            await loadMeta()
+            themeID = await ChatThemeStore.load(token: token, conversationID: chat.conversation_id)
         }
         .task { await loadNewest() }
         .onReceive(live.messages) { m in
             guard m.conversation_id == chat.conversation_id else { return }
             merge([m])
             pending.removeAll { $0.id == m.client_key }
+            if !bottomVisible && m.sender_id != me { newWhileAway += 1 }
             if m.sender_id != me { Task { await markSeen() } }
         }
         .onReceive(live.changes) { id in
@@ -262,7 +468,8 @@ struct ChatView: View {
                             if !isGroup {
                                 Circle().fill(live.online.contains(chat.peer_id) ? Theme.online : Theme.faint.opacity(0.6)).frame(width: 6, height: 6)
                             }
-                            Text(subtitle ?? NSLocalizedString(isGroup ? "group.info" : "chat.offline", comment: ""))
+                            Text(subtitle ?? (isGroup ? String(format: NSLocalizedString("groups.members", comment: ""), memberCount)
+                                                       : NSLocalizedString("chat.offline", comment: "")))
                                 .font(.system(size: 13)).foregroundStyle(peerTypingUntil != nil ? Theme.accent : Theme.faint).lineLimit(1)
                         }
                     }
@@ -278,11 +485,28 @@ struct ChatView: View {
                 .disabled(calls.phase != .idle)
                 .accessibilityLabel(Text("call.voice"))
             }
+            Button { searchOpen.toggle(); searchText = "" } label: {
+                Image(systemName: "magnifyingglass").font(.system(size: 18)).foregroundStyle(Theme.muted).frame(width: 34, height: 44)
+            }
+            .accessibilityLabel(Text("chat.search"))
             Menu {
-                Button { showInfo = true } label: { Label(isGroup ? "group.info" : "info.title", systemImage: "info.circle") }
-                Button { showSchedule = true } label: { Label("schedule.title", systemImage: "clock") }
-                if !isGroup {
-                    Button(role: .destructive) { confirmBlock = true } label: { Label("chat.block", systemImage: "hand.raised.fill") }
+                if isGroup { Button { showInfo = true } label: { Label("group.info", systemImage: "info.circle") } }
+                Button { showSchedule = true } label: { Label("chat.scheduled", systemImage: "clock") }
+                if muted {
+                    Button { Task { await mute(seconds: 0) } } label: { Label("chats.unmute", systemImage: "bell") }
+                } else {
+                    Button { showMute = true } label: { Label("chat.mute.menu", systemImage: "bell.slash") }
+                }
+                if isGroup {
+                    Button { Task { await exportHistory() } } label: { Label("group.export", systemImage: "square.and.arrow.up") }
+                    Button(role: .destructive) { confirmLeave = true } label: { Label("group.leave", systemImage: "rectangle.portrait.and.arrow.right") }
+                    if myRole == "owner" {
+                        Button(role: .destructive) { confirmDeleteGroup = true } label: { Label("group.delete", systemImage: "trash") }
+                    }
+                } else {
+                    Button(role: .destructive) { confirmBlock = true } label: {
+                        Label(String(format: NSLocalizedString("chat.block.name", comment: ""), chat.title), systemImage: "hand.raised.fill")
+                    }
                 }
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.muted).frame(width: 36, height: 44)
@@ -309,79 +533,316 @@ struct ChatView: View {
 
     private var draftIsEmpty: Bool { draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
+    private var mentionQuery: String? {
+        guard isGroup, let at = draft.lastIndex(of: "@") else { return nil }
+        let after = draft[draft.index(after: at)...]
+        if after.contains(" ") || after.contains("\n") { return nil }
+        if at != draft.startIndex, !(draft[draft.index(before: at)].isWhitespace) { return nil }
+        return String(after).lowercased()
+    }
+
+    private var mentionMatches: [GroupMember] {
+        guard let q = mentionQuery else { return [] }
+        return Array(members.filter { $0.user_id != me && (q.isEmpty || $0.username.lowercased().hasPrefix(q) || $0.title.lowercased().hasPrefix(q)) }.prefix(6))
+    }
+
     private var typingBar: some View {
-        HStack(alignment: .center, spacing: 8) {
-            HStack(alignment: .center, spacing: 2) {
+        VStack(spacing: 6) {
+            if !mentionMatches.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("chat.mention").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.faint).padding(.horizontal, 12).padding(.top, 8)
+                    ForEach(mentionMatches) { m in
+                        Button {
+                            if let at = draft.lastIndex(of: "@") { draft = String(draft[..<at]) + "@" + m.username + " " }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Avatar(token: token, userID: m.user_id, avatarID: nil, title: m.title, size: 28)
+                                Text(m.title).foregroundStyle(Theme.text)
+                                Text("@" + m.username).font(.system(size: 12)).foregroundStyle(Theme.faint)
+                                Spacer()
+                                if let r = roleOf(m.user_id) { Text(LocalizedStringKey("group.role." + r)).font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.accent) }
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 6)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.borderStrong, lineWidth: 1))
+            }
+            HStack(alignment: .center, spacing: 8) {
                 Menu {
-                    if CameraPicker.isAvailable {
+                    if isGroup {
+                        Button { showPoll = true } label: { Label("poll.new", systemImage: "chart.bar") }
+                        if groupCanSignals { Button { showSignal = true } label: { Label("signal.new", systemImage: "chart.line.uptrend.xyaxis") } }
+                    }
+                    if !isGroup || groupCanSendMedia {
+                        Button { showPhotoPicker = true } label: { Label("attach.photo", systemImage: "photo.on.rectangle") }
+                        Button { showDocPicker = true } label: { Label("attach.document", systemImage: "doc") }
+                    }
+                    Button { showLocationSheet = true } label: { Label("location.live", systemImage: "location") }
+                    if CameraPicker.isAvailable && (!isGroup || groupCanSendMedia) {
                         Button { showNoteRecorder = true } label: { Label("note.record", systemImage: "video.circle") }
                     }
                     Button { showSchedule = true } label: { Label("schedule.title", systemImage: "clock") }
-                } label: { composerIcon("paperclip") }
-                .accessibilityLabel(Text("chat.more"))
-                Menu {
-                    Button("location.15m") { location.start(token: token, conversationID: chat.conversation_id, minutes: 15) }
-                    Button("location.1h") { location.start(token: token, conversationID: chat.conversation_id, minutes: 60) }
-                    Button("location.8h") { location.start(token: token, conversationID: chat.conversation_id, minutes: 480) }
-                    if location.sharing.contains(chat.conversation_id) {
-                        Button(role: .destructive) { location.stop(conversationID: chat.conversation_id) } label: {
-                            Label("location.stop", systemImage: "location.slash")
+                } label: {
+                    Image(systemName: "plus").font(.system(size: 19, weight: .semibold)).foregroundStyle(Theme.text)
+                        .frame(width: 40, height: 40).background(Theme.inputGradient, in: Circle())
+                        .overlay(Circle().stroke(Theme.hex(0x1C8CB2, 0.85), lineWidth: 1.5))
+                }
+                .accessibilityLabel(Text("attach.title"))
+                HStack(alignment: .center, spacing: 0) {
+                    if !isGroup || groupCanSendMedia {
+                        Button { showDocPicker = true } label: { composerIcon("paperclip") }
+                            .accessibilityLabel(Text("attach.document"))
+                    }
+                    Button { showLocationSheet = true } label: { composerIcon("mappin.and.ellipse") }
+                        .accessibilityLabel(Text("location.share"))
+                    TextField(LocalizedStringKey(isGroup ? "chat.placeholder.group" : "chat.placeholder"), text: $draft, axis: .vertical)
+                        .onChange(of: draft) { v in
+                            guard !v.isEmpty, Date().timeIntervalSince(lastTypingSent) > 3 else { return }
+                            lastTypingSent = Date()
+                            live.sendTyping(conversationID: chat.conversation_id)
                         }
-                    }
-                } label: { composerIcon("mappin.and.ellipse") }
-                .accessibilityLabel(Text("location.share"))
-                PhotosPicker(selection: $picked, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-                    composerIcon("photo")
+                        .font(.system(size: 16))
+                        .foregroundStyle(Theme.text)
+                        .lineLimit(1...6)
+                        .focused($composerFocused)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 4)
+                        .accessibilityIdentifier("chat.composer")
+                    Button { reactTarget = nil; showEmoji = true } label: { composerIcon("face.smiling") }
+                        .accessibilityLabel(Text("chat.emoji"))
                 }
-                .accessibilityLabel(Text("chat.photos"))
-                .accessibilityIdentifier("chat.photos")
-                TextField("chat.placeholder", text: $draft, axis: .vertical)
-                    .onChange(of: draft) { v in
-                        guard !v.isEmpty, Date().timeIntervalSince(lastTypingSent) > 3 else { return }
-                        lastTypingSent = Date()
-                        live.sendTyping(conversationID: chat.conversation_id)
-                    }
-                    .font(.system(size: 16))
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1...6)
-                    .focused($composerFocused)
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 4)
-                    .accessibilityIdentifier("chat.composer")
-                Menu {
-                    ForEach(Self.quickEmoji, id: \.self) { e in Button(e) { draft += e } }
-                } label: { composerIcon("face.smiling") }
-                .accessibilityLabel(Text("chat.emoji"))
-            }
-            .padding(.leading, 6)
-            .padding(.trailing, 6)
-            .frame(minHeight: 50)
-            .background(Theme.inputGradient, in: RoundedRectangle(cornerRadius: 25, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 25, style: .continuous)
-                .stroke(composerFocused ? Theme.borderActive : Theme.hex(0x1C8CB2, 0.85), lineWidth: 1.5))
-            .shadow(color: Theme.hex(0x00BEDC, 0.12), radius: 6)
-            if CameraPicker.isAvailable {
-                Button { showCamera = true } label: { composerIcon("camera") }
-                    .accessibilityLabel(Text("chat.camera"))
-            }
-            Button {
-                if draftIsEmpty {
-                    VoicePlayer.shared.stop()
-                    Task { await recorder.start() }
-                } else {
-                    Task { await sendDraft() }
+                .padding(.horizontal, 4)
+                .frame(minHeight: 48)
+                .background(Theme.inputGradient, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(composerFocused ? Theme.borderActive : Theme.hex(0x1C8CB2, 0.85), lineWidth: 1.5))
+                .shadow(color: Theme.hex(0x00BEDC, 0.12), radius: 6)
+                if draftIsEmpty && CameraPicker.isAvailable && (!isGroup || groupCanSendMedia) {
+                    Button { showCamera = true } label: { composerIcon("camera") }
+                        .accessibilityLabel(Text("chat.camera"))
                 }
-            } label: {
                 Image(systemName: draftIsEmpty ? "mic" : "paperplane.fill")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Theme.hex(0xF4FBFD))
                     .frame(width: 48, height: 48)
                     .background(Theme.sendGradient, in: Circle())
                     .shadow(color: Theme.hex(0x00C8DC, 0.28), radius: 9, y: 4)
+                    .contentShape(Circle())
+                    .onTapGesture {
+                        if draftIsEmpty {
+                            VoicePlayer.shared.stop()
+                            Task { await recorder.start() }
+                        } else {
+                            Task { await sendDraft() }
+                        }
+                    }
+                    .onLongPressGesture(minimumDuration: 0.45) {
+                        // hold Send = schedule (the website's "hold or right-click to schedule")
+                        if !draftIsEmpty { showSchedule = true }
+                    }
+                    .accessibilityLabel(Text(draftIsEmpty ? "chat.voice.record" : "chat.send"))
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityIdentifier(draftIsEmpty ? "chat.mic" : "chat.send")
             }
-            .accessibilityLabel(Text(draftIsEmpty ? "chat.voice.record" : "chat.send"))
-            .accessibilityIdentifier(draftIsEmpty ? "chat.mic" : "chat.send")
         }
+    }
+
+    // MARK: web parity helpers
+
+    private var selectHead: some View {
+        HStack(spacing: 12) {
+            Button { selecting = false; selected = [] } label: {
+                Image(systemName: "xmark").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.accent).frame(width: 36, height: 44)
+            }
+            .accessibilityLabel(Text("select.cancel"))
+            Text(String(format: NSLocalizedString("select.count", comment: ""), selected.count))
+                .font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text)
+            Spacer()
+            Button {
+                if selected.count == messages.filter({ !$0.isDeleted }).count { selected = [] }
+                else { selected = Set(messages.filter { !$0.isDeleted }.map(\.id)) }
+            } label: {
+                Text(LocalizedStringKey(selected.count == messages.filter({ !$0.isDeleted }).count ? "select.clear" : "select.all"))
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.accent)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 60)
+        .background(Theme.header.ignoresSafeArea(edges: .top))
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
+    }
+
+    private var selectBar: some View {
+        let chosen = messages.filter { selected.contains($0.id) }
+        let canCopy = chosen.contains { $0.kind == "text" && !$0.isDeleted }
+        return HStack {
+            Button {
+                if let first = chosen.first { forwarding = first }
+                selecting = false
+            } label: { Label("chat.forward", systemImage: "arrowshape.turn.up.right") }
+            .disabled(chosen.isEmpty || restricted)
+            Spacer()
+            Button {
+                UIPasteboard.general.string = chosen.filter { $0.kind == "text" }.map(\.body).joined(separator: "\n")
+                selecting = false
+                selected = []
+                flash("chat.copied")
+            } label: { Label("chat.copy", systemImage: "doc.on.doc") }
+            .disabled(!canCopy || restricted)
+            Spacer()
+            Button(role: .destructive) {
+                deleteTargets = chosen
+                showDelete = true
+            } label: { Label("chat.delete", systemImage: "trash") }
+            .disabled(chosen.isEmpty)
+        }
+        .font(.system(size: 15, weight: .semibold))
+        .foregroundStyle(Theme.accent)
+        .padding(.horizontal, 20)
+        .frame(height: 56)
+        .background(Theme.header.ignoresSafeArea(edges: .bottom))
+        .overlay(alignment: .top) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            SearchPill(placeholder: LocalizedStringKey(String(format: NSLocalizedString("chat.search.in", comment: ""), chat.title)), text: $searchText)
+            Text(searchHits.isEmpty ? "0/0" : "\(searchIndex + 1)/\(searchHits.count)").font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.faint)
+            Button { if searchIndex > 0 { searchIndex -= 1 } } label: { Image(systemName: "chevron.up") }
+                .disabled(searchIndex <= 0).accessibilityLabel(Text("search.prev"))
+            Button { if searchIndex < searchHits.count - 1 { searchIndex += 1 } } label: { Image(systemName: "chevron.down") }
+                .disabled(searchIndex >= searchHits.count - 1).accessibilityLabel(Text("search.next"))
+            Button { searchOpen = false; searchText = "" } label: { Image(systemName: "xmark") }
+                .accessibilityLabel(Text("search.close"))
+        }
+        .foregroundStyle(Theme.accent)
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(Theme.header)
+    }
+
+    private var pinnedBar: some View {
+        let p = pins[min(pinIndex, pins.count - 1)]
+        return Button {
+            pinIndex = (pinIndex + 1) % max(pins.count, 1)
+            if let m = messages.first(where: { $0.id == p.message_id }) { searchText = ""; jumpTarget = m.id }
+        } label: {
+            HStack(spacing: 10) {
+                Rectangle().fill(Theme.accent).frame(width: 3, height: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pins.count > 1 ? String(format: NSLocalizedString("pin.n.of", comment: ""), pinIndex + 1, pins.count)
+                                        : NSLocalizedString("pin.one", comment: ""))
+                        .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.accent)
+                    Text(p.text.isEmpty ? NSLocalizedString("pin." + p.kind, comment: "") : p.text)
+                        .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: "pin.fill").foregroundStyle(Theme.accent).rotationEffect(.degrees(45))
+            }
+            .padding(.horizontal, 14).frame(height: 50)
+            .background(Theme.header)
+            .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func roleOf(_ userID: String) -> String? {
+        memberRoles[userID]
+    }
+
+    private func flash(_ key: String) {
+        toast = NSLocalizedString(key, comment: "")
+        Task {
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            toast = nil
+        }
+    }
+
+    private func loadMeta() async {
+        if isGroup {
+            let g = await APIClient.shared.chGroupRole(token: token, groupID: chat.conversation_id)
+            myRole = g.role
+            groupCanSendMedia = g.canSendMedia
+            groupCanSignals = g.canPostSignals
+            groupComments = g.comments
+            memberCount = g.memberCount
+            pins = await APIClient.shared.chGroupPins(token: token, groupID: chat.conversation_id)
+            if isAdmin, let full = try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/members", token: token) {
+                memberRoles = Dictionary(full.filter { $0.role != "member" }.map { ($0.user_id, $0.role) }, uniquingKeysWith: { a, _ in a })
+            }
+        } else if let st = try? await APIClient.shared.chatSettings(token: token, conversationID: chat.conversation_id) {
+            restricted = st.restricted
+        }
+        if let prefs = try? await APIClient.shared.prefs(token: token), let mine = prefs.first(where: { $0.conversation_id == chat.conversation_id }) {
+            muted = mine.muted
+        }
+    }
+
+    private func setPin(_ m: Message, _ on: Bool) async {
+        do {
+            try await APIClient.shared.chPin(token: token, groupID: chat.conversation_id, messageID: m.id, pin: on)
+            pins = await APIClient.shared.chGroupPins(token: token, groupID: chat.conversation_id)
+        } catch { flash("chat.action.failed") }
+    }
+
+    /// seconds: > 0 mute for that long, -1 always, 0 unmute.
+    private func mute(seconds: Int) async {
+        do {
+            if seconds == 0 { try await APIClient.shared.setPrefs(token: token, conversationID: chat.conversation_id, unmute: true) }
+            else if seconds < 0 { try await APIClient.shared.setPrefs(token: token, conversationID: chat.conversation_id, muteForever: true) }
+            else { try await APIClient.shared.setPrefs(token: token, conversationID: chat.conversation_id, muteSeconds: seconds) }
+            muted = seconds != 0
+        } catch { flash("chat.action.failed") }
+    }
+
+    private func deleteSelected(everyone: Bool) async {
+        let ids = deleteTargets.map(\.id)
+        deleteTargets = []
+        selecting = false
+        selected = []
+        do {
+            if everyone {
+                try await APIClient.shared.chDeleteBatch(token: token, ids: ids)
+                await loadNewest(quiet: true)
+            } else {
+                try await APIClient.shared.chHideBatch(token: token, ids: ids)
+                messages.removeAll { ids.contains($0.id) }
+            }
+        } catch { flash("chat.action.failed") }
+    }
+
+    private func sendDocument(_ url: URL) async {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else { flash("chat.action.failed"); return }
+        if data.count > 25_000_000 { flash("attach.too.big"); return }
+        let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        do {
+            let m = try await APIClient.shared.chSendDocument(token: token, conversationID: chat.conversation_id, data: data,
+                                                             fileName: url.lastPathComponent, mime: mime, caption: "", key: UUID().uuidString.lowercased())
+            merge([m])
+        } catch APIError.refused(let why) {
+            toast = why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why
+        } catch { flash("chat.action.failed") }
+    }
+
+    /// Export Chat History: every page as plain text, shared as a .txt file.
+    private func exportHistory() async {
+        var all: [Message] = messages
+        var before = messages.first?.seq
+        while let b = before, let page = try? await APIClient.shared.messages(token: token, conversationID: chat.conversation_id, before: b, limit: 200), !page.isEmpty {
+            all = page + all
+            before = page.first?.seq
+            if page.count < 200 { break }
+        }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        let lines = all.map { m in "[\(m.date.map { f.string(from: $0) } ?? "")] \(memberNames[m.sender_id] ?? (m.sender_id == me ? "Me" : m.sender_id)): \(displayText(m))" }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(chat.title)-chat.txt")
+        try? lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        exportURL = url
     }
 
     private func composerIcon(_ name: String) -> some View {
@@ -448,7 +909,27 @@ struct ChatView: View {
     // MARK: message actions
 
     @ViewBuilder private func messageContent(_ m: Message) -> some View {
-        if m.kind == "notice" {
+        if m.kind == "poll" && !m.isDeleted {
+            PollCard(message: m, me: me, canVote: canSend) { opts in
+                Task {
+                    if let updated = try? await APIClient.shared.chVote(token: token, messageID: m.id, options: opts) { merge([updated]) }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: m.sender_id == me ? .trailing : .leading)
+        } else if let sig = SignalInfo(m), !m.isDeleted {
+            SignalCard(info: sig).frame(maxWidth: .infinity, alignment: m.sender_id == me ? .trailing : .leading)
+        } else if m.kind == "call" {
+            CallEntryRow(message: m, me: me, onCallBack: calls.enabled && !isGroup ? {
+                calls.start(conversationID: chat.conversation_id, peerName: chat.title)
+            } : nil)
+        } else if m.kind == "text", !m.isDeleted, let url = LinkPreviewCard.firstURL(in: m.body) {
+            VStack(alignment: m.sender_id == me ? .trailing : .leading, spacing: 4) {
+                Bubble(text: displayText(m), mine: m.sender_id == me, date: m.date,
+                       state: m.sender_id == me ? receipt(m) : nil, faded: false)
+                LinkPreviewCard(token: token, url: url)
+            }
+            .frame(maxWidth: .infinity, alignment: m.sender_id == me ? .trailing : .leading)
+        } else if m.kind == "notice" {
             Text(noticeText(m)).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .padding(.horizontal, 12).padding(.vertical, 5).background(Theme.surface, in: Capsule())
                 .frame(maxWidth: .infinity)
@@ -700,7 +1181,7 @@ private struct DayDivider: View {
 
     var body: some View {
         if let date {
-            Text(Self.f.string(from: date))
+            Text(DayLabel.text(date))
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
@@ -764,4 +1245,10 @@ struct Bubble: View {
         case .failed: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
         }
     }
+}
+
+
+struct ExportFile: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
 }

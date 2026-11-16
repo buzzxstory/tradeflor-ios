@@ -72,6 +72,8 @@ struct Message: Decodable, Identifiable, Equatable {
     let forwarded: Bool?
     let expires_at: Int64?
     let signal: String?
+    let views: Int?
+    let comments: CommentSummary?
 
     /// {"emoji": [userID, ...]} -> [(emoji, count, mine)] in a stable order.
     func reactionList(me: String) -> [Reaction] {
@@ -119,6 +121,7 @@ struct StatusPost: Decodable, Identifiable, Equatable {
     let poster: Bool?
     let text: String?
     let style: String?
+    let music: String?
 
     var date: Date? { serverDate(created_at) }
 }
@@ -223,4 +226,9 @@ struct GroupMember: Decodable, Identifiable {
     let display_name: String?
     var id: String { user_id }
     var title: String { (display_name?.isEmpty == false ? display_name : nil) ?? username }
+}
+
+
+struct CommentSummary: Decodable, Equatable {
+    let count: Int
 }

@@ -152,3 +152,15 @@ struct SavedEvent: Decodable, Identifiable {
     let event_at: Int64
     var id: String { event_key }
 }
+
+/// Per-chat preferences (GET /prefs): pinned (newest pin first), muted until, archived, marked unread.
+struct ConversationPrefs: Decodable {
+    let conversation_id: String
+    let pinned_at: Int64?
+    let muted_until: Int64?
+    let archived: Bool?
+    let marked_unread: Bool?
+
+    var pinned: Bool { (pinned_at ?? 0) > 0 }
+    var muted: Bool { (muted_until ?? 0) > Int64(Date().timeIntervalSince1970) }
+}

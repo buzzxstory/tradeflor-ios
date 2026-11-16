@@ -20,6 +20,12 @@ struct StatusViewerScreen: View {
     @State private var drag: CGFloat = 0
     @State private var showViewers = false
     @State private var confirmDelete = false
+    @State private var muted = false
+    @State private var userPaused = false
+    @State private var reply = ""
+    @State private var replyNote: String?
+    @State private var sending = false
+    @FocusState private var replyFocused: Bool
 
     private let photoSeconds = 5.0
 
@@ -63,8 +69,12 @@ struct StatusViewerScreen: View {
         .offset(y: drag)
         .gesture(
             DragGesture()
-                .onChanged { v in if v.translation.height > 0 { drag = v.translation.height } }
-                .onEnded { v in if v.translation.height > 120 { close() } else { withAnimation { drag = 0 } } }
+                .onChanged { v in if v.translation.height > 0 && !replyFocused { drag = v.translation.height } }
+                .onEnded { v in
+                    if v.translation.height > 120 && !replyFocused { close() }
+                    else if v.translation.height < -80 && !replyFocused { nextPerson() } // swipe up: the next person
+                    else { withAnimation { drag = 0 } }
+                }
         )
         .statusBarHidden()
         .task(id: "\(g)-\(p)") { await show() }
@@ -95,6 +105,15 @@ struct StatusViewerScreen: View {
                 if let player { VideoPlayer(player: player).disabled(true) } else { ProgressView().tint(.white) }
             case "image":
                 if let image { Image(uiImage: image).resizable().scaledToFit() } else { ProgressView().tint(.white) }
+            case "voice":
+                ZStack {
+                    LinearGradient(colors: [Theme.hex(0x0A4756), Theme.hex(0x02161F)], startPoint: .top, endPoint: .bottom)
+                    VStack(spacing: 14) {
+                        Image(systemName: "waveform").font(.system(size: 64, weight: .semibold)).foregroundStyle(Theme.accent)
+                        Text(VoiceBubble.length(post.duration_ms ?? 0)).font(.system(size: 16, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white)
+                    }
+                }
             default:
                 Text("status.unsupported").foregroundStyle(.white.opacity(0.8)).padding()
             }
@@ -126,6 +145,31 @@ struct StatusViewerScreen: View {
             }
             .foregroundStyle(.white)
             Spacer()
+            Button {
+                userPaused.toggle()
+                setPaused(userPaused)
+            } label: {
+                Image(systemName: userPaused ? "play.fill" : "pause.fill").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).frame(width: 36, height: 40)
+            }
+            .accessibilityLabel(Text(LocalizedStringKey(userPaused ? "stx.play" : "stx.pause")))
+            if post?.kind == "video" || post?.kind == "voice" {
+                Button {
+                    muted.toggle()
+                    player?.isMuted = muted
+                } label: {
+                    Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).frame(width: 36, height: 40)
+                }
+                .accessibilityLabel(Text(LocalizedStringKey(muted ? "stx.unmute" : "stx.mute")))
+            }
+            if group.isMine {
+                Menu {
+                    Button { setPaused(true); showViewers = true } label: { Label("status.viewers", systemImage: "eye") }
+                    Button(role: .destructive) { setPaused(true); confirmDelete = true } label: { Label("stx.delete", systemImage: "trash") }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 17, weight: .bold)).foregroundStyle(.white).frame(width: 36, height: 40)
+                }
+                .accessibilityLabel(Text("stx.more"))
+            }
             Button { close() } label: {
                 Image(systemName: "xmark").font(.system(size: 17, weight: .bold)).foregroundStyle(.white).frame(width: 40, height: 40)
             }
@@ -144,19 +188,37 @@ struct StatusViewerScreen: View {
                     .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
             }
             if group.isMine, let post {
-                HStack {
-                    Button { setPaused(true); showViewers = true } label: {
-                        Label("\(post.views ?? 0)", systemImage: "eye")
-                    }
-                    Spacer()
-                    Button(role: .destructive) { setPaused(true); confirmDelete = true } label: {
-                        Image(systemName: "trash")
-                    }
-                    .accessibilityLabel(Text("status.delete"))
+                Button { setPaused(true); showViewers = true } label: {
+                    Label(String(format: NSLocalizedString("stx.views", comment: ""), post.views ?? 0), systemImage: "eye")
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 14).frame(height: 36).background(.black.opacity(0.45), in: Capsule())
                 }
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.white)
                 .padding(.bottom, 12)
+                .accessibilityLabel(Text("stx.views.show"))
+            } else if group.group_id == nil {
+                VStack(spacing: 6) {
+                    if let replyNote { Text(replyNote).font(.system(size: 12)).foregroundStyle(.white.opacity(0.85)) }
+                    HStack(spacing: 8) {
+                        TextField("", text: $reply, prompt: Text(String(format: NSLocalizedString("stx.reply.ph", comment: ""), group.title))
+                            .foregroundColor(.white.opacity(0.6)))
+                            .focused($replyFocused)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16).frame(height: 44)
+                            .background(.black.opacity(0.45), in: Capsule())
+                            .overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 1))
+                            .onChange(of: replyFocused) { f in setPaused(f || userPaused) }
+                        if !reply.trimmingCharacters(in: .whitespaces).isEmpty {
+                            Button { Task { await sendReply() } } label: {
+                                Group { if sending { ProgressView().tint(.white) } else { Image(systemName: "paperplane.fill") } }
+                                    .font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
+                                    .frame(width: 44, height: 44).background(Theme.sendGradient, in: Circle())
+                            }
+                            .disabled(sending)
+                            .accessibilityLabel(Text("stx.reply.send"))
+                        }
+                    }
+                }
+                .padding(.bottom, 10)
             }
         }
     }
@@ -176,13 +238,14 @@ struct StatusViewerScreen: View {
         switch post.kind {
         case "image":
             if let d = await APIClient.shared.statusMedia(token: token, id: post.id) { image = UIImage(data: d) }
-        case "video":
+        case "video", "voice":
             let asset = AVURLAsset(url: APIClient.shared.statusMediaURL(id: post.id),
                                    options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(token)"]])
             let pl = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            pl.isMuted = muted
             player = pl
             if let d = try? await asset.load(.duration), d.seconds.isFinite, d.seconds > 0 { seconds = min(d.seconds, 60) }
-            pl.play()
+            if !paused { pl.play() }
         default:
             break
         }
@@ -217,6 +280,43 @@ struct StatusViewerScreen: View {
             p = 0
         } else {
             close()
+        }
+    }
+
+    /// Swipe up: the next person's statuses.
+    private func nextPerson() {
+        withAnimation { drag = 0 }
+        if g + 1 < groups.count {
+            g += 1
+            p = 0
+        } else {
+            close()
+        }
+    }
+
+    /// A reply goes to the person's private chat as a message quoting the status (like the website).
+    private func sendReply() async {
+        guard let post else { return }
+        let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        sending = true
+        defer { sending = false }
+        do {
+            let conv = try await APIClient.shared.directConversation(token: token, with: group.user_id)
+            let what: String
+            switch post.kind {
+            case "text": what = "“" + String((post.text ?? "").prefix(80)) + "”"
+            case "video": what = "🎬"
+            case "voice": what = "🎤"
+            default: what = "📷"
+            }
+            let body = String(format: NSLocalizedString("stx.reply.quote", comment: ""), what) + "\n" + text
+            _ = try await APIClient.shared.sendText(token: token, conversationID: conv, body: body, key: UUID().uuidString.lowercased())
+            reply = ""
+            replyFocused = false
+            replyNote = String(format: NSLocalizedString("stx.reply.sent", comment: ""), group.title)
+        } catch {
+            replyNote = NSLocalizedString("stx.reply.failed", comment: "")
         }
     }
 

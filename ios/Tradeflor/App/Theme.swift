@@ -267,3 +267,16 @@ extension View {
             .overlay(BubbleShape(mine: mine).stroke(mine ? Theme.hex(0x12D9E2, 0.36) : Theme.border, lineWidth: 1))
     }
 }
+
+/// Our screens draw their own headers (the website's look) and hide the system navigation bar, which also turns
+/// off the edge swipe to go back. This keeps the swipe working whenever there is a screen to go back to.
+extension UINavigationController: UIGestureRecognizerDelegate {
+    override open func viewDidLoad() {
+        super.viewDidLoad()
+        interactivePopGestureRecognizer?.delegate = self
+    }
+
+    public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        viewControllers.count > 1
+    }
+}

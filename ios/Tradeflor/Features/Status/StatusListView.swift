@@ -13,6 +13,7 @@ struct StatusListView: View {
     @State private var picked: PhotosPickerItem?
     @State private var showCamera = false
     @State private var showText = false
+    @State private var showCreator = false
     @State private var posting = false
     @State private var problem: String?
 
@@ -58,15 +59,7 @@ struct StatusListView: View {
             .navigationTitle(Text("status.title"))
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        PhotosPicker(selection: $picked, matching: .any(of: [.images, .videos])) {
-                            Label("status.post.media", systemImage: "photo.on.rectangle")
-                        }
-                        if CameraPicker.isAvailable {
-                            Button { showCamera = true } label: { Label("chat.camera", systemImage: "camera") }
-                        }
-                        Button { showText = true } label: { Label("status.post.text", systemImage: "textformat") }
-                    } label: {
+                    Button { showCreator = true } label: {
                         if posting { ProgressView() } else { Image(systemName: "plus.circle.fill").font(.title3) }
                     }
                     .disabled(posting)
@@ -75,6 +68,7 @@ struct StatusListView: View {
             }
             .refreshable { await load() }
             .overlay { if loading && groups.isEmpty { ProgressView() } }
+            .sheet(isPresented: $showCreator) { StatusCreatorSheet { Task { await load() } } }
             .alert(Text(problem ?? ""), isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
                 Button("chat.close", role: .cancel) {}
             }
@@ -107,7 +101,7 @@ struct StatusListView: View {
 
     private var myRow: some View {
         Button {
-            if let m = mine, !m.posts.isEmpty { open = StatusOpen(groups: [m], index: 0) } else { showText = true }
+            if let m = mine, !m.posts.isEmpty { open = StatusOpen(groups: [m], index: 0) } else { showCreator = true }
         } label: {
             HStack(spacing: 12) {
                 StatusRing(seen: true, count: mine?.posts.count ?? 0) {

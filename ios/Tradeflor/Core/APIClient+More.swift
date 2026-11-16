@@ -195,3 +195,20 @@ extension APIClient {
         _ = try await postJSON("calendar/saved/remove", token: token, body: ["event_key": key])
     }
 }
+
+extension APIClient {
+    func prefs(token: String) async throws -> [ConversationPrefs] {
+        struct Out: Decodable { let conversations: [ConversationPrefs]? }
+        return (try decode(Out.self, try await getJSON("prefs", token: token))).conversations ?? []
+    }
+
+    /// One change to a chat's preferences. Mute: seconds > 0, forever, or unmute.
+    func setPrefs(token: String, conversationID: String, pinned: Bool? = nil, archived: Bool? = nil, markedUnread: Bool? = nil,
+                  muteSeconds: Int = 0, muteForever: Bool = false, unmute: Bool = false) async throws {
+        var body: [String: Any] = ["ConversationID": conversationID, "MuteSeconds": muteSeconds, "MuteForever": muteForever, "Unmute": unmute]
+        if let pinned { body["Pinned"] = pinned }
+        if let archived { body["Archived"] = archived }
+        if let markedUnread { body["MarkedUnread"] = markedUnread }
+        _ = try await postJSON("conversations/prefs", token: token, body: body)
+    }
+}
