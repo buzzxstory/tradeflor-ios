@@ -115,7 +115,7 @@ struct ChatListView: View {
             .onReceive(LocalNotifier.shared.$tappedConversation) { id in
                 guard let id, !id.hasPrefix("grp_") else { return }
                 Task {
-                    if chats.isEmpty { await load(quiet: true) }
+                    if !chats.contains(where: { $0.conversation_id == id }) { await load(quiet: true) }
                     if let c = chats.first(where: { $0.conversation_id == id }) { path = [c] }
                     LocalNotifier.shared.tappedConversation = nil
                 }

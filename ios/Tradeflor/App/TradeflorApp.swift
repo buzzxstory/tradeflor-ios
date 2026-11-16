@@ -32,6 +32,7 @@ struct RootView: View {
     @ObservedObject private var calls = CallManager.shared
     @ObservedObject private var badges = BadgeStore.shared
     @ObservedObject private var notifier = LocalNotifier.shared
+    @ObservedObject private var links = DeepLinks.shared
     @State private var needsSetup = false
     @State private var tab: String = {
         #if DEBUG
@@ -70,6 +71,10 @@ struct RootView: View {
             }
         }
         .tint(Theme.accent)
+        .onOpenURL { url in DeepLinks.shared.handle(url) }
+        // Tradeflor links tapped inside the app open here instead of the browser
+        .environment(\.openURL, OpenURLAction { url in DeepLinks.shared.handle(url) ? .handled : .systemAction })
+        .sheet(item: $links.pending) { p in DeepLinkSheet(target: p.target).environmentObject(store) }
         .onChange(of: notifier.tappedConversation) { id in
             // a tapped notification: the right tab; the list there opens the chat
             if let id { tab = id.hasPrefix("grp_") ? "groups" : "chats" }

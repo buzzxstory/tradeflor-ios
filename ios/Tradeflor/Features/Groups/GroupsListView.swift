@@ -66,7 +66,9 @@ struct GroupsListView: View {
             .onReceive(LocalNotifier.shared.$tappedConversation) { id in
                 guard let id, id.hasPrefix("grp_") else { return }
                 Task {
-                    if groups.isEmpty, let token = store.session?.token { groups = (try? await APIClient.shared.groups(token: token)) ?? [] }
+                    if !groups.contains(where: { $0.conversation_id == id }), let token = store.session?.token {
+                        groups = (try? await APIClient.shared.groups(token: token)) ?? groups
+                    }
                     if let g = groups.first(where: { $0.conversation_id == id }) { path = [g] }
                     LocalNotifier.shared.tappedConversation = nil
                 }

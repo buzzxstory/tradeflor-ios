@@ -274,6 +274,7 @@ struct GroupInfoView: View {
     @State private var requests: [GrpJoinRequest] = []
     @State private var audit: [GrpAudit] = []
     @State private var stats: GrpMediaStats?
+    @State private var cropping: PickedImage?
     @State private var showAudit = false
     @State private var newLink: String?
     @State private var inviteHours = 0
@@ -356,9 +357,13 @@ struct GroupInfoView: View {
             guard let item else { return }
             avatarItem = nil
             Task {
-                guard let d = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: d),
-                      let jpeg = GrpImage.squareJPEG(img) else { return }
-                await run { try await APIClient.shared.grpUploadAvatar(token: token, id: groupID, jpeg: jpeg) }
+                guard let d = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: d) else { return }
+                cropping = PickedImage(image: img)
+            }
+        }
+        .fullScreenCover(item: $cropping) { p in
+            AvatarEditor(image: p.image) { jpeg in
+                Task { await run { try await APIClient.shared.grpUploadAvatar(token: token, id: groupID, jpeg: jpeg) } }
             }
         }
     }

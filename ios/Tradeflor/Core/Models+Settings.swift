@@ -9,6 +9,8 @@ struct PrivateAccount: Decodable {
     let phone_verified: Bool
     let country: String
     let created_at: Int64
+    var needs_real_name: Bool? = nil
+    var needs_email: Bool? = nil
 }
 
 /// GET /calls/history row.
@@ -114,4 +116,7 @@ struct StIdentity: Decodable {
     let original_pin_length: Int?
     let member_since: Int64?
     let username_change_available_at: Int64?
+    var avatar_id: String? = nil
+    var pin_class: String? = nil
+    var country: String? = nil
 }

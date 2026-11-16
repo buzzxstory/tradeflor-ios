@@ -18,6 +18,7 @@ struct MyProfilePage: View {
     @State private var note: String?
     @State private var busy = false
 
+    @State private var cropping: PickedImage?
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
@@ -96,11 +97,17 @@ struct MyProfilePage: View {
             guard let item else { return }
             picked = nil
             Task {
-                guard let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data),
-                      let jpeg = Self.squareJPEG(img) else { return }
-                busy = true
-                if let p = try? await APIClient.shared.uploadAvatar(token: token, jpeg: jpeg) { profile = p; onChange() }
-                busy = false
+                guard let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) else { return }
+                cropping = PickedImage(image: img)
+            }
+        }
+        .fullScreenCover(item: $cropping) { p in
+            AvatarEditor(image: p.image) { jpeg in
+                Task {
+                    busy = true
+                    if let pr = try? await APIClient.shared.uploadAvatar(token: token, jpeg: jpeg) { profile = pr; onChange() }
+                    busy = false
+                }
             }
         }
     }
@@ -172,6 +179,18 @@ struct AccountPage: View {
 
     var body: some View {
         SettingsPage(title: NSLocalizedString("settings.account", comment: ""), subtitle: NSLocalizedString("settings.account.sub", comment: "")) {
+            if let a = account, a.needs_real_name == true || a.needs_email == true {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("acct.complete", systemImage: "exclamationmark.circle").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.gold)
+                    Text((a.needs_real_name == true ? NSLocalizedString("acct.complete.name", comment: "") + " " : "")
+                         + (a.needs_email == true ? NSLocalizedString("acct.complete.email", comment: "") : ""))
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(Theme.gold.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.gold.opacity(0.4), lineWidth: 1))
+            }
             TFCard {
                 HStack(spacing: 12) {
                     Image(systemName: "person").foregroundStyle(Theme.accent)
@@ -286,59 +305,18 @@ struct MyIdentityPage: View {
     @State private var note: String?
 
     private var token: String { store.session?.token ?? "" }
-    private var link: String { "https://app.tradeflor.com/?id=\(id?.pin ?? "")" }
+    @State private var connectCode: String?
+    /// The card's QR is the Flash Connect link (an opaque code, never the PIN); the older ?id= link until it is known.
+    private var link: String {
+        if let c = connectCode, !c.isEmpty { return "https://app.tradeflor.com/?connect=\(c)" }
+        return "https://app.tradeflor.com/?id=\(id?.pin ?? "")"
+    }
 
     var body: some View {
         SettingsPage(title: NSLocalizedString("settings.identity", comment: "")) {
             if let id {
-                VStack(spacing: 12) {
-                    Text("identity.pin").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.faint)
-                    HStack(spacing: 8) {
-                        ForEach(Array(id.pin.enumerated()), id: \.offset) { _, ch in
-                            Text(String(ch)).font(.system(size: 30, weight: .bold, design: .rounded)).foregroundStyle(Theme.text)
-                                .frame(width: 52, height: 62)
-                                .background(Theme.card, in: RoundedRectangle(cornerRadius: 12))
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.borderActive, lineWidth: 1.5))
-                        }
-                    }
-                    .environment(\.layoutDirection, .leftToRight)
-                    HStack(spacing: 6) {
-                        Text("@" + id.username).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
-                        if id.early_member == true {
-                            Label("set.early", systemImage: "star").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.accent)
-                                .padding(.horizontal, 8).padding(.vertical, 3).overlay(Capsule().stroke(Theme.borderActive, lineWidth: 1))
-                        }
-                    }
-                    if (id.original_pin_length ?? 0) == 4 && id.pin.count == 4 {
-                        Text("set.original.pin").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.gold)
-                            .padding(.horizontal, 10).padding(.vertical, 4).overlay(Capsule().stroke(Theme.gold.opacity(0.6), lineWidth: 1))
-                    }
-                    if showQR, let qr = TFQR.image(link) {
-                        Image(uiImage: qr).interpolation(.none).resizable().frame(width: 180, height: 180)
-                            .padding(10).background(.white, in: RoundedRectangle(cornerRadius: 14))
-                        Text("set.scan.connect").font(.system(size: 12)).foregroundStyle(Theme.faint)
-                    }
-                    HStack(spacing: 10) {
-                        Button { showQR.toggle() } label: {
-                            Text(LocalizedStringKey(showQR ? "set.qr.hide" : "set.qr.show")).font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(Theme.accent).padding(.horizontal, 16).frame(height: 40).overlay(Capsule().stroke(Theme.borderActive, lineWidth: 1))
-                        }
-                        Button {
-                            UIPasteboard.general.string = id.pin
-                            note = NSLocalizedString("set.copied.pin", comment: "")
-                        } label: {
-                            Text("set.copy.pin").font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(Theme.accent).padding(.horizontal, 16).frame(height: 40).overlay(Capsule().stroke(Theme.borderActive, lineWidth: 1))
-                        }
-                        ShareLink(item: link) {
-                            Label("identity.share", systemImage: "square.and.arrow.up").font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(Theme.onAccent).padding(.horizontal, 16).frame(height: 40).background(Theme.accent, in: Capsule())
-                        }
-                    }
-                    if let note { Text(note).font(.system(size: 12)).foregroundStyle(Theme.accent) }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
+                IdentityShowcase(id: id, link: link, token: token)
+                    .padding(.vertical, 8)
 
                 TFCard {
                     VStack(alignment: .leading, spacing: 10) {
@@ -372,6 +350,7 @@ struct MyIdentityPage: View {
             }
         }
         .task { await load() }
+        .task { connectCode = try? await APIClient.shared.ctMyCode(token: token) }
     }
 
     private func load() async {

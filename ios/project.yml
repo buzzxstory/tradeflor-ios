@@ -38,6 +38,9 @@ targets:
           UIColorName: LaunchBackground
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIApplicationSupportsIndirectInputEvents: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.tradeflor.ios
+            CFBundleURLSchemes: [tradeflor]
         ITSAppUsesNonExemptEncryption: false
         TFAPIBase: $(TF_API_BASE)
         # Usage strings (English base; Arabic in ar.lproj/InfoPlist.strings).
