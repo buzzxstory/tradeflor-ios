@@ -52,12 +52,16 @@ enum FolderStore {
 
     static func load(token: String) async throws -> (Int, [EditableFolder]) {
         let d = try JSONDecoder().decode(Doc.self, from: try await APIClient.shared.getJSON("folders?v=2", token: token))
-        let list = (d.folders ?? []).map { f in
-            EditableFolder(id: f.id, name: f.name, items: f.items ?? [], exclude: f.exclude ?? [], icon: f.icon ?? "", color: f.color ?? "",
-                           rulesOn: f.rules?.on ?? false, matchAll: (f.rules?.match ?? "all") == "all",
-                           conditions: (f.rules?.conditions ?? []).map {
-                               EditableCondition(type: $0.type, value: $0.value ?? "", values: $0.values ?? [], enabled: $0.enabled ?? true)
-                           })
+        var list: [EditableFolder] = []
+        for f in d.folders ?? [] {
+            var conds: [EditableCondition] = []
+            for c in f.rules?.conditions ?? [] {
+                conds.append(EditableCondition(type: c.type, value: c.value ?? "", values: c.values ?? [], enabled: c.enabled ?? true))
+            }
+            let match: String = f.rules?.match ?? "all"
+            let rulesOn: Bool = f.rules?.on ?? false
+            list.append(EditableFolder(id: f.id, name: f.name, items: f.items ?? [], exclude: f.exclude ?? [], icon: f.icon ?? "",
+                                       color: f.color ?? "", rulesOn: rulesOn, matchAll: match == "all", conditions: conds))
         }
         return (d.version ?? 0, list)
     }
