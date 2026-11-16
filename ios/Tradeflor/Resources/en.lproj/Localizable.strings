@@ -1262,3 +1262,15 @@
 "about.clear" = "Clear";
 "lock.forgot.reset" = "Forgot the PIN? Set a new one with your account password";
 "member.open" = "Open %@'s profile";
+"ci.title" = "Contact info";
+"ci.message" = "Message";
+"ci.addcontact" = "Add contact";
+"ci.contact" = "Contact";
+"ci.requested" = "Requested";
+"ci.sending" = "Sending…";
+"ci.share.msg" = "%@ on Tradeflor";
+"ci.lastseen.recently" = "Last seen recently";
+"ci.failed" = "Could not open the chat";
+"ci.call.failed" = "Could not start the call";
+"ci.request.sent" = "Contact request sent";
+"ci.request.failed" = "Could not send the request";

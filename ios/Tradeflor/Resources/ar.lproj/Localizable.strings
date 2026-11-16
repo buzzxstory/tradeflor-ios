@@ -1262,3 +1262,15 @@
 "about.clear" = "مسح";
 "lock.forgot.reset" = "نسيت الرمز؟ عيّن رمزاً جديداً بكلمة مرور حسابك";
 "member.open" = "فتح ملف %@";
+"ci.title" = "معلومات جهة الاتصال";
+"ci.message" = "مراسلة";
+"ci.addcontact" = "إضافة جهة اتصال";
+"ci.contact" = "جهة اتصال";
+"ci.requested" = "تم الطلب";
+"ci.sending" = "جارٍ الإرسال…";
+"ci.share.msg" = "%@ على Tradeflor";
+"ci.lastseen.recently" = "آخر ظهور مؤخراً";
+"ci.failed" = "تعذّر فتح المحادثة";
+"ci.call.failed" = "تعذّر بدء المكالمة";
+"ci.request.sent" = "تم إرسال طلب التواصل";
+"ci.request.failed" = "تعذّر إرسال الطلب";

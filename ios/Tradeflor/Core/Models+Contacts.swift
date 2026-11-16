@@ -11,6 +11,7 @@ struct IdentityDetail: Decodable, Equatable {
     let member_since: Int64?
     let country: String?
     let relation: String?
+    var pin_class: String? = nil
 
     var title: String { (display_name?.isEmpty == false ? display_name : nil) ?? username }
 }
