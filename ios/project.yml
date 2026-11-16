@@ -47,7 +47,8 @@ targets:
         NSPhotoLibraryAddUsageDescription: Tradeflor saves photos and videos you choose to keep into your library.
         NSFaceIDUsageDescription: Tradeflor uses Face ID to unlock your locked chats.
         # Keeps a call's audio going when the screen locks or another app is opened.
-        UIBackgroundModes: [audio]
+        NSLocationWhenInUseUsageDescription: Tradeflor shares your live location in a chat only when you choose to, for the time you pick.
+        UIBackgroundModes: [audio, location]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tradeflor.ios

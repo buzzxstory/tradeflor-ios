@@ -28,6 +28,10 @@ struct ChatView: View {
     @State private var peerTypingUntil: Date?
     @State private var lastTypingSent = Date.distantPast
     @State private var confirmBlock = false
+    @State private var showInfo = false
+    @State private var showSchedule = false
+    @State private var showNoteRecorder = false
+    @ObservedObject private var location = LocationSharer.shared
     @State private var memberNames: [String: String] = [:]
     private var isGroup: Bool { chat.conversation_id.hasPrefix("grp_") }
     @ObservedObject private var calls = CallManager.shared
@@ -126,10 +130,13 @@ struct ChatView: View {
         .navigationTitle(chat.title)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text(chat.title).font(.headline).foregroundStyle(.white).lineLimit(1)
-                    if let subtitle { Text(subtitle).font(.caption2).foregroundStyle(Theme.accent) }
+                Button { showInfo = true } label: {
+                    VStack(spacing: 1) {
+                        Text(chat.title).font(.headline).foregroundStyle(.white).lineLimit(1)
+                        if let subtitle { Text(subtitle).font(.caption2).foregroundStyle(Theme.accent) }
+                    }
                 }
+                .accessibilityIdentifier("chat.info")
             }
         }
         .onReceive(live.typing) { t in
@@ -149,6 +156,17 @@ struct ChatView: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showInfo) {
+            if isGroup { GroupInfoView(groupID: chat.conversation_id) } else { ContactInfoView(chat: chat) }
+        }
+        .sheet(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft) }
+        .fullScreenCover(isPresented: $showNoteRecorder) {
+            VideoNoteRecorder { url in Task { await sendVideoNote(url) } }.ignoresSafeArea()
+        }
+        .alert(Text("location.denied"), isPresented: $location.denied) {
+            Button("chat.settings") { if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) } }
+            Button("chat.close", role: .cancel) {}
         }
         .sheet(item: $forwarding) { m in
             ForwardSheet(token: token, message: m) { forwarding = nil }
@@ -268,6 +286,25 @@ struct ChatView: View {
 
     private var typingBar: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            Menu {
+                Menu {
+                    Button("location.15m") { location.start(token: token, conversationID: chat.conversation_id, minutes: 15) }
+                    Button("location.1h") { location.start(token: token, conversationID: chat.conversation_id, minutes: 60) }
+                    Button("location.8h") { location.start(token: token, conversationID: chat.conversation_id, minutes: 480) }
+                } label: { Label("location.share", systemImage: "location.fill") }
+                if location.sharing.contains(chat.conversation_id) {
+                    Button(role: .destructive) { location.stop(conversationID: chat.conversation_id) } label: {
+                        Label("location.stop", systemImage: "location.slash")
+                    }
+                }
+                if CameraPicker.isAvailable {
+                    Button { showNoteRecorder = true } label: { Label("note.record", systemImage: "video.circle") }
+                }
+                Button { showSchedule = true } label: { Label("schedule.title", systemImage: "clock") }
+            } label: {
+                Image(systemName: "plus.circle").font(.system(size: 22)).frame(width: 32, height: 40)
+            }
+            .accessibilityLabel(Text("chat.more"))
             PhotosPicker(selection: $picked, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
                 Image(systemName: "photo.on.rectangle")
                     .font(.system(size: 20))
@@ -372,7 +409,15 @@ struct ChatView: View {
     // MARK: message actions
 
     @ViewBuilder private func messageContent(_ m: Message) -> some View {
-        if m.kind == "voice", m.audio_id != nil, !m.isDeleted {
+        if m.kind == "notice" {
+            Text(noticeText(m)).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .padding(.horizontal, 12).padding(.vertical, 5).background(Theme.surface, in: Capsule())
+                .frame(maxWidth: .infinity)
+        } else if m.kind == "location", !m.isDeleted {
+            LocationCard(token: token, message: m, mine: m.sender_id == me)
+        } else if VideoNotePrep.isNote(m), let fid = m.file_id, !m.isDeleted {
+            VideoNoteBubble(token: token, message: m, mine: m.sender_id == me) { watching = ViewedPhoto(id: fid) }
+        } else if m.kind == "voice", m.audio_id != nil, !m.isDeleted {
             VoiceBubble(token: token, message: m, mine: m.sender_id == me, state: m.sender_id == me ? receipt(m) : nil)
         } else if m.kind == "file", let fid = m.file_id, (m.file_mime ?? "").hasPrefix("video/"), !m.isDeleted {
             VideoBubble(token: token, message: m, mine: m.sender_id == me, state: m.sender_id == me ? receipt(m) : nil) {
@@ -427,6 +472,37 @@ struct ChatView: View {
                                audio: rec.data, durationMs: rec.durationMs, waveform: rec.waveform)
         pending.append(p)
         await deliver(p)
+    }
+
+    private func sendVideoNote(_ url: URL) async {
+        let key = UUID().uuidString.lowercased()
+        pending.append(PendingMessage(id: key, body: "", date: Date(), video: Data()))
+        guard let out = await VideoNotePrep.square(from: url) else {
+            if let i = pending.firstIndex(where: { $0.id == key }) { pending[i].failed = true }
+            return
+        }
+        do {
+            let m = try await APIClient.shared.sendImage(token: token, conversationID: chat.conversation_id, jpeg: out.data,
+                                                         caption: "", key: key, fileName: VideoNotePrep.fileName(ms: out.ms),
+                                                         mime: "video/mp4")
+            merge([m])
+            pending.removeAll { $0.id == key }
+        } catch {
+            if let i = pending.firstIndex(where: { $0.id == key }) { pending[i].failed = true }
+        }
+    }
+
+    /// "notice" messages: chat setting changes (disappearing messages, restricted chat), shown centred.
+    private func noticeText(_ m: Message) -> String {
+        guard let s = m.signal, let d = s.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return m.body }
+        if (o["event"] as? String) == "disappearing" {
+            let secs = (o["secs"] as? Int) ?? 0
+            return secs == 0 ? NSLocalizedString("notice.disappear.off", comment: "")
+                : String(format: NSLocalizedString("notice.disappear.on", comment: ""),
+                         NSLocalizedString(ContactInfoView.timerKey(secs), comment: ""))
+        }
+        return m.body.isEmpty ? NSLocalizedString("notice.changed", comment: "") : m.body
     }
 
     private func sendVideo(_ url: URL) async {

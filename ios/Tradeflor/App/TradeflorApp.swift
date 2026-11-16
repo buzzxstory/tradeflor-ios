@@ -43,6 +43,9 @@ struct RootView: View {
                     StatusListView()
                         .tabItem { Label("status.title", systemImage: "circle.dashed.inset.filled") }
                         .tag("status")
+                    CalendarView()
+                        .tabItem { Label("calendar.title", systemImage: "calendar") }
+                        .tag("calendar")
                     SettingsView()
                         .tabItem { Label("settings.title", systemImage: "gearshape.fill") }
                         .tag("settings")

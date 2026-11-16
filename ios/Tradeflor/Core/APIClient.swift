@@ -31,7 +31,7 @@ final class APIClient {
 
     private let session: URLSession
     private let base: URL
-    private let userAgent: String
+    let userAgent: String
 
     init(base: URL = AppConfig.apiBase, session: URLSession? = nil) {
         self.base = base
@@ -45,7 +45,7 @@ final class APIClient {
         self.userAgent = "Tradeflor-iOS/\(AppConfig.version) (iPhone; iOS \(v.majorVersion).\(v.minorVersion))"
     }
 
-    private func request(_ path: String, method: String, token: String?, body: [String: Any]?,
+    func request(_ path: String, method: String, token: String?, body: [String: Any]?,
                          rawQuery: Bool = false) -> URLRequest {
         // appendingPathComponent would escape the "?" of a query, so a path with a query is joined as text.
         let url = rawQuery ? URL(string: base.absoluteString + "/" + path)! : base.appendingPathComponent(path)
@@ -62,7 +62,7 @@ final class APIClient {
         return req
     }
 
-    private func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
         do {
             let (data, resp) = try await session.data(for: req)
             guard let http = resp as? HTTPURLResponse else { throw APIError.network }
@@ -193,7 +193,7 @@ final class APIClient {
 
     /// A plain authenticated GET, for small endpoints defined next to their feature.
     func getJSON(_ path: String, token: String) async throws -> Data {
-        let (data, http) = try await send(request(path, method: "GET", token: token, body: nil))
+        let (data, http) = try await send(request(path, method: "GET", token: token, body: nil, rawQuery: path.contains("?")))
         try check(http, data)
         return data
     }
@@ -389,7 +389,7 @@ final class APIClient {
     // MARK: chat
 
     /// Maps the common failure statuses of an authenticated call.
-    private func check(_ http: HTTPURLResponse, _ data: Data) throws {
+    func check(_ http: HTTPURLResponse, _ data: Data) throws {
         switch http.statusCode {
         case 200..<300: return
         case 401: throw APIError.badCredentials
@@ -623,11 +623,11 @@ final class APIClient {
         return session.webSocketTask(with: req)
     }
 
-    private static func q(_ s: String) -> String {
+    static func q(_ s: String) -> String {
         s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+?/"))) ?? s
     }
 
-    private let avatarCache: NSCache<NSString, NSData> = {
+    let avatarCache: NSCache<NSString, NSData> = {
         let c = NSCache<NSString, NSData>()
         c.totalCostLimit = 80 << 20
         return c

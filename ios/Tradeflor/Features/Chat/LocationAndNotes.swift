@@ -1,0 +1,281 @@
+import SwiftUI
+import CoreLocation
+import MapKit
+import AVFoundation
+import UIKit
+
+// MARK: live location
+
+/// Shares my live location in a chat for 15 min, 1 h or 8 h (the server's only durations), like the website:
+/// a start with the first fix, then updates at most every 10 s and only after moving 15 m (or once a minute anyway).
+@MainActor
+final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
+    static let shared = LocationSharer()
+
+    @Published private(set) var sharing: Set<String> = []
+    @Published var denied = false
+
+    private let manager = CLLocationManager()
+    private var token = ""
+    private var pendingStart: (conversation: String, minutes: Int)?
+    private var lastSent: (at: Date, location: CLLocation)?
+    private var until: [String: Date] = [:]
+
+    override init() {
+        super.init()
+        manager.delegate = self
+        manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        manager.distanceFilter = 10
+    }
+
+    func start(token: String, conversationID: String, minutes: Int) {
+        self.token = token
+        pendingStart = (conversationID, minutes)
+        switch manager.authorizationStatus {
+        case .notDetermined: manager.requestWhenInUseAuthorization()
+        case .denied, .restricted: denied = true; pendingStart = nil
+        default: manager.startUpdatingLocation()
+        }
+    }
+
+    func stop(conversationID: String) {
+        sharing.remove(conversationID)
+        until[conversationID] = nil
+        Task { await APIClient.shared.stopLocation(token: token, conversationID: conversationID) }
+        if sharing.isEmpty && pendingStart == nil { manager.stopUpdatingLocation() }
+    }
+
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        Task { @MainActor in
+            switch manager.authorizationStatus {
+            case .authorizedWhenInUse, .authorizedAlways:
+                if self.pendingStart != nil || !self.sharing.isEmpty { manager.startUpdatingLocation() }
+            case .denied, .restricted:
+                if self.pendingStart != nil { self.denied = true; self.pendingStart = nil }
+            default: break
+            }
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let loc = locations.last else { return }
+        Task { @MainActor in await self.handle(loc) }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {}
+
+    private func handle(_ loc: CLLocation) async {
+        if let p = pendingStart {
+            pendingStart = nil
+            do {
+                try await APIClient.shared.startLocation(token: token, conversationID: p.conversation, minutes: p.minutes,
+                                                         lat: loc.coordinate.latitude, lon: loc.coordinate.longitude,
+                                                         accuracy: max(0, loc.horizontalAccuracy))
+                sharing.insert(p.conversation)
+                until[p.conversation] = Date().addingTimeInterval(Double(p.minutes) * 60)
+                lastSent = (Date(), loc)
+            } catch {
+                if sharing.isEmpty { manager.stopUpdatingLocation() }
+            }
+            return
+        }
+        guard !sharing.isEmpty else { manager.stopUpdatingLocation(); return }
+        let now = Date()
+        if let last = lastSent {
+            let elapsed = now.timeIntervalSince(last.at)
+            let moved = loc.distance(from: last.location)
+            guard elapsed >= 10, moved >= 15 || elapsed >= 60 else { return }
+        }
+        lastSent = (now, loc)
+        for c in sharing {
+            if let u = until[c], u < now { stop(conversationID: c); continue }
+            let ok = await APIClient.shared.updateLocation(token: token, conversationID: c, lat: loc.coordinate.latitude,
+                                                           lon: loc.coordinate.longitude, accuracy: max(0, loc.horizontalAccuracy))
+            if !ok { sharing.remove(c); until[c] = nil }
+        }
+        if sharing.isEmpty { manager.stopUpdatingLocation() }
+    }
+}
+
+/// A live location message: a map while the share runs, "ended" after.
+struct LocationCard: View {
+    let token: String
+    let message: Message
+    let mine: Bool
+    @State private var position: LivePosition?
+    @State private var region = MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
+                                                   span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01))
+
+    private var until: Date? {
+        guard let s = message.signal, let d = s.data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let u = o["until"] as? Double else { return nil }
+        return Date(timeIntervalSince1970: u)
+    }
+    private var running: Bool { (until ?? .distantPast) > Date() && position != nil }
+
+    var body: some View {
+        HStack {
+            if mine { Spacer(minLength: 48) }
+            VStack(alignment: .leading, spacing: 6) {
+                if running, let p = position {
+                    Map(coordinateRegion: .constant(MKCoordinateRegion(
+                        center: CLLocationCoordinate2D(latitude: p.lat, longitude: p.lon),
+                        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01))),
+                        annotationItems: [p]) { item in
+                        MapMarker(coordinate: CLLocationCoordinate2D(latitude: item.lat, longitude: item.lon), tint: .red)
+                    }
+                    .frame(width: 240, height: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .allowsHitTesting(false)
+                    Button {
+                        let item = MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: p.lat, longitude: p.lon)))
+                        item.openInMaps()
+                    } label: { Label("location.open", systemImage: "map") }
+                    .font(.footnote.weight(.semibold))
+                    if let until { Text(String(format: NSLocalizedString("location.until", comment: ""), Self.time.string(from: until))).font(.caption2) }
+                } else {
+                    Label("location.ended", systemImage: "location.slash").font(.subheadline)
+                }
+            }
+            .foregroundStyle(mine ? Theme.onAccent : .white)
+            .padding(10)
+            .background(mine ? Theme.accent : Theme.surface, in: RoundedRectangle(cornerRadius: 18))
+            if !mine { Spacer(minLength: 48) }
+        }
+        .task(id: message.id) {
+            while !Task.isCancelled {
+                let all = await APIClient.shared.livePositions(token: token, conversationID: message.conversation_id)
+                position = all.first { $0.message_id == message.id && $0.user_id == message.sender_id }
+                if (until ?? .distantPast) < Date() { break }
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+            }
+        }
+    }
+
+    private static let time: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return f
+    }()
+}
+
+// MARK: video notes (round videos)
+
+/// Records a short front-camera video (up to 90 s) with the system camera.
+struct VideoNoteRecorder: UIViewControllerRepresentable {
+    let onVideo: (URL) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let c = UIImagePickerController()
+        c.sourceType = .camera
+        c.mediaTypes = ["public.movie"]
+        c.cameraCaptureMode = .video
+        if UIImagePickerController.isCameraDeviceAvailable(.front) { c.cameraDevice = .front }
+        c.videoMaximumDuration = 90
+        c.videoQuality = .typeMedium
+        c.delegate = context.coordinator
+        return c
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: VideoNoteRecorder
+        init(_ p: VideoNoteRecorder) { parent = p }
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let url = info[.mediaURL] as? URL { parent.onVideo(url) }
+            parent.dismiss()
+        }
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
+    }
+}
+
+enum VideoNotePrep {
+    /// A 480x480 centre crop, H.264 MP4, as the website records them. Returns the bytes and the length in ms.
+    static func square(from source: URL) async -> (data: Data, ms: Int)? {
+        let asset = AVURLAsset(url: source)
+        defer { try? FileManager.default.removeItem(at: source) }
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let natural = try? await track.load(.naturalSize),
+              let transform = try? await track.load(.preferredTransform),
+              let duration = try? await asset.load(.duration) else { return nil }
+        let rect = CGRect(origin: .zero, size: natural).applying(transform)
+        let w = abs(rect.width), h = abs(rect.height)
+        let side = min(w, h)
+        let out: CGFloat = 480
+        let scale = out / side
+
+        let composition = AVMutableVideoComposition()
+        composition.renderSize = CGSize(width: out, height: out)
+        composition.frameDuration = CMTime(value: 1, timescale: 30)
+        let instruction = AVMutableVideoCompositionInstruction()
+        instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
+        let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
+        var t = transform
+        t = t.concatenating(CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+        t = t.concatenating(CGAffineTransform(translationX: -(w - side) / 2, y: -(h - side) / 2))
+        t = t.concatenating(CGAffineTransform(scaleX: scale, y: scale))
+        layer.setTransform(t, at: .zero)
+        instruction.layerInstructions = [layer]
+        composition.instructions = [instruction]
+
+        let dest = FileManager.default.temporaryDirectory.appendingPathComponent("note-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: dest) }
+        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetMediumQuality) else { return nil }
+        export.outputURL = dest
+        export.outputFileType = .mp4
+        export.videoComposition = composition
+        export.shouldOptimizeForNetworkUse = true
+        await export.export()
+        guard export.status == .completed, let data = try? Data(contentsOf: dest) else { return nil }
+        return (data, Int(duration.seconds * 1000))
+    }
+
+    static func fileName(ms: Int) -> String { "videonote_\(Int(Date().timeIntervalSince1970 * 1000))_\(ms).mp4" }
+
+    static func isNote(_ m: Message) -> Bool {
+        m.kind == "file" && (m.file_name ?? "").hasPrefix("videonote_")
+    }
+
+    static func lengthMs(_ m: Message) -> Int {
+        let parts = (m.file_name ?? "").split(separator: "_")
+        guard parts.count >= 3, let ms = Int(parts[2].split(separator: ".").first ?? "") else { return 0 }
+        return ms
+    }
+}
+
+/// A round video message: the first frame in a circle with its length; tap to play.
+struct VideoNoteBubble: View {
+    let token: String
+    let message: Message
+    let mine: Bool
+    let onPlay: () -> Void
+    @State private var poster: UIImage?
+
+    var body: some View {
+        HStack {
+            if mine { Spacer(minLength: 48) }
+            ZStack(alignment: .bottomTrailing) {
+                ZStack {
+                    if let poster { Image(uiImage: poster).resizable().scaledToFill() } else { Theme.surface }
+                    Image(systemName: "play.fill").font(.title2.bold()).foregroundStyle(.white)
+                        .frame(width: 48, height: 48).background(.black.opacity(0.4), in: Circle())
+                }
+                .frame(width: 200, height: 200)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Theme.accent, lineWidth: 2))
+                Text(VoiceBubble.length(Int64(VideoNotePrep.lengthMs(message))))
+                    .font(.caption2.monospacedDigit()).foregroundStyle(.white)
+                    .padding(.horizontal, 6).padding(.vertical, 2).background(.black.opacity(0.5), in: Capsule())
+            }
+            .onTapGesture(perform: onPlay)
+            if !mine { Spacer(minLength: 48) }
+        }
+        .task(id: message.file_id) {
+            guard let fid = message.file_id else { return }
+            poster = await RemoteMedia.poster(token: token, fileID: fid)
+        }
+    }
+}

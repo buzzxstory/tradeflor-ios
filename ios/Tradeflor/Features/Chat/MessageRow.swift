@@ -17,6 +17,13 @@ struct MessageRow<Content: View>: View {
 
     static var quickEmoji: [String] { ["👍", "❤️", "😂", "😮", "😢", "🙏"] }
 
+    static func expiry(_ unix: Int64) -> String {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return String(format: NSLocalizedString("chat.disappears", comment: ""), f.string(from: Date(timeIntervalSince1970: Double(unix))))
+    }
+
     var body: some View {
         VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
             if let senderName, !senderName.isEmpty {
@@ -42,7 +49,10 @@ struct MessageRow<Content: View>: View {
                 .frame(maxWidth: 260, alignment: mine ? .trailing : .leading)
             }
             content()
-                .contextMenu { if !message.isDeleted { menu } }
+                .contextMenu { if !message.isDeleted && message.kind != "notice" { menu } }
+            if let exp = message.expires_at, exp > 0 {
+                Label(Self.expiry(exp), systemImage: "timer").font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 8)
+            }
             let reactions = message.reactionList(me: myID)
             if !reactions.isEmpty {
                 HStack(spacing: 4) {

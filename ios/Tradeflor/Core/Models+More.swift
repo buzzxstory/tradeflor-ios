@@ -1,0 +1,154 @@
+import Foundation
+
+struct GroupDetail: Decodable {
+    let conversation_id: String
+    let name: String
+    let description: String
+    let privacy: String
+    let avatar_id: String?
+    let handle: String?
+    let owner_id: String
+    let member_count: Int
+    let my_role: String?
+    let can_invite: Bool?
+
+    var isAdmin: Bool { my_role == "owner" || my_role == "admin" }
+}
+
+struct GroupMemberFull: Decodable, Identifiable {
+    let user_id: String
+    let username: String
+    let display_name: String?
+    let avatar_id: String?
+    let role: String
+    var id: String { user_id }
+    var title: String { (display_name?.isEmpty == false ? display_name : nil) ?? username }
+}
+
+struct ChatSettings: Decodable {
+    let disappear_secs: Int
+    let restricted: Bool
+}
+
+struct ScheduledMessage: Decodable, Identifiable {
+    let id: String
+    let conversation_id: String
+    let body: String
+    let send_at: Int64
+    let repeat_rule: String?
+    let status: String
+    let reason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, conversation_id, body, send_at, status, reason
+        case repeat_rule = "repeat"
+    }
+
+    var date: Date { Date(timeIntervalSince1970: Double(send_at)) }
+}
+
+struct LivePosition: Decodable, Identifiable {
+    let conversation_id: String
+    let user_id: String
+    let message_id: String
+    let lat: Double
+    let lon: Double
+    let accuracy: Double?
+    let until: Int64
+    let stopped: Bool?
+    var id: String { message_id + user_id }
+}
+
+/// A Smart Folder (desktop/src/shared/lib/folderRules.ts): chats added by hand, chats kept out, and optional rules.
+struct ChatFolder: Decodable, Identifiable, Hashable {
+    struct Condition: Decodable, Hashable {
+        let type: String
+        let value: String?
+        let values: [String]?
+        let enabled: Bool?
+    }
+    struct Rules: Decodable, Hashable {
+        let on: Bool
+        let match: String?
+        let conditions: [Condition]?
+    }
+
+    let id: String
+    let name: String
+    let items: [String]?
+    let exclude: [String]?
+    let rules: Rules?
+
+    /// Same order as the website: excluded -> out; listed -> in; else the enabled rules (all / any).
+    func contains(id cid: String, title: String, unread: Bool) -> Bool {
+        if exclude?.contains(cid) == true { return false }
+        if items?.contains(cid) == true { return true }
+        guard let r = rules, r.on else { return false }
+        let active = (r.conditions ?? []).filter { $0.enabled ?? true }
+        guard !active.isEmpty else { return false }
+        let results = active.map { c -> Bool in
+            switch c.type {
+            case "kind": return (c.value == "group") == cid.hasPrefix("grp_")
+            case "name_contains":
+                let t = Self.fold(title)
+                return (c.values ?? []).contains { !$0.isEmpty && t.contains(Self.fold($0)) }
+            case "in_list": return (c.values ?? []).contains(cid)
+            case "unread": return (c.value == "yes") == unread
+            default: return false // muted / pinned need prefs the app does not load yet
+            }
+        }
+        return r.match == "any" ? results.contains(true) : !results.contains(false)
+    }
+
+    static func fold(_ s: String) -> String {
+        var t = s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+        for (a, b) in [("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ة", "ه"), ("ى", "ي")] { t = t.replacingOccurrences(of: a, with: b) }
+        return t
+    }
+}
+
+struct OfficialPost: Decodable, Identifiable, Equatable {
+    let id: String
+    let kind: String
+    let mime: String?
+    let title: String?
+    let caption: String?
+    let cta_label: String?
+    let cta_url: String?
+    let created_at: Int64
+    let seen: Bool
+    let poster: Bool?
+}
+
+struct OfficialChannel: Decodable {
+    let name: String
+    let posts: [OfficialPost]?
+    let all_seen: Bool
+}
+
+struct CalendarEvent: Decodable, Identifiable, Equatable {
+    let id: String
+    let date_time: String
+    let country: String
+    let country_code: String
+    let currency: String
+    let event: String
+    let impact: String
+    let previous: String?
+    let forecast: String?
+    let actual: String?
+
+    var date: Date? {
+        let f = ISO8601DateFormatter()
+        if let d = f.date(from: date_time) { return d }
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: date_time)
+    }
+}
+
+struct SavedEvent: Decodable, Identifiable {
+    let event_key: String
+    let title: String
+    let event_at: Int64
+    var id: String { event_key }
+}

@@ -12,21 +12,35 @@ struct ChatListView: View {
     @State private var path: [ConversationSummary] = []
     @State private var ciOpened = false
     @State private var showNew = false
+    @State private var folders: [ChatFolder] = []
+    @State private var filter = "all" // all | unread | <folder id>
 
     /// Live events refresh the list at once; this slow poll only covers a socket that is down.
     private let refreshEvery: UInt64 = 30
 
     private var shown: [ConversationSummary] {
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return chats }
-        return chats.filter {
+        let base: [ConversationSummary]
+        switch filter {
+        case "all": base = chats
+        case "unread": base = chats.filter { $0.unread_count > 0 }
+        default:
+            if let f = folders.first(where: { $0.id == filter }) {
+                base = chats.filter { f.contains(id: $0.conversation_id, title: $0.title, unread: $0.unread_count > 0) }
+            } else { base = chats }
+        }
+        guard !q.isEmpty else { return base }
+        return base.filter {
             $0.title.localizedCaseInsensitiveContains(q) || $0.peer_username.localizedCaseInsensitiveContains(q)
         }
     }
 
     var body: some View {
         NavigationStack(path: $path) {
-            content
+            VStack(spacing: 0) {
+                folderBar
+                content
+            }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Theme.ground.ignoresSafeArea())
                 .toolbarBackground(Theme.ground, for: .navigationBar)
@@ -55,12 +69,36 @@ struct ChatListView: View {
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             await load()
+            if let t = store.session?.token { folders = (try? await APIClient.shared.folders(token: t)) ?? folders }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: refreshEvery * 1_000_000_000)
                 if Task.isCancelled { break }
                 await load(quiet: true)
             }
         }
+    }
+
+    /// All / Unread / my Smart Folders (made on the website; the same rules decide what is in them).
+    private var folderBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                chip("all", NSLocalizedString("folders.all", comment: ""))
+                chip("unread", NSLocalizedString("folders.unread", comment: ""))
+                ForEach(folders) { f in chip(f.id, f.name) }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+        }
+    }
+
+    private func chip(_ id: String, _ title: String) -> some View {
+        Button { filter = id } label: {
+            Text(title).font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 14).padding(.vertical, 6)
+                .foregroundStyle(filter == id ? Theme.onAccent : .white)
+                .background(filter == id ? Theme.accent : Theme.surface, in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder private var content: some View {
@@ -175,8 +213,10 @@ private struct ChatRow: View {
         switch chat.last_message_kind {
         case "voice": body = NSLocalizedString("chats.kind.voice", comment: "")
         case "image": body = NSLocalizedString("chats.kind.image", comment: "")
-        case "file": body = NSLocalizedString("chats.kind.file", comment: "")
+        case "file": body = chat.last_file_type == "video_note" ? "🎥 " + NSLocalizedString("note.video", comment: "")
+            : NSLocalizedString("chats.kind.file", comment: "")
         case "locked": body = NSLocalizedString("chats.kind.locked", comment: "")
+        case "location": body = "📍 " + NSLocalizedString("location.live", comment: "")
         default: body = chat.last_message
         }
         if chat.last_message_mine && chat.last_message_kind != "call" {

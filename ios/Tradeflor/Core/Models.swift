@@ -27,6 +27,8 @@ struct ConversationSummary: Decodable, Identifiable, Hashable {
     let last_message_mine: Bool
     let unread_count: Int
     let last_message_kind: String?
+    var last_file_type: String? = nil
+    var disappear_secs: Int? = nil
 
     var id: String { conversation_id }
 
@@ -68,6 +70,8 @@ struct Message: Decodable, Identifiable, Equatable {
     let reply_sender_id: String?
     let reply_snippet: String?
     let forwarded: Bool?
+    let expires_at: Int64?
+    let signal: String?
 
     /// {"emoji": [userID, ...]} -> [(emoji, count, mine)] in a stable order.
     func reactionList(me: String) -> [Reaction] {

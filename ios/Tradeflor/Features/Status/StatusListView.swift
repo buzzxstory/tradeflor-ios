@@ -28,6 +28,10 @@ struct StatusListView: View {
                 Section {
                     myRow
                 }
+                Section {
+                    OfficialRow(token: token)
+                }
+                .listRowBackground(Theme.surface)
                 if !recent.isEmpty {
                     Section(header: Text("status.recent")) {
                         ForEach(recent) { g in row(g) }

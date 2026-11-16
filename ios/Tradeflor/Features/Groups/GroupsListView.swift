@@ -7,6 +7,8 @@ struct GroupsListView: View {
     @State private var groups: [GroupSummary] = []
     @State private var loading = true
     @State private var path: [GroupSummary] = []
+    @State private var showCreate = false
+    @State private var showJoin = false
 
     private var token: String { store.session?.token ?? "" }
 
@@ -32,6 +34,17 @@ struct GroupsListView: View {
             .navigationTitle(Text("groups.title"))
             .navigationDestination(for: GroupSummary.self) { g in ChatView(chat: g.asConversation, canSend: g.can_send) }
             .refreshable { await load() }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Menu {
+                        Button { showCreate = true } label: { Label("group.create", systemImage: "plus") }
+                        Button { showJoin = true } label: { Label("group.join", systemImage: "link") }
+                    } label: { Image(systemName: "plus.circle.fill").font(.title3) }
+                    .accessibilityLabel(Text("group.create"))
+                }
+            }
+            .sheet(isPresented: $showCreate) { CreateGroupView { id in Task { await open(id) } } }
+            .sheet(isPresented: $showJoin) { JoinGroupView { id in Task { await open(id) } } }
         }
         .task { await load() }
         .onReceive(live.messages) { m in if m.conversation_id.hasPrefix("grp_") { Task { await load() } } }
@@ -65,6 +78,11 @@ struct GroupsListView: View {
         if g.last_message.isEmpty { return String(format: NSLocalizedString("groups.members", comment: ""), g.member_count) }
         if let n = g.last_sender_name, !n.isEmpty { return "\(n): \(g.last_message)" }
         return g.last_message
+    }
+
+    private func open(_ id: String) async {
+        await load()
+        if let g = groups.first(where: { $0.conversation_id == id }) { path = [g] }
     }
 
     private func load() async {
