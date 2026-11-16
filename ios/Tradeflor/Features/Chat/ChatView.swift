@@ -365,6 +365,13 @@ struct ChatView: View {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 showInfo = true
             }
+            // CI only: TF_CI_MEMBER=1 opens a member's Contact info (the first member who is not me and not the owner)
+            if isGroup, ProcessInfo.processInfo.environment["TF_CI_MEMBER"] == "1" {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if let m = members.first(where: { $0.user_id != me && roleOf($0.user_id) != "owner" }) {
+                    profileFor = MemberProfileRef(userID: m.user_id, username: m.username)
+                }
+            }
         }
         #endif
         .fullScreenCover(item: $openDoc) { d in DocumentPreview(url: d.url).ignoresSafeArea() }
