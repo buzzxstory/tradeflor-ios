@@ -118,6 +118,13 @@ extension APIClient {
                                       "TimeZone": TimeZone.current.identifier, "Repeat": repeatRule])
     }
 
+    /// Change a pending (or failed) scheduled message: text, time and repeat.
+    func editScheduled(token: String, id: String, body: String, at date: Date, repeatRule: String) async throws {
+        _ = try await postJSON("scheduled/\(id)/edit", token: token,
+                               body: ["Body": body, "SendAt": Int64(date.timeIntervalSince1970),
+                                      "TimeZone": TimeZone.current.identifier, "Repeat": repeatRule])
+    }
+
     func cancelScheduled(token: String, id: String) async throws {
         _ = try await postJSON("scheduled/\(id)/cancel", token: token, body: [:])
     }

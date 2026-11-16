@@ -10,6 +10,9 @@ struct SignUpView: View {
     @State private var email = ""
     @State private var phone = ""
     @State private var password = ""
+    @State private var confirmPassword = "" // checked on this screen only; never sent
+    @State private var phoneNote: (ok: Bool, text: String)?
+    @State private var showForgot = false
     @State private var usernameNote: String?
     @State private var busy = false
     @State private var error: String?
@@ -20,7 +23,7 @@ struct SignUpView: View {
     }
     private var ready: Bool {
         !fullName.trimmingCharacters(in: .whitespaces).isEmpty && cleanUsername.count >= 3 && email.contains("@")
-            && !phone.isEmpty && password.count >= 8 && usernameNote == nil
+            && password.count >= 8 && confirmPassword == password && usernameNote == nil && (phoneNote?.ok ?? true)
     }
 
     var body: some View {
@@ -39,12 +42,33 @@ struct SignUpView: View {
                     TextField("signup.email", text: $email)
                         .textContentType(.emailAddress).keyboardType(.emailAddress)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    TextField("signup.phone", text: $phone).textContentType(.telephoneNumber).keyboardType(.phonePad)
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("signup.phone.optional", text: $phone).textContentType(.telephoneNumber).keyboardType(.phonePad)
+                            .onChange(of: phone) { _ in Task { await checkPhone() } }
+                        Text(phoneNote.map { $0.ok ? String(format: NSLocalizedString("signup.phone.saved", comment: ""), $0.text) : $0.text }
+                             ?? NSLocalizedString("signup.phone.help", comment: ""))
+                            .font(.caption).foregroundStyle(phoneNote.map { $0.ok ? Color.green : Color.red } ?? .secondary)
+                    }
                     SecureField("signup.password", text: $password).textContentType(.newPassword)
+                    VStack(alignment: .leading, spacing: 4) {
+                        SecureField("signup.password.confirm", text: $confirmPassword).textContentType(.newPassword)
+                        if !confirmPassword.isEmpty && confirmPassword != password {
+                            Text("signup.password.mismatch").font(.caption).foregroundStyle(.red)
+                        }
+                    }
                 }
                 .listRowBackground(Theme.surface)
                 if let error {
-                    Section { Text(error).foregroundStyle(.red).font(.footnote) }.listRowBackground(Theme.surface)
+                    Section {
+                        if error.lowercased().contains("already registered") {
+                            Text("signup.taken").foregroundStyle(.red).font(.footnote)
+                            Button("signup.taken.signin") { dismiss() }
+                            Button("signup.taken.forgot") { showForgot = true }
+                        } else {
+                            Text(error).foregroundStyle(.red).font(.footnote)
+                        }
+                    }
+                    .listRowBackground(Theme.surface)
                 }
                 Section {
                     Button {
@@ -62,6 +86,7 @@ struct SignUpView: View {
             .navigationTitle(Text("signup.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
+            .sheet(isPresented: $showForgot) { ForgotPasswordView() }
             .navigationDestination(isPresented: Binding(get: { pendingUserID != nil }, set: { if !$0 { pendingUserID = nil } })) {
                 if let id = pendingUserID {
                     VerifyEmailView(userID: id, username: cleanUsername, displayName: fullName.trimmingCharacters(in: .whitespaces))
@@ -77,6 +102,28 @@ struct SignUpView: View {
         guard u == cleanUsername else { return }
         let r = await APIClient.shared.usernameAvailableSignup(u)
         usernameNote = r.available ? nil : (r.reason ?? NSLocalizedString("signup.username.taken", comment: ""))
+    }
+
+    /// POST /auth/phone-check (no sign-in): the number as it will be saved, or why it is not valid.
+    private func checkPhone() async {
+        let p = phone.trimmingCharacters(in: .whitespaces)
+        guard !p.isEmpty else { phoneNote = nil; return }
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        guard p == phone.trimmingCharacters(in: .whitespaces) else { return }
+        let api = APIClient.shared
+        guard let (data, http) = try? await api.send(api.request("auth/phone-check", method: "POST", token: nil, body: ["Phone": p])) else {
+            phoneNote = nil
+            return
+        }
+        if http.statusCode == 200 {
+            let f = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["formatted"] as? String ?? p
+            phoneNote = (true, f)
+        } else if http.statusCode == 400 {
+            let why = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            phoneNote = (false, why.isEmpty ? NSLocalizedString("signup.phone.bad", comment: "") : why)
+        } else {
+            phoneNote = nil
+        }
     }
 
     private func submit() async {

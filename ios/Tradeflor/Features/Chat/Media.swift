@@ -136,5 +136,6 @@ struct PhotoViewer: View {
             .padding()
             .accessibilityLabel(Text("chat.close"))
         }
+        .overlay(alignment: .topLeading) { SaveMediaButton(token: token, fileID: fileID, video: false) }
     }
 }

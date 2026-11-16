@@ -73,6 +73,8 @@ struct ChatView: View {
     @State private var jumpTarget: String?
     @State private var themeID = ""
     @State private var focusDoc: FocusDoc?
+    @State private var openDoc: LocalDoc?
+    @State private var openingDoc = false
     // hold-to-record voice: press = record, release = send, slide left = cancel, slide up = lock (hands free)
     @State private var micPressed = false
     @State private var holdRec = false
@@ -151,7 +153,8 @@ struct ChatView: View {
                                            pin: { on in Task { await setPin(m, on) } },
                                            report: { flash("chat.report.soon") },
                                            moreReactions: { reactTarget = m; showEmoji = true },
-                                           comments: { commentsFor = m })) {
+                                           comments: { commentsFor = m },
+                                           save: m.file_id == nil ? nil : { Task { await saveAttachment(m) } })) {
                                 messageContent(m)
                             }
                             .id(m.id)
@@ -296,6 +299,7 @@ struct ChatView: View {
             }
         }
         .sheet(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft) }
+        .fullScreenCover(item: $openDoc) { d in DocumentPreview(url: d.url).ignoresSafeArea() }
         .sheet(isPresented: $showFocus) {
             if let doc = focusDoc {
                 SmartFocusSheet(groupID: chat.conversation_id, members: members, me: me, initial: doc) { saved in
@@ -447,7 +451,12 @@ struct ChatView: View {
         .fullScreenCover(item: $watching) { v in
             VideoScreen(token: token, fileID: v.id)
         }
+        .onAppear {
+            LocalNotifier.shared.openConversation = chat.conversation_id
+            LocalNotifier.shared.clear(conversation: chat.conversation_id)
+        }
         .onDisappear {
+            if LocalNotifier.shared.openConversation == chat.conversation_id { LocalNotifier.shared.openConversation = nil }
             VoicePlayer.shared.stop()
             if recorder.recording { recorder.cancel() }
         }
@@ -1113,9 +1122,33 @@ struct ChatView: View {
                 RemoteImage(token: token, fileID: fid)
             }
             .onTapGesture { viewing = ViewedPhoto(id: fid) }
+        } else if m.kind == "file", m.file_id != nil, !m.isDeleted {
+            FileBubble(message: m, mine: m.sender_id == me, state: m.sender_id == me ? receipt(m) : nil) {
+                Task { await openDocument(m) }
+            }
         } else {
             Bubble(text: displayText(m), mine: m.sender_id == me, date: m.date,
                    state: m.sender_id == me ? receipt(m) : nil, faded: m.isDeleted)
+        }
+    }
+
+    private func openDocument(_ m: Message) async {
+        guard let fid = m.file_id, !openingDoc else { return }
+        openingDoc = true
+        defer { openingDoc = false }
+        flash("file.opening")
+        if let url = await MediaSaver.localFile(token: token, fileID: fid, name: m.file_name) { openDoc = LocalDoc(url: url) } else { flash("file.failed") }
+    }
+
+    /// Save As...: photos and videos go to Photos; documents open in Quick Look (Save to Files / share from there).
+    private func saveAttachment(_ m: Message) async {
+        guard let fid = m.file_id else { return }
+        let video = (m.file_mime ?? "").hasPrefix("video/") || VideoNotePrep.isNote(m)
+        if m.kind == "image" || video {
+            let r = await MediaSaver.saveToPhotos(token: token, fileID: fid, video: video)
+            flash(r == .saved ? "media.saved" : (r == .denied ? "media.denied" : "media.failed"))
+        } else {
+            await openDocument(m)
         }
     }
 

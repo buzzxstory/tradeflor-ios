@@ -21,6 +21,8 @@ struct MessageRowActions {
     var report: () -> Void = {}
     var moreReactions: () -> Void = {}
     var comments: () -> Void = {}
+    /// Save As... (photos and videos to Photos, documents to Files / share); nil when the message has no attachment.
+    var save: (() -> Void)?
 }
 
 /// Wraps any message bubble with what all of them share: sender + role tag (groups), "Forwarded", the quoted
@@ -160,6 +162,9 @@ struct MessageRow<Content: View>: View {
             Button { onCopy() } label: { Label("chat.copy.text", systemImage: "doc.on.doc") }
         }
         Button { actions.copyLink() } label: { Label("chat.copy.link", systemImage: "link") }
+        if let save = actions.save, !options.restricted, !message.isDeleted {
+            Button { save() } label: { Label("chat.save.as", systemImage: "square.and.arrow.down") }
+        }
         if !options.restricted {
             Button { onForward() } label: { Label("chat.forward", systemImage: "arrowshape.turn.up.right") }
         }

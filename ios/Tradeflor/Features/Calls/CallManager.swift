@@ -107,8 +107,20 @@ final class CallManager: NSObject, ObservableObject {
 
     // MARK: user actions
 
-    func start(conversationID: String, peerName: String, peerID: String? = nil) {
+    struct PendingCall: Identifiable { let id = UUID(); let conversationID: String; let peerName: String; let peerID: String? }
+    /// Settings › Calls › Ask Before Starting a Call: the call waiting for "Call" in the confirmation.
+    @Published var confirming: PendingCall?
+
+    func start(conversationID: String, peerName: String, peerID: String? = nil, confirmed: Bool = false) {
         guard phase == .idle, enabled else { return }
+        if !confirmed {
+            Task {
+                let ask = ((try? await APIClient.shared.stSettings(token: token)) ?? [:])["calls.confirm"] ?? false
+                if ask { confirming = PendingCall(conversationID: conversationID, peerName: peerName, peerID: peerID) }
+                else { start(conversationID: conversationID, peerName: peerName, peerID: peerID, confirmed: true) }
+            }
+            return
+        }
         Task {
             guard await micAllowed() else { endReason = "mic_denied"; finish(); return }
             let id = UUID()

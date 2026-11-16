@@ -12,8 +12,17 @@ final class VoiceRecorder: ObservableObject {
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var levels: [Double] = []
     @Published var denied = false
+    /// Paused mid-recording (the website's VoiceComposer pause / resume).
+    @Published private(set) var paused = false
+    /// Stopped and waiting for Send or Delete, with a preview to listen to first.
+    @Published private(set) var reviewing = false
+    @Published private(set) var previewPlaying = false
+    @Published private(set) var previewProgress: Double = 0
 
     private var recorder: AVAudioRecorder?
+    private var reviewDuration: TimeInterval = 0
+    private var preview: AVAudioPlayer?
+    private var previewTask: Task<Void, Never>?
     private var timer: Timer?
     private var url: URL?
 
@@ -58,14 +67,62 @@ final class VoiceRecorder: ObservableObject {
         let db = Double(r.averagePower(forChannel: 0)) // -160 ... 0
         levels.append(max(0, min(1, (db + 50) / 50)))
         elapsed = r.currentTime
-        if !r.isRecording { timer?.invalidate() }
+        if !r.isRecording && !paused { timer?.invalidate() }
+    }
+
+    func pause() {
+        guard let r = recorder, r.isRecording else { return }
+        r.pause()
+        paused = true
+    }
+
+    func resume() {
+        guard let r = recorder, paused, !reviewing else { return }
+        r.record()
+        paused = false
+    }
+
+    /// Stop recording and listen before sending.
+    func review() {
+        guard let r = recorder, !reviewing else { return }
+        reviewDuration = r.currentTime
+        r.stop()
+        timer?.invalidate()
+        paused = false
+        reviewing = true
+        previewProgress = 0
+    }
+
+    func togglePreview() {
+        guard reviewing, let url else { return }
+        if previewPlaying {
+            preview?.pause()
+            previewPlaying = false
+            return
+        }
+        try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+        try? AVAudioSession.sharedInstance().setActive(true)
+        if preview == nil { preview = try? AVAudioPlayer(contentsOf: url) }
+        guard let p = preview else { return }
+        if p.currentTime >= p.duration - 0.05 { p.currentTime = 0 }
+        p.play()
+        previewPlaying = true
+        previewTask?.cancel()
+        previewTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                guard let self, let p = self.preview else { return }
+                self.previewProgress = p.duration > 0 ? p.currentTime / p.duration : 0
+                if !p.isPlaying { self.previewPlaying = false; if self.previewProgress > 0.97 { self.previewProgress = 1 }; return }
+            }
+        }
     }
 
     /// Stops and returns the recording, or nil if it was too short to be a message.
     func finish() -> (data: Data, durationMs: Int, waveform: [Double])? {
         guard let r = recorder, let url else { return nil }
-        let duration = r.currentTime
-        r.stop()
+        let duration = reviewing ? reviewDuration : r.currentTime
+        if !reviewing { r.stop() }
         cleanup()
         defer { try? FileManager.default.removeItem(at: url) }
         guard duration >= 0.7, let data = try? Data(contentsOf: url) else { return nil }
@@ -81,6 +138,14 @@ final class VoiceRecorder: ObservableObject {
     private func cleanup() {
         timer?.invalidate()
         timer = nil
+        previewTask?.cancel()
+        previewTask = nil
+        preview?.stop()
+        preview = nil
+        previewPlaying = false
+        previewProgress = 0
+        paused = false
+        reviewing = false
         recorder = nil
         url = nil
         recording = false
@@ -363,17 +428,37 @@ struct RecordingBar: View {
     let onSend: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button(action: onCancel) {
-                Image(systemName: "trash").font(.system(size: 20)).foregroundStyle(.red).frame(width: 40, height: 40)
+                Image(systemName: "trash").font(.system(size: 20)).foregroundStyle(.red).frame(width: 38, height: 40)
             }
             .accessibilityLabel(Text("chat.voice.cancel"))
-            Circle().fill(.red).frame(width: 8, height: 8)
-            Text(VoiceBubble.length(Int64(recorder.elapsed * 1000)))
-                .monospacedDigit()
-                .foregroundStyle(.white)
-            Waveform(samples: Array(recorder.levels.suffix(40)), progress: 1, color: Theme.accent)
-                .frame(height: 26)
+            if recorder.reviewing {
+                Button { recorder.togglePreview() } label: {
+                    Image(systemName: recorder.previewPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.accent).frame(width: 34, height: 40)
+                }
+                .accessibilityLabel(Text(LocalizedStringKey(recorder.previewPlaying ? "chat.voice.preview.pause" : "chat.voice.preview")))
+                Waveform(samples: VoiceRecorder.downsample(recorder.levels, to: 40), progress: recorder.previewProgress, color: Theme.accent)
+                    .frame(height: 26)
+                Text(VoiceBubble.length(Int64(recorder.elapsed * 1000))).monospacedDigit().foregroundStyle(.white)
+            } else {
+                Circle().fill(.red).frame(width: 8, height: 8).opacity(recorder.paused ? 0.3 : 1)
+                Text(VoiceBubble.length(Int64(recorder.elapsed * 1000)))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                Waveform(samples: Array(recorder.levels.suffix(40)), progress: 1, color: Theme.accent)
+                    .frame(height: 26)
+                Button { if recorder.paused { recorder.resume() } else { recorder.pause() } } label: {
+                    Image(systemName: recorder.paused ? "mic.fill" : "pause.fill")
+                        .font(.system(size: 16, weight: .bold)).foregroundStyle(recorder.paused ? .red : .white).frame(width: 32, height: 40)
+                }
+                .accessibilityLabel(Text(LocalizedStringKey(recorder.paused ? "chat.voice.resume" : "chat.voice.pause")))
+                Button { recorder.review() } label: {
+                    Image(systemName: "stop.circle").font(.system(size: 20, weight: .semibold)).foregroundStyle(.white).frame(width: 32, height: 40)
+                }
+                .accessibilityLabel(Text("chat.voice.review"))
+            }
             Button(action: onSend) {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 17, weight: .bold))

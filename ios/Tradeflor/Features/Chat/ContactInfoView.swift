@@ -57,7 +57,7 @@ struct ContactInfoView: View {
                             .frame(maxWidth: .infinity, alignment: .leading).padding(14)
                         }
                     }
-                    mediaCard
+                    SharedMediaCard(token: token, conversationID: chat.conversation_id)
                     TFCard {
                         Button { showMute = true } label: {
                             TFRow(icon: "bell", title: NSLocalizedString("ci.notifications", comment: ""),
@@ -439,6 +439,7 @@ struct ScheduleSheet: View {
     @State private var when = Date().addingTimeInterval(3600)
     @State private var repeatRule = "none"
     @State private var items: [ScheduledMessage] = []
+    @State private var editingID: String?
     @State private var busy = false
     @State private var error: String?
 
@@ -456,9 +457,14 @@ struct ScheduleSheet: View {
                         Text("schedule.weekly").tag("weekly")
                     }
                     Button { Task { await add() } } label: {
-                        HStack { Spacer(); if busy { ProgressView() } else { Text("schedule.add").bold() }; Spacer() }
+                        HStack { Spacer(); if busy { ProgressView() } else { Text(LocalizedStringKey(editingID == nil ? "schedule.add" : "schedule.save")).bold() }; Spacer() }
                     }
                     .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if editingID != nil {
+                        Button("schedule.edit.cancel") { editingID = nil; text = ""; repeatRule = "none" }
+                    }
+                } header: {
+                    if editingID != nil { Text("schedule.editing") }
                 }
                 .listRowBackground(Theme.surface)
                 if let error { Section { Text(error).foregroundStyle(.red).font(.footnote) }.listRowBackground(Theme.surface) }
@@ -482,9 +488,16 @@ struct ScheduleSheet: View {
                                         Label("schedule.cancel", systemImage: "xmark")
                                     }
                                     Button { Task { await act { try await APIClient.shared.sendScheduledNow(token: token, id: s.id) } } } label: {
-                                        Label("schedule.now", systemImage: "paperplane")
+                                        Label(LocalizedStringKey(s.status == "failed" ? "schedule.retry" : "schedule.now"), systemImage: "paperplane")
                                     }
                                     .tint(Theme.accent)
+                                    Button {
+                                        editingID = s.id
+                                        text = s.body
+                                        when = max(s.date, Date().addingTimeInterval(120))
+                                        repeatRule = s.repeat_rule ?? "none"
+                                    } label: { Label("schedule.edit", systemImage: "pencil") }
+                                    .tint(.orange)
                                 }
                             }
                         }
@@ -519,10 +532,15 @@ struct ScheduleSheet: View {
         busy = true
         error = nil
         defer { busy = false }
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         await act {
-            try await APIClient.shared.schedule(token: token, conversationID: chat.conversation_id,
-                                                body: text.trimmingCharacters(in: .whitespacesAndNewlines), at: when, repeatRule: repeatRule)
+            if let id = editingID {
+                try await APIClient.shared.editScheduled(token: token, id: id, body: body, at: when, repeatRule: repeatRule)
+            } else {
+                try await APIClient.shared.schedule(token: token, conversationID: chat.conversation_id, body: body, at: when, repeatRule: repeatRule)
+            }
             text = ""
+            editingID = nil
         }
     }
 }

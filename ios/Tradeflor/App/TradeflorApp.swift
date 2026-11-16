@@ -23,6 +23,7 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var calls = CallManager.shared
     @ObservedObject private var badges = BadgeStore.shared
+    @ObservedObject private var notifier = LocalNotifier.shared
     @State private var needsSetup = false
     @State private var tab: String = {
         #if DEBUG
@@ -61,6 +62,19 @@ struct RootView: View {
             }
         }
         .tint(Theme.accent)
+        .onChange(of: notifier.tappedConversation) { id in
+            // a tapped notification: the right tab; the list there opens the chat
+            if let id { tab = id.hasPrefix("grp_") ? "groups" : "chats" }
+        }
+        .confirmationDialog(Text(String(format: NSLocalizedString("call.confirm.title", comment: ""), calls.confirming?.peerName ?? "")),
+                            isPresented: Binding(get: { calls.confirming != nil }, set: { if !$0 { calls.confirming = nil } }),
+                            titleVisibility: .visible) {
+            Button("call.confirm.go") {
+                if let c = calls.confirming { calls.start(conversationID: c.conversationID, peerName: c.peerName, peerID: c.peerID, confirmed: true) }
+                calls.confirming = nil
+            }
+            Button("grp.cancel", role: .cancel) { calls.confirming = nil }
+        }
         .fullScreenCover(isPresented: $calls.showScreen) { CallScreen(calls: calls).environmentObject(store) }
         .safeAreaInset(edge: .top, spacing: 0) {
             if !calls.showScreen && calls.phase != .idle && calls.phase != .ended {
@@ -110,8 +124,10 @@ struct RootView: View {
         if let s = store.session {
             live.start(token: s.token)
             CallManager.shared.attach(live: live, token: s.token, userID: s.userID)
+            LocalNotifier.shared.attach(live: live, token: s.token, userID: s.userID)
         } else {
             CallManager.shared.detach()
+            LocalNotifier.shared.detach()
             live.stop()
         }
     }

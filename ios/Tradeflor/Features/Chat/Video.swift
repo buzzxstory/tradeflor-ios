@@ -83,6 +83,7 @@ struct VideoScreen: View {
             .padding()
             .accessibilityLabel(Text("chat.close"))
         }
+        .overlay(alignment: .topLeading) { SaveMediaButton(token: token, fileID: fileID, video: true).padding(.top, 50) }
         .onAppear {
             VoicePlayer.shared.stop()
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)

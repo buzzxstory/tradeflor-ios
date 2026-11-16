@@ -625,6 +625,7 @@ struct GroupInfoView: View {
             }
         }
 
+        SharedMediaCard(token: token, conversationID: groupID)
         if let s = stats {
             TFSectionLabel(text: NSLocalizedString("grp.stats", comment: ""))
             TFCard {

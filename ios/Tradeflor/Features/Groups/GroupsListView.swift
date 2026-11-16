@@ -63,6 +63,14 @@ struct GroupsListView: View {
             .background(Theme.panelGradient.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: GroupSummary.self) { g in ChatView(chat: g.asConversation, canSend: g.can_send) }
+            .onReceive(LocalNotifier.shared.$tappedConversation) { id in
+                guard let id, id.hasPrefix("grp_") else { return }
+                Task {
+                    if groups.isEmpty, let token = store.session?.token { groups = (try? await APIClient.shared.groups(token: token)) ?? [] }
+                    if let g = groups.first(where: { $0.conversation_id == id }) { path = [g] }
+                    LocalNotifier.shared.tappedConversation = nil
+                }
+            }
             .sheet(isPresented: $showCreate) { CreateGroupView { id in Task { await open(id) } } }
             .sheet(isPresented: $showJoin) { JoinGroupView { id in Task { await open(id) } } }
             .sheet(item: $joining) { d in
