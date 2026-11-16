@@ -389,7 +389,9 @@ struct ChatView: View {
         guard !incoming.isEmpty else { return }
         var byID = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for m in incoming { byID[m.id] = m }
-        let next = byID.values.sorted { $0.seq < $1.seq }
+        let now = Int64(Date().timeIntervalSince1970)
+        // disappearing messages leave once their time is up (the server erases them too)
+        let next = byID.values.filter { ($0.expires_at ?? 0) == 0 || ($0.expires_at ?? 0) > now }.sorted { $0.seq < $1.seq }
         if next != messages { messages = next }
     }
 

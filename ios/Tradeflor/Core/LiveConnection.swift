@@ -161,7 +161,7 @@ final class LiveConnection: ObservableObject {
             } else if let id = env.conversation_id {
                 changes.send(id)
             }
-        case "reaction", "deleted", "receipt", "edited", "conversation":
+        case "reaction", "deleted", "receipt", "edited", "conversation", "vanished", "notice", "scheduled":
             if let id = env.conversation_id { changes.send(id) }
         default:
             break

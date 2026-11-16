@@ -213,8 +213,13 @@ private struct ChatRow: View {
         switch chat.last_message_kind {
         case "voice": body = NSLocalizedString("chats.kind.voice", comment: "")
         case "image": body = NSLocalizedString("chats.kind.image", comment: "")
-        case "file": body = chat.last_file_type == "video_note" ? "🎥 " + NSLocalizedString("note.video", comment: "")
-            : NSLocalizedString("chats.kind.file", comment: "")
+        case "file":
+            switch chat.last_file_type {
+            case "video_note": body = "🎥 " + NSLocalizedString("note.video", comment: "")
+            case "video": body = "🎬 " + NSLocalizedString("chat.video", comment: "")
+            case "audio": body = "🎵 " + NSLocalizedString("chats.kind.file", comment: "")
+            default: body = "📎 " + NSLocalizedString("chats.kind.file", comment: "")
+            }
         case "locked": body = NSLocalizedString("chats.kind.locked", comment: "")
         case "location": body = "📍 " + NSLocalizedString("location.live", comment: "")
         default: body = chat.last_message
