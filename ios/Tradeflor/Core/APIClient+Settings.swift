@@ -87,8 +87,8 @@ extension APIClient {
     }
 
     func stAdminOverview(token: String) async throws -> AdminOverview {
-        let tz = TimeZone.current.identifier
-        return try decode(AdminOverview.self, try await getJSON("admin/overview?tz=\(APIClient.q(tz))", token: token))
+        // the website sends the offset from UTC in seconds
+        return try decode(AdminOverview.self, try await getJSON("admin/overview?tz=\(TimeZone.current.secondsFromGMT())", token: token))
     }
 
     func stAdminUsers(token: String, query: String, page: Int) async throws -> AdminUsersPage {

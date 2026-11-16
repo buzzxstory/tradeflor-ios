@@ -4,27 +4,59 @@ import SwiftUI
 /// Overview, Users (search, detail, suspend / restore) and the TRADEFLOR Official statuses (publish, remove, delete).
 struct AdminCenterPage: View {
     let role: String
-    @State private var tab = "overview"
+    @EnvironmentObject private var store: SessionStore
+    @State private var tab = ""
+    @State private var me: AdminMe?
+    @State private var openUser: AdminUser?
+
+    private var tabs: [(String, String)] {
+        guard let me else { return [] }
+        var t: [(String, String)] = []
+        if me.users == true { t += [("overview", "adm.overview"), ("users", "adm.users")] }
+        if me.content == true { t += [("official", "adm.official"), ("library", "adm.library")] }
+        if me.audit == true { t.append(("audit", "adm.audit")) }
+        t.append(("settings", "adm.settings"))
+        return t
+    }
 
     var body: some View {
         SettingsPage(title: NSLocalizedString("adm.title", comment: ""), subtitle: NSLocalizedString("adm.sub", comment: "")) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 7) {
-                    FilterChip(title: NSLocalizedString("adm.overview", comment: ""), selected: tab == "overview") { tab = "overview" }
-                    FilterChip(title: NSLocalizedString("adm.users", comment: ""), selected: tab == "users") { tab = "users" }
-                    FilterChip(title: NSLocalizedString("adm.official", comment: ""), selected: tab == "official") { tab = "official" }
+            if let me {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 7) {
+                        ForEach(tabs, id: \.0) { t in
+                            FilterChip(title: NSLocalizedString(t.1, comment: ""), selected: tab == t.0) { tab = t.0 }
+                        }
+                    }
                 }
-            }
-            switch tab {
-            case "users": AdminUsersView()
-            case "official": AdminOfficialView()
-            default: AdminOverviewView()
+                switch tab {
+                case "users": AdminUsersView(me: me)
+                case "official": AdminOfficialView(library: false, me: me)
+                case "library": AdminOfficialView(library: true, me: me)
+                case "audit": AdminAuditView(onOpenUser: open)
+                case "settings": AdminSettingsView(me: me, onOpenUser: open)
+                default: AdminOverviewView(onOpenUser: open)
+                }
+            } else {
+                ProgressView().tint(Theme.accent).frame(maxWidth: .infinity)
             }
         }
+        .task {
+            me = await APIClient.shared.stAdminMe(token: store.session?.token ?? "")
+            if tab.isEmpty { tab = tabs.first?.0 ?? "settings" }
+        }
+        .sheet(item: $openUser) { u in
+            if let me { AdminUserSheet(user: u, me: me) {} }
+        }
+    }
+
+    private func open(_ id: String) {
+        Task { openUser = await APIClient.shared.admUser(token: store.session?.token ?? "", id: id) }
     }
 }
 
 private struct AdminOverviewView: View {
+    var onOpenUser: (String) -> Void
     @EnvironmentObject private var store: SessionStore
     @State private var o: AdminOverview?
     @State private var failed = false
@@ -45,6 +77,32 @@ private struct AdminOverviewView: View {
                     stat("adm.suspended", o.suspended)
                     stat("adm.official.live", o.official_live)
                     stat("adm.official.views", o.official_views)
+                }
+                if let d = o.daily, !d.isEmpty {
+                    AdminBars(daily: d, weekly: o.weekly ?? [], monthly: o.monthly ?? [])
+                }
+                if let r = o.recent {
+                    TFSectionLabel(text: NSLocalizedString("adm.recent", comment: ""))
+                    TFCard {
+                        if r.isEmpty { Text("adm.recent.none").font(.system(size: 12)).foregroundStyle(Theme.faint).padding(12) }
+                        ForEach(Array(r.enumerated()), id: \.element.id) { i, u in
+                            Button { onOpenUser(u.id) } label: {
+                                HStack(spacing: 10) {
+                                    Avatar(token: store.session?.token ?? "", userID: u.id, avatarID: u.avatar_id.isEmpty ? nil : u.avatar_id,
+                                           title: u.display_name.isEmpty ? u.username : u.display_name, size: 34, online: u.online)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(u.display_name.isEmpty ? u.username : u.display_name).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
+                                        Text("@\(u.username) · \(AdminFmt.date(u.created_at))").font(.system(size: 11)).foregroundStyle(Theme.faint)
+                                    }
+                                    Spacer()
+                                    if !u.country.isEmpty { Text(IdentityCardFace.flag(u.country)) }
+                                }
+                                .padding(.horizontal, 12).padding(.vertical, 8)
+                            }
+                            .buttonStyle(.plain)
+                            if i < r.count - 1 { TFDivider() }
+                        }
+                    }
                 }
             } else if failed {
                 Text("adm.failed").font(.system(size: 13)).foregroundStyle(Theme.faint)
@@ -70,6 +128,7 @@ private struct AdminOverviewView: View {
 }
 
 private struct AdminUsersView: View {
+    let me: AdminMe
     @EnvironmentObject private var store: SessionStore
     @State private var query = ""
     @State private var page = 1
@@ -117,7 +176,7 @@ private struct AdminUsersView: View {
             }
         }
         .task { await load() }
-        .sheet(item: $open) { u in AdminUserSheet(user: u) { Task { await load() } } }
+        .sheet(item: $open) { u in AdminUserSheet(user: u, me: me) { Task { await load() } } }
     }
 
     private func load() async {
@@ -127,7 +186,9 @@ private struct AdminUsersView: View {
 
 private struct AdminUserSheet: View {
     let user: AdminUser
+    let me: AdminMe
     let onChange: () -> Void
+    @State private var confirmOwner = false
     @EnvironmentObject private var store: SessionStore
     @Environment(\.dismiss) private var dismiss
     @State private var reason = ""
@@ -187,7 +248,30 @@ private struct AdminUserSheet: View {
                     }
                     .listRowBackground(Theme.surface)
                 }
+                if me.roles == true && user.status == "active" && user.id != store.session?.userID {
+                    Section(header: Text("adm.role.title")) {
+                        Picker("adm.role.title", selection: Binding(get: { user.role ?? "" }, set: { r in
+                            if r == "owner" { confirmOwner = true } else { setRole(r) }
+                        })) {
+                            Text("adm.role.none").tag("")
+                            Text("adm.role.content").tag("content")
+                            Text("adm.role.admin").tag("admin")
+                            Text("adm.role.owner").tag("owner")
+                        }
+                    }
+                    .listRowBackground(Theme.surface)
+                }
+                if me.audit == true {
+                    Section(header: Text("adm.history")) {
+                        AdminAuditView(user: user.id).listRowInsets(EdgeInsets())
+                    }
+                    .listRowBackground(Color.clear)
+                }
                 if let note { Section { Text(note).foregroundStyle(Theme.danger) }.listRowBackground(Theme.surface) }
+            }
+            .confirmationDialog(Text(String(format: NSLocalizedString("adm.owner.confirm", comment: ""), user.username)),
+                                isPresented: $confirmOwner, titleVisibility: .visible) {
+                Button("adm.role.owner", role: .destructive) { setRole("owner") }
             }
             .scrollContentBackground(.hidden)
             .background(Theme.ground.ignoresSafeArea())
@@ -196,18 +280,53 @@ private struct AdminUserSheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
         }
     }
+
+    private func setRole(_ r: String) {
+        Task {
+            do {
+                try await APIClient.shared.admSetRole(token: token, userID: user.id, role: r)
+                note = nil
+                onChange()
+                dismiss()
+            } catch APIError.refused(let why) {
+                note = why
+            } catch {
+                note = NSLocalizedString("settings.failed", comment: "")
+            }
+        }
+    }
 }
 
+
 private struct AdminOfficialView: View {
+    let library: Bool
+    let me: AdminMe
     @EnvironmentObject private var store: SessionStore
-    @State private var posts: [AdminOfficialPost] = []
+    @State private var show = "all"
+    @State private var composing = false
+    @State private var all: [AdminOfficialPost] = []
+    private var posts: [AdminOfficialPost] { all.filter { show == "all" || ($0.state ?? "draft") == show } }
     @State private var loading = true
     @State private var note: String?
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("adm.official.note").font(.system(size: 12)).foregroundStyle(Theme.faint)
+            Text(LocalizedStringKey(library ? "adm.library.note" : "adm.official.note")).font(.system(size: 12)).foregroundStyle(Theme.faint)
+            if !library {
+                Button { composing = true } label: {
+                    Label("adm.off.new", systemImage: "plus").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.onAccent)
+                        .padding(.horizontal, 16).frame(height: 40).background(Theme.accent, in: Capsule())
+                }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(["all", "active", "scheduled", "draft", "expired", "removed"], id: \.self) { s in
+                            FilterChip(title: NSLocalizedString(s == "all" ? "adm.state.all" : "adm.state." + s, comment: ""), selected: show == s) { show = s }
+                        }
+                    }
+                }
+            }
             if loading { ProgressView().tint(Theme.accent).frame(maxWidth: .infinity) }
             else if posts.isEmpty { Text("adm.official.none").font(.system(size: 13)).foregroundStyle(Theme.faint) }
             TFCard {
@@ -222,13 +341,15 @@ private struct AdminOfficialView: View {
                         }
                         Spacer()
                         Menu {
-                            if p.state == "draft" || p.state == "removed" || p.state == "expired" {
+                            if !library && (p.state == "draft" || p.state == "removed" || p.state == "expired") {
                                 Button("adm.publish") { act(p, "publish") }
                             }
-                            if p.state == "active" || p.state == "scheduled" {
+                            if !library && (p.state == "active" || p.state == "scheduled") {
                                 Button("adm.remove") { act(p, "remove") }
                             }
-                            Button("adm.delete", role: .destructive) { act(p, "delete") }
+                            if me.users == true && (p.state == "draft" || p.state == "removed" || p.state == "expired") {
+                                Button("adm.delete", role: .destructive) { act(p, "delete") }
+                            }
                         } label: {
                             Image(systemName: "ellipsis").foregroundStyle(Theme.muted).frame(width: 32, height: 32)
                         }
@@ -240,6 +361,7 @@ private struct AdminOfficialView: View {
             if let note { Text(note).font(.system(size: 12)).foregroundStyle(Theme.danger) }
         }
         .task { await load() }
+        .sheet(isPresented: $composing) { AdminOfficialComposer { Task { await load() } }.environmentObject(store) }
     }
 
     private func act(_ p: AdminOfficialPost, _ action: String) {
@@ -254,7 +376,7 @@ private struct AdminOfficialView: View {
     }
 
     private func load() async {
-        posts = (try? await APIClient.shared.stAdminOfficial(token: token)) ?? posts
+        all = (try? await APIClient.shared.stAdminOfficial(token: token)) ?? all
         loading = false
     }
 }

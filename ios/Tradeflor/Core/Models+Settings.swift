@@ -31,6 +31,8 @@ struct AdminMe: Decodable {
     let role: String
     let users: Bool?
     let content: Bool?
+    var audit: Bool? = nil
+    var roles: Bool? = nil
 }
 
 struct AdminUser: Decodable, Identifiable {
@@ -74,6 +76,11 @@ struct AdminOverview: Decodable {
     let suspended: Int
     let official_live: Int
     let official_views: Int
+    var official_viewers: Int? = nil
+    var daily: [AdminBucket]? = nil
+    var weekly: [AdminBucket]? = nil
+    var monthly: [AdminBucket]? = nil
+    var recent: [AdminUser]? = nil
 }
 
 struct AdminOfficialPost: Decodable, Identifiable {
