@@ -734,6 +734,7 @@ struct ChatView: View {
                         .padding(.horizontal, 4)
                         .accessibilityIdentifier("chat.composer")
                     Button { reactTarget = nil; showEmoji = true } label: { composerIcon("face.smiling") }
+                        .accessibilityLabel(Text("chat.emoji"))
                     if isGroup && isAdmin {
                         // silent post (website GroupsView): kept as the control it will be once push notifications exist
                         Button {
@@ -742,7 +743,6 @@ struct ChatView: View {
                         } label: { composerIcon(silentPost ? "bell.slash" : "bell") }
                         .accessibilityLabel(Text(LocalizedStringKey(silentPost ? "silent.on" : "silent.off")))
                     }
-                        .accessibilityLabel(Text("chat.emoji"))
                 }
                 .padding(.horizontal, 4)
                 .frame(minHeight: 48)
