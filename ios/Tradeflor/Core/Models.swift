@@ -68,6 +68,7 @@ struct Message: Decodable, Identifiable, Equatable {
     let reactions: String?
     let reply_to_id: String?
     let reply_sender_id: String?
+    let mentions: String?
     let reply_snippet: String?
     let forwarded: Bool?
     let expires_at: Int64?

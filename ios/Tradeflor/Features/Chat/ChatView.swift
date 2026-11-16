@@ -72,6 +72,19 @@ struct ChatView: View {
     @State private var memberRoles: [String: String] = [:]
     @State private var jumpTarget: String?
     @State private var themeID = ""
+    @State private var focusDoc: FocusDoc?
+    @State private var focusPages: [Message] = []
+    @State private var focusShowAll = false
+    @State private var showFocus = false
+    private var focusOn: Bool { isGroup && (focusDoc?.focus.active ?? false) && !focusShowAll }
+    /// What the list shows: everything, or (Smart Focus) the server's filtered history plus matching live messages.
+    private var shown: [Message] {
+        guard focusOn, let f = focusDoc?.focus else { return messages }
+        var byID: [String: Message] = [:]
+        for m in focusPages { byID[m.id] = m }
+        for m in messages where byID[m.id] != nil || f.matches(m, me: me, roleOf: { memberRoles[$0] }) { byID[m.id] = m }
+        return byID.values.sorted { $0.seq < $1.seq }
+    }
     private var isAdmin: Bool { myRole == "owner" || myRole == "admin" }
     private var searchHits: [Message] {
         let q = searchText.trimmingCharacters(in: .whitespaces)
@@ -88,6 +101,9 @@ struct ChatView: View {
         VStack(spacing: 0) {
             if selecting { selectHead } else { topBar }
             if searchOpen { searchBar }
+            if isGroup && (focusDoc?.focus.active ?? false) && !selecting {
+                FocusBanner(showingAll: focusShowAll, onToggle: { focusShowAll.toggle() }, onEdit: { showFocus = true })
+            }
             if isGroup && !pins.isEmpty && !selecting { pinnedBar }
             ScrollViewReader { proxy in
                 ScrollView {
@@ -100,8 +116,9 @@ struct ChatView: View {
                             }
                             .padding(.vertical, 8)
                         }
-                        ForEach(Array(messages.enumerated()), id: \.element.id) { i, m in
-                            if i == 0 || !sameDay(messages[i - 1], m) {
+                        let rows = shown
+                        ForEach(Array(rows.enumerated()), id: \.element.id) { i, m in
+                            if i == 0 || !sameDay(rows[i - 1], m) {
                                 DayDivider(date: m.date)
                             }
                             MessageRow(message: m, mine: m.sender_id == me, myID: me, peerName: chat.title,
@@ -274,6 +291,16 @@ struct ChatView: View {
             }
         }
         .sheet(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft) }
+        .sheet(isPresented: $showFocus) {
+            if let doc = focusDoc {
+                SmartFocusSheet(groupID: chat.conversation_id, members: members, me: me, initial: doc) { saved in
+                    focusDoc = saved
+                    focusShowAll = false
+                    Task { await loadFocusPages() }
+                }
+                .environmentObject(store)
+            }
+        }
         .fullScreenCover(isPresented: $showNoteRecorder) {
             VideoNoteRecorder { url in Task { await sendVideoNote(url) } }.ignoresSafeArea()
         }
@@ -491,6 +518,7 @@ struct ChatView: View {
             .accessibilityLabel(Text("chat.search"))
             Menu {
                 if isGroup { Button { showInfo = true } label: { Label("group.info", systemImage: "info.circle") } }
+                if isGroup && focusDoc != nil { Button { showFocus = true } label: { Label("focus.title", systemImage: "scope") } }
                 Button { showSchedule = true } label: { Label("chat.scheduled", systemImage: "clock") }
                 if muted {
                     Button { Task { await mute(seconds: 0) } } label: { Label("chats.unmute", systemImage: "bell") }
@@ -769,8 +797,12 @@ struct ChatView: View {
             groupComments = g.comments
             memberCount = g.memberCount
             pins = await APIClient.shared.chGroupPins(token: token, groupID: chat.conversation_id)
-            if isAdmin, let full = try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/members", token: token) {
+            if let full = try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/members", token: token) {
                 memberRoles = Dictionary(full.filter { $0.role != "member" }.map { ($0.user_id, $0.role) }, uniquingKeysWith: { a, _ in a })
+            }
+            if let doc = try? await APIClient.shared.getFocus(token: token, groupID: chat.conversation_id) {
+                focusDoc = doc
+                await loadFocusPages()
             }
         } else if let st = try? await APIClient.shared.chatSettings(token: token, conversationID: chat.conversation_id) {
             restricted = st.restricted
@@ -778,6 +810,11 @@ struct ChatView: View {
         if let prefs = try? await APIClient.shared.prefs(token: token), let mine = prefs.first(where: { $0.conversation_id == chat.conversation_id }) {
             muted = mine.muted
         }
+    }
+
+    private func loadFocusPages() async {
+        guard let f = focusDoc?.focus, f.active else { focusPages = []; return }
+        focusPages = await APIClient.shared.focusPage(token: token, groupID: chat.conversation_id, limit: 200)
     }
 
     private func setPin(_ m: Message, _ on: Bool) async {
