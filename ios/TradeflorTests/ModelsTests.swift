@@ -63,4 +63,16 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(VoiceBubble.length(65_400), "1:05")
         XCTAssertEqual(VoiceBubble.length(0), "0:00")
     }
+
+    func testReactionsParseAndSort() throws {
+        let json = """
+        {"id":"m1","conversation_id":"c1","sender_id":"u2","kind":"text","body":"x","seq":1,"created_at":1,
+         "reactions":"{\\"❤️\\":[\\"u1\\",\\"u2\\"],\\"👍\\":[\\"u3\\"],\\"😂\\":[]}"}
+        """
+        let m = try JSONDecoder().decode(Message.self, from: Data(json.utf8))
+        let r = m.reactionList(me: "u1")
+        XCTAssertEqual(r.map(\.emoji), ["❤️", "👍"])
+        XCTAssertEqual(r.first?.count, 2)
+        XCTAssertEqual(r.first?.mine, true)
+    }
 }

@@ -63,6 +63,20 @@ struct Message: Decodable, Identifiable, Equatable {
     let audio_id: String?
     let mime_type: String?
     let waveform: String?
+    let reactions: String?
+    let reply_to_id: String?
+    let reply_sender_id: String?
+    let reply_snippet: String?
+    let forwarded: Bool?
+
+    /// {"emoji": [userID, ...]} -> [(emoji, count, mine)] in a stable order.
+    func reactionList(me: String) -> [Reaction] {
+        guard let r = reactions, let d = r.data(using: .utf8),
+              let map = try? JSONDecoder().decode([String: [String]].self, from: d) else { return [] }
+        return map.filter { !$0.value.isEmpty }
+            .map { Reaction(emoji: $0.key, count: $0.value.count, mine: $0.value.contains(me)) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji < $1.emoji }
+    }
     let duration_ms: Int64?
     let delivered_at: Int64?
     let read_at: Int64?
@@ -146,4 +160,10 @@ struct LinkedDevice: Decodable, Identifiable {
     let created_at: Int64
     let last_seen_at: Int64?
     let current: Bool?
+}
+
+struct Reaction: Hashable {
+    let emoji: String
+    let count: Int
+    let mine: Bool
 }

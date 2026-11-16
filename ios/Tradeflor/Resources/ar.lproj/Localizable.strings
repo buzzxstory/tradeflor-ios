@@ -106,3 +106,14 @@
 "settings.name" = "الاسم";
 "settings.bio" = "نبذة";
 "settings.save" = "حفظ";
+"chat.forwarded" = "مُعاد توجيهها";
+"chat.you" = "أنت";
+"chat.reply" = "رد";
+"chat.copy" = "نسخ";
+"chat.forward" = "إعادة توجيه";
+"chat.delete.me" = "حذف لدي";
+"chat.delete.everyone" = "حذف لدى الجميع";
+"chat.done" = "تم";
+"chat.action.failed" = "لم ينجح ذلك. حاول مجدداً.";
+"chat.typing" = "يكتب…";
+"chat.online" = "متصل الآن";

@@ -106,3 +106,14 @@
 "settings.name" = "Name";
 "settings.bio" = "About";
 "settings.save" = "Save";
+"chat.forwarded" = "Forwarded";
+"chat.you" = "You";
+"chat.reply" = "Reply";
+"chat.copy" = "Copy";
+"chat.forward" = "Forward";
+"chat.delete.me" = "Delete for me";
+"chat.delete.everyone" = "Delete for everyone";
+"chat.done" = "Done";
+"chat.action.failed" = "That did not work. Try again.";
+"chat.typing" = "typing…";
+"chat.online" = "online";

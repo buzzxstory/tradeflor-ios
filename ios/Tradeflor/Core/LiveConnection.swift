@@ -16,6 +16,10 @@ final class LiveConnection: ObservableObject {
     let changes = PassthroughSubject<String, Never>()
     /// Call events (type starts with "call."): the type and the raw `data` object.
     let calls = PassthroughSubject<(type: String, data: [String: Any]), Never>()
+    /// Someone is typing: (conversation id, user id).
+    let typing = PassthroughSubject<(conversation: String, user: String), Never>()
+    /// Who of the people I share a chat with is online now.
+    @Published private(set) var online: Set<String> = []
     /// Fires every time the socket (re)opens, so calls can send call.sync.
     let opened = PassthroughSubject<Void, Never>()
 
@@ -89,6 +93,7 @@ final class LiveConnection: ObservableObject {
             if !connected {
                 connected = true
                 opened.send(())
+                sendRaw(["type": "presence"]) // ask for the online snapshot
                 attempt = 0
             }
             let data: Data
@@ -99,6 +104,19 @@ final class LiveConnection: ObservableObject {
             }
             handle(data)
         }
+    }
+
+    /// I am typing in this conversation (the server forwards it to the other members). Throttle at the caller.
+    func sendTyping(conversationID: String) {
+        sendRaw(["type": "typing", "conversation_id": conversationID])
+    }
+
+    @discardableResult
+    private func sendRaw(_ obj: [String: Any]) -> Bool {
+        guard let task, let json = try? JSONSerialization.data(withJSONObject: obj),
+              let text = String(data: json, encoding: .utf8) else { return false }
+        task.send(.string(text)) { _ in }
+        return true
     }
 
     /// Sends one frame {"type": ..., "data": {...}}; false when the socket is not open.
@@ -113,6 +131,21 @@ final class LiveConnection: ObservableObject {
 
     private func handle(_ data: Data) {
         guard let env = try? JSONDecoder().decode(LiveEnvelope.self, from: data) else { return }
+        if env.type == "typing" || env.type == "presence" || env.type == "presence_snapshot" {
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let d = obj["data"] as? [String: Any] else { return }
+            switch env.type {
+            case "typing":
+                if let c = d["conversation_id"] as? String, let u = d["user_id"] as? String { typing.send((c, u)) }
+            case "presence":
+                if let u = d["user_id"] as? String {
+                    if (d["online"] as? Bool) == true { online.insert(u) } else { online.remove(u) }
+                }
+            default:
+                online = Set((d["online"] as? [String]) ?? [])
+            }
+            return
+        }
         if env.type.hasPrefix("call.") {
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 calls.send((env.type, (obj["data"] as? [String: Any]) ?? [:]))

@@ -22,6 +22,10 @@ struct ChatView: View {
     @State private var watching: ViewedPhoto?
     @StateObject private var recorder = VoiceRecorder()
     @State private var locked = false
+    @State private var replyingTo: Message?
+    @State private var forwarding: Message?
+    @State private var peerTypingUntil: Date?
+    @State private var lastTypingSent = Date.distantPast
     @ObservedObject private var calls = CallManager.shared
     @State private var showUnlock = false
 
@@ -46,28 +50,15 @@ struct ChatView: View {
                             if i == 0 || !sameDay(messages[i - 1], m) {
                                 DayDivider(date: m.date)
                             }
-                            if m.kind == "voice", m.audio_id != nil, !m.isDeleted {
-                                VoiceBubble(token: token, message: m, mine: m.sender_id == me,
-                                            state: m.sender_id == me ? receipt(m) : nil)
-                                    .id(m.id)
-                            } else if m.kind == "file", let fid = m.file_id, (m.file_mime ?? "").hasPrefix("video/"), !m.isDeleted {
-                                VideoBubble(token: token, message: m, mine: m.sender_id == me,
-                                            state: m.sender_id == me ? receipt(m) : nil) {
-                                    watching = ViewedPhoto(id: fid)
-                                }
-                                .id(m.id)
-                            } else if m.kind == "image", let fid = m.file_id, !m.isDeleted {
-                                PhotoBubble(mine: m.sender_id == me, date: m.date,
-                                            state: m.sender_id == me ? receipt(m) : nil, caption: m.body) {
-                                    RemoteImage(token: token, fileID: fid)
-                                }
-                                .id(m.id)
-                                .onTapGesture { viewing = ViewedPhoto(id: fid) }
-                            } else {
-                                Bubble(text: displayText(m), mine: m.sender_id == me, date: m.date,
-                                       state: m.sender_id == me ? receipt(m) : nil, faded: m.isDeleted)
-                                    .id(m.id)
+                            MessageRow(message: m, mine: m.sender_id == me, myID: me, peerName: chat.title,
+                                       onReply: { replyingTo = m; composerFocused = true },
+                                       onReact: { e in Task { await react(m, e) } },
+                                       onCopy: { UIPasteboard.general.string = displayText(m) },
+                                       onForward: { forwarding = m },
+                                       onDelete: { everyone in Task { await delete(m, everyone: everyone) } }) {
+                                messageContent(m)
                             }
+                            .id(m.id)
                         }
                         ForEach(pending) { p in
                             Group {
@@ -121,6 +112,25 @@ struct ChatView: View {
         .background(Theme.ground.ignoresSafeArea())
         .toolbarBackground(Theme.ground, for: .navigationBar)
         .navigationTitle(chat.title)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 1) {
+                    Text(chat.title).font(.headline).foregroundStyle(.white).lineLimit(1)
+                    if let subtitle { Text(subtitle).font(.caption2).foregroundStyle(Theme.accent) }
+                }
+            }
+        }
+        .onReceive(live.typing) { t in
+            guard t.conversation == chat.conversation_id, t.user != me else { return }
+            peerTypingUntil = Date().addingTimeInterval(5)
+            Task {
+                try? await Task.sleep(nanoseconds: 5_200_000_000)
+                if let u = peerTypingUntil, u <= Date() { peerTypingUntil = nil }
+            }
+        }
+        .sheet(item: $forwarding) { m in
+            ForwardSheet(token: token, message: m) { forwarding = nil }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar) // full height for the conversation, like other messengers
         .toolbar {
@@ -185,6 +195,29 @@ struct ChatView: View {
     }
 
     private var composer: some View {
+        VStack(spacing: 6) {
+            if let r = replyingTo {
+                HStack(spacing: 8) {
+                    Capsule().fill(Theme.accent).frame(width: 3, height: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(r.sender_id == me ? NSLocalizedString("chat.you", comment: "") : chat.title)
+                            .font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                        Text(displayText(r)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button { replyingTo = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .accessibilityLabel(Text("chat.close"))
+                }
+                .padding(.horizontal, 6)
+            }
+            composerBar
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    private var composerBar: some View {
         Group {
             if recorder.recording {
                 RecordingBar(recorder: recorder, onCancel: { recorder.cancel() }, onSend: { Task { await sendVoice() } })
@@ -192,9 +225,6 @@ struct ChatView: View {
                 typingBar
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.bar)
     }
 
     private var draftIsEmpty: Bool { draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -217,6 +247,11 @@ struct ChatView: View {
                 .accessibilityLabel(Text("chat.camera"))
             }
             TextField("chat.placeholder", text: $draft, axis: .vertical)
+                .onChange(of: draft) { v in
+                    guard !v.isEmpty, Date().timeIntervalSince(lastTypingSent) > 3 else { return }
+                    lastTypingSent = Date()
+                    live.sendTyping(conversationID: chat.conversation_id)
+                }
                 .lineLimit(1...6)
                 .focused($composerFocused)
                 .padding(.horizontal, 14)
@@ -290,9 +325,54 @@ struct ChatView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         draft = ""
-        let p = PendingMessage(id: UUID().uuidString.lowercased(), body: text, date: Date())
+        var p = PendingMessage(id: UUID().uuidString.lowercased(), body: text, date: Date())
+        p.replyTo = replyingTo?.id ?? ""
+        replyingTo = nil
         pending.append(p)
         await deliver(p)
+    }
+
+    // MARK: message actions
+
+    @ViewBuilder private func messageContent(_ m: Message) -> some View {
+        if m.kind == "voice", m.audio_id != nil, !m.isDeleted {
+            VoiceBubble(token: token, message: m, mine: m.sender_id == me, state: m.sender_id == me ? receipt(m) : nil)
+        } else if m.kind == "file", let fid = m.file_id, (m.file_mime ?? "").hasPrefix("video/"), !m.isDeleted {
+            VideoBubble(token: token, message: m, mine: m.sender_id == me, state: m.sender_id == me ? receipt(m) : nil) {
+                watching = ViewedPhoto(id: fid)
+            }
+        } else if m.kind == "image", let fid = m.file_id, !m.isDeleted {
+            PhotoBubble(mine: m.sender_id == me, date: m.date, state: m.sender_id == me ? receipt(m) : nil, caption: m.body) {
+                RemoteImage(token: token, fileID: fid)
+            }
+            .onTapGesture { viewing = ViewedPhoto(id: fid) }
+        } else {
+            Bubble(text: displayText(m), mine: m.sender_id == me, date: m.date,
+                   state: m.sender_id == me ? receipt(m) : nil, faded: m.isDeleted)
+        }
+    }
+
+    private func react(_ m: Message, _ emoji: String) async {
+        if let updated = try? await APIClient.shared.react(token: token, messageID: m.id, emoji: emoji) { merge([updated]) }
+    }
+
+    private func delete(_ m: Message, everyone: Bool) async {
+        do {
+            if everyone {
+                merge([try await APIClient.shared.deleteMessage(token: token, messageID: m.id)])
+            } else {
+                try await APIClient.shared.hideMessage(token: token, messageID: m.id)
+                messages.removeAll { $0.id == m.id }
+            }
+        } catch {
+            problem = NSLocalizedString("chat.action.failed", comment: "")
+        }
+    }
+
+    private var subtitle: String? {
+        if let until = peerTypingUntil, until > Date() { return NSLocalizedString("chat.typing", comment: "") }
+        if live.online.contains(chat.peer_id) { return NSLocalizedString("chat.online", comment: "") }
+        return nil
     }
 
     private func sendVoice() async {
@@ -343,7 +423,7 @@ struct ChatView: View {
                                                          jpeg: jpeg, caption: p.body, key: p.id)
             } else {
                 m = try await APIClient.shared.sendText(token: token, conversationID: chat.conversation_id,
-                                                        body: p.body, key: p.id)
+                                                        body: p.body, key: p.id, replyTo: p.replyTo)
             }
             merge([m])
             pending.removeAll { $0.id == p.id }
@@ -392,6 +472,7 @@ struct PendingMessage: Identifiable, Equatable {
     var jpeg: Data? = nil
     var audio: Data? = nil
     var video: Data? = nil
+    var replyTo = ""
     var durationMs: Int? = nil
     var waveform: [Double] = []
     var failed = false

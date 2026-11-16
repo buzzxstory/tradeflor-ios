@@ -188,6 +188,38 @@ final class APIClient {
         try check(http, data)
     }
 
+    // MARK: message actions
+
+    /// Sets my reaction (one per person); the same emoji again removes it.
+    func react(token: String, messageID: String, emoji: String) async throws -> Message {
+        let (data, http) = try await send(request("messages/react", method: "POST", token: token,
+                                                  body: ["MessageID": messageID, "Emoji": emoji]))
+        try check(http, data)
+        do { return try JSONDecoder().decode(Message.self, from: data) } catch { throw APIError.decoding }
+    }
+
+    /// Delete for everyone (my own message).
+    func deleteMessage(token: String, messageID: String) async throws -> Message {
+        let (data, http) = try await send(request("messages/delete", method: "POST", token: token, body: ["MessageID": messageID]))
+        try check(http, data)
+        do { return try JSONDecoder().decode(Message.self, from: data) } catch { throw APIError.decoding }
+    }
+
+    /// Delete for me: hidden on my devices only.
+    func hideMessage(token: String, messageID: String) async throws {
+        let (data, http) = try await send(request("messages/hide", method: "POST", token: token, body: ["MessageIDs": [messageID]]))
+        try check(http, data)
+    }
+
+    func forward(token: String, messageID: String, to conversationID: String, key: String) async throws -> Message {
+        var req = request("messages/forward", method: "POST", token: token,
+                          body: ["MessageID": messageID, "ConversationID": conversationID])
+        req.setValue(key, forHTTPHeaderField: "Idempotency-Key")
+        let (data, http) = try await send(req)
+        try check(http, data)
+        do { return try JSONDecoder().decode(Message.self, from: data) } catch { throw APIError.decoding }
+    }
+
     // MARK: chat lock
 
     /// The Chat Lock grant for this device session (memory only: a restart, sign-out or going to the background
@@ -239,9 +271,9 @@ final class APIClient {
     }
 
     /// `key` makes a retry safe: the server stores a message once per key.
-    func sendText(token: String, conversationID: String, body: String, key: String) async throws -> Message {
+    func sendText(token: String, conversationID: String, body: String, key: String, replyTo: String = "") async throws -> Message {
         var req = request("messages", method: "POST", token: token,
-                          body: ["ConversationID": conversationID, "Body": body, "ReplyToID": ""])
+                          body: ["ConversationID": conversationID, "Body": body, "ReplyToID": replyTo])
         req.setValue(key, forHTTPHeaderField: "Idempotency-Key")
         let (data, http) = try await send(req)
         try check(http, data)
