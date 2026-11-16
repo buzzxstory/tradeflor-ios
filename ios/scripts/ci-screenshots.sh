@@ -47,6 +47,8 @@ for i in 1 2 3 4 5 6; do
   sleep 10
 done
 
+export SIMCTL_CHILD_TF_CI=1 # every launch: the app knows it is a CI screenshot run (debug only: no permission prompts)
+
 launch() { # launch <lang> <locale> [with-account]; one retry: the first launch on a just-booted simulator can stall
   launch_once "$@" || { echo "launch stalled, retrying"; sleep 5; launch_once "$@"; }
 }
