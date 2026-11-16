@@ -431,8 +431,11 @@ struct ChatView: View {
             }
         }
         .fullScreenCover(isPresented: $showCamera) {
-            CameraPicker { img in Task { await sendPhoto(img) } }
-                .ignoresSafeArea()
+            CameraStudio(allowNote: true,
+                         onPhoto: { img in Task { await sendPhoto(img) } },
+                         onVideo: { url in Task { await sendVideo(url) } },
+                         onNote: { Task { try? await Task.sleep(nanoseconds: 700_000_000); showNoteRecorder = true } },
+                         onGallery: { Task { try? await Task.sleep(nanoseconds: 700_000_000); showPhotoPicker = true } })
         }
         .fullScreenCover(item: $viewing) { v in
             PhotoViewer(token: token, fileID: v.id)
