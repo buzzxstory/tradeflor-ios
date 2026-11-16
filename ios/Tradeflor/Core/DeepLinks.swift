@@ -25,7 +25,8 @@ final class DeepLinks: ObservableObject {
             let host = c?.host ?? ""
             c?.scheme = "https"
             c?.host = "app.tradeflor.com"
-            c?.path = host.isEmpty ? (c?.path ?? "") : "/" + host + (c?.path ?? "")
+            let oldPath = c?.path ?? ""
+            c?.path = host.isEmpty ? oldPath : "/" + host + oldPath
             guard let web = c?.url else { return false }
             return open(web.absoluteString)
         }
