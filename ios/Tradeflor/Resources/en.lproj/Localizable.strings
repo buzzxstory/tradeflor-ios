@@ -1204,3 +1204,10 @@
 "media.remove" = "Remove";
 "media.add" = "Add more";
 "media.send.n" = "Send %d";
+"stx.react.with" = "React with %@";
+"stx.like" = "Like this status";
+"stx.unlike" = "Remove like";
+"stx.reacted" = "Reacted %@";
+"tf.loadmore" = "Load %d more";
+"tf.showless" = "Show less";
+"pin.hide" = "Hide pinned message";

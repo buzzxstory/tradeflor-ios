@@ -27,6 +27,10 @@ struct StatusViewerScreen: View {
     @State private var replyNote: String?
     @State private var sending = false
     @FocusState private var replyFocused: Bool
+    @State private var myReacts: [String: String] = [:] // changed on this visit
+    @State private var burst: (emoji: String, key: UUID)?
+    @State private var reacting = false
+    static let reactions = ["❤️", "😍", "😂", "😮", "😢", "👏", "🔥", "🙏"]
 
     private let photoSeconds = 5.0
 
@@ -84,6 +88,15 @@ struct StatusViewerScreen: View {
         }
         .confirmationDialog(Text("status.delete.confirm"), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("status.delete", role: .destructive) { Task { await deleteCurrent() } }
+        }
+        .overlay {
+            if let b = burst {
+                Text(b.emoji).font(.system(size: 120)).shadow(radius: 12)
+                    .transition(.scale(scale: 0.3).combined(with: .opacity))
+                    .id(b.key)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
         }
         .onDisappear { player?.pause(); musicPlayer?.pause(); musicPlayer = nil; onClose() }
     }
@@ -207,6 +220,19 @@ struct StatusViewerScreen: View {
             } else if group.group_id == nil {
                 VStack(spacing: 6) {
                     if let replyNote { Text(replyNote).font(.system(size: 12)).foregroundStyle(.white.opacity(0.85)) }
+                    if replyFocused {
+                        // the eight quick reactions above the reply box while typing (WhatsApp)
+                        HStack(spacing: 6) {
+                            ForEach(Self.reactions, id: \.self) { e in
+                                Button { Task { await react(e) } } label: {
+                                    Text(e).font(.system(size: 28)).frame(width: 40, height: 44)
+                                        .background(myReact == e ? Color.white.opacity(0.22) : .clear, in: Circle())
+                                }
+                                .accessibilityLabel(Text(String(format: NSLocalizedString("stx.react.with", comment: ""), e)))
+                            }
+                        }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                     HStack(spacing: 8) {
                         TextField("", text: $reply, prompt: Text(String(format: NSLocalizedString("stx.reply.ph", comment: ""), group.title))
                             .foregroundColor(.white.opacity(0.6)))
@@ -224,9 +250,20 @@ struct StatusViewerScreen: View {
                             }
                             .disabled(sending)
                             .accessibilityLabel(Text("stx.reply.send"))
+                        } else {
+                            // the one-tap like beside the reply box
+                            Button { Task { await react("❤️") } } label: {
+                                Image(systemName: myReact == "❤️" ? "heart.fill" : "heart")
+                                    .font(.system(size: 22, weight: .semibold))
+                                    .foregroundStyle(myReact == "❤️" ? Color.red : .white)
+                                    .frame(width: 44, height: 44)
+                            }
+                            .accessibilityLabel(Text(LocalizedStringKey(myReact == "❤️" ? "stx.unlike" : "stx.like")))
+                            .accessibilityAddTraits(myReact == "❤️" ? .isSelected : [])
                         }
                     }
                 }
+                .animation(.easeOut(duration: 0.18), value: replyFocused)
                 .padding(.bottom, 10)
             }
         }
@@ -316,6 +353,53 @@ struct StatusViewerScreen: View {
     }
 
     /// A reply goes to the person's private chat as a message quoting the status (like the website).
+    private var myReact: String {
+        guard let post else { return "" }
+        return myReacts[post.id] ?? post.my_reaction ?? ""
+    }
+
+    /// A quick reaction: recorded on the status (the owner sees it in Viewed by) and announced in the owner's chat.
+    /// The same emoji again takes it back (no second message).
+    private func react(_ emoji: String) async {
+        guard let post, !reacting else { return }
+        reacting = true
+        defer { reacting = false }
+        let prev = myReact
+        let next = prev == emoji ? "" : emoji
+        myReacts[post.id] = next
+        if !next.isEmpty {
+            let key = UUID()
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { burst = (next, key) }
+            Task { try? await Task.sleep(nanoseconds: 1_100_000_000); if burst?.key == key { withAnimation { burst = nil } } }
+        }
+        reply = ""
+        replyFocused = false
+        do {
+            _ = try await APIClient.shared.postJSON("status/\(post.id)/react", token: token, body: ["Emoji": next])
+        } catch {
+            myReacts[post.id] = prev // not recorded: show what is really there
+            return
+        }
+        guard !next.isEmpty else { return }
+        // the chat line is a courtesy: if it cannot be sent, the reaction still stands
+        let cap = (post.kind == "text" ? (post.text ?? "") : (post.caption ?? "")).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let what: String
+        if !cap.isEmpty {
+            what = "“" + (cap.count > 60 ? String(cap.prefix(59)) + "…" : cap) + "”"
+        } else {
+            switch post.kind {
+            case "image": what = "Photo"
+            case "video": what = "Video"
+            case "voice": what = "Voice status"
+            default: what = "Status"
+            }
+        }
+        if let conv = try? await APIClient.shared.directConversation(token: token, with: group.user_id) {
+            _ = try? await APIClient.shared.sendText(token: token, conversationID: conv, body: "\(next) Reacted to your status · \(what)",
+                                                     key: UUID().uuidString.lowercased())
+        }
+    }
+
     private func sendReply() async {
         guard let post else { return }
         let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -375,6 +459,7 @@ struct StatusViewersSheet: View {
             List(viewers) { v in
                 HStack {
                     Text(v.username)
+                    if let r = v.reaction, !r.isEmpty { Text(r).accessibilityLabel(Text(String(format: NSLocalizedString("stx.reacted", comment: ""), r))) }
                     Spacer()
                     if let d = serverDate(v.viewed_at) { Text(d, style: .relative).foregroundStyle(.secondary).font(.caption) }
                 }

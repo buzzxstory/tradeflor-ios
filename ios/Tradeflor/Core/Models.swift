@@ -124,6 +124,8 @@ struct StatusPost: Decodable, Identifiable, Equatable {
     let views: Int?
     let poster: Bool?
     let text: String?
+    /// The quick reaction I already sent to this status (someone else's).
+    var my_reaction: String? = nil
     let style: String?
     let music: String?
 
@@ -154,6 +156,8 @@ struct StatusViewerEntry: Decodable, Identifiable {
     let user_id: String
     let username: String
     let viewed_at: Int64
+    /// The quick reaction this viewer sent, if any.
+    var reaction: String? = nil
     var id: String { user_id }
 }
 

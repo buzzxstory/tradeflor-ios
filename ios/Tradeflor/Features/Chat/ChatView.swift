@@ -75,6 +75,7 @@ struct ChatView: View {
     @State private var themeID = ""
     @State private var focusDoc: FocusDoc?
     @State private var openDoc: LocalDoc?
+    @State private var pinsHidden = false
     @State private var openingDoc = false
     // hold-to-record voice: press = record, release = send, slide left = cancel, slide up = lock (hands free)
     @State private var micPressed = false
@@ -112,7 +113,7 @@ struct ChatView: View {
             if isGroup && (focusDoc?.focus.active ?? false) && !selecting {
                 FocusBanner(showingAll: focusShowAll, onToggle: { focusShowAll.toggle() }, onEdit: { showFocus = true })
             }
-            if isGroup && !pins.isEmpty && !selecting { pinnedBar }
+            if isGroup && !pins.isEmpty && !selecting && !pinsHidden { pinnedBar }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 6) {
@@ -897,27 +898,36 @@ struct ChatView: View {
 
     private var pinnedBar: some View {
         let p = pins[min(pinIndex, pins.count - 1)]
-        return Button {
-            pinIndex = (pinIndex + 1) % max(pins.count, 1)
-            if let m = messages.first(where: { $0.id == p.message_id }) { searchText = ""; jumpTarget = m.id }
-        } label: {
-            HStack(spacing: 10) {
-                Rectangle().fill(Theme.accent).frame(width: 3, height: 32)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(pins.count > 1 ? String(format: NSLocalizedString("pin.n.of", comment: ""), pinIndex + 1, pins.count)
-                                        : NSLocalizedString("pin.one", comment: ""))
-                        .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.accent)
-                    Text(p.text.isEmpty ? NSLocalizedString("pin." + p.kind, comment: "") : p.text)
-                        .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
+        return HStack(spacing: 4) {
+            Button {
+                pinIndex = (pinIndex + 1) % max(pins.count, 1)
+                if let m = messages.first(where: { $0.id == p.message_id }) { searchText = ""; jumpTarget = m.id }
+            } label: {
+                HStack(spacing: 10) {
+                    Rectangle().fill(Theme.accent).frame(width: 3, height: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pins.count > 1 ? String(format: NSLocalizedString("pin.n.of", comment: ""), pinIndex + 1, pins.count)
+                                            : NSLocalizedString("pin.one", comment: ""))
+                            .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.accent)
+                        Text(p.text.isEmpty ? NSLocalizedString("pin." + p.kind, comment: "") : p.text)
+                            .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
+                    }
+                    Spacer()
+                    Image(systemName: "pin.fill").foregroundStyle(Theme.accent).rotationEffect(.degrees(45))
                 }
-                Spacer()
-                Image(systemName: "pin.fill").foregroundStyle(Theme.accent).rotationEffect(.degrees(45))
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 14).frame(height: 50)
-            .background(Theme.header)
-            .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
+            .buttonStyle(.plain)
+            // hides the bar for this visit only (everyone, admins too); never unpins -- it shows again next time
+            Button { withAnimation { pinsHidden = true } } label: {
+                Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.faint).frame(width: 36, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("pin.hide"))
         }
-        .buttonStyle(.plain)
+        .padding(.leading, 14).padding(.trailing, 4).frame(height: 50)
+        .background(Theme.header)
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
     }
 
     private func roleOf(_ userID: String) -> String? {

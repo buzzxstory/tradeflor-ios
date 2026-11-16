@@ -1204,3 +1204,10 @@
 "media.remove" = "إزالة";
 "media.add" = "إضافة المزيد";
 "media.send.n" = "إرسال %d";
+"stx.react.with" = "التفاعل بـ %@";
+"stx.like" = "إعجاب بهذه الحالة";
+"stx.unlike" = "إزالة الإعجاب";
+"stx.reacted" = "تفاعل بـ %@";
+"tf.loadmore" = "عرض %d أخرى";
+"tf.showless" = "عرض أقل";
+"pin.hide" = "إخفاء الرسالة المثبتة";

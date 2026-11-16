@@ -8,7 +8,8 @@ struct TradeFlorView: View {
     @State private var saved: Set<String> = []
     @State private var groups: [StatusGroup] = []
     @State private var query = ""
-    @State private var showAll = false
+    /// Today's events are shown five at a time (website todayEvents.ts TODAY_PAGE).
+    @State private var shownCount = 5
     @State private var open: StatusOpen?
     @State private var manage = false
     @State private var now = Date()
@@ -17,9 +18,14 @@ struct TradeFlorView: View {
     private var today: [CalendarEvent] {
         let cal = Calendar.current
         let q = query.trimmingCharacters(in: .whitespaces)
+        // high impact always first, then medium, each in time order
+        func rank(_ i: String) -> Int { i == "high" ? 0 : (i == "medium" ? 1 : 2) }
         return events.filter { e in
             guard let d = e.date, cal.isDateInToday(d) else { return false }
             return q.isEmpty || e.event.localizedCaseInsensitiveContains(q) || e.currency.localizedCaseInsensitiveContains(q)
+        }
+        .sorted { a, b in
+            rank(a.impact) != rank(b.impact) ? rank(a.impact) < rank(b.impact) : (a.date ?? .distantPast) < (b.date ?? .distantPast)
         }
     }
     private var nextHigh: CalendarEvent? {
@@ -192,7 +198,7 @@ struct TradeFlorView: View {
     }
 
     @ViewBuilder private var eventsList: some View {
-        let list = showAll ? today : Array(today.prefix(5))
+        let list = Array(today.prefix(shownCount))
         VStack(spacing: 0) {
             ForEach(list) { e in
                 HStack(spacing: 10) {
@@ -215,9 +221,13 @@ struct TradeFlorView: View {
                 .padding(.vertical, 9)
                 .overlay(alignment: .bottom) { Rectangle().fill(Theme.rowRule).frame(height: 1) }
             }
-            if today.count > 5 && !showAll {
-                Button { showAll = true } label: {
-                    Text(String(format: NSLocalizedString("tf.more", comment: ""), today.count - 5))
+            if today.count > 5 {
+                Button {
+                    withAnimation { shownCount = shownCount < today.count ? shownCount + 5 : 5 }
+                } label: {
+                    Text(shownCount < today.count
+                         ? String(format: NSLocalizedString("tf.loadmore", comment: ""), min(5, today.count - shownCount))
+                         : NSLocalizedString("tf.showless", comment: ""))
                         .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
                         .frame(maxWidth: .infinity, minHeight: 36)
                         .background(Theme.chip, in: RoundedRectangle(cornerRadius: 10))
