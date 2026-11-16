@@ -81,7 +81,7 @@ struct StatusListView: View {
             StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) { Task { await load() } }
         }
         .fullScreenCover(isPresented: $showCamera) {
-            CameraPicker { img in Task { await postPhoto(img) } }.ignoresSafeArea()
+            CameraStudio(allowNote: false, onPhoto: { img in Task { await postPhoto(img) } }, onVideo: { url in Task { await postVideo(url) } })
         }
         .sheet(isPresented: $showText) {
             TextStatusComposer { text, bg, font in Task { await postText(text, bg: bg, font: font) } }

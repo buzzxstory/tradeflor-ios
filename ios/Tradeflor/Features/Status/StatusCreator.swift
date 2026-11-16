@@ -124,7 +124,7 @@ struct StatusCreatorSheet: View {
             }
         }
         .fullScreenCover(isPresented: $showCamera) {
-            CameraPicker { img in items.append(Item(image: img)) }.ignoresSafeArea()
+            CameraStudio(allowNote: false, onPhoto: { img in items.append(Item(image: img)) }, onVideo: { url in items.append(Item(videoURL: url)) })
         }
         .sheet(isPresented: $showText) {
             TextStatusComposer { text, bg, font in
