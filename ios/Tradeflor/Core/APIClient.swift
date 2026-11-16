@@ -285,7 +285,17 @@ final class APIClient {
     // MARK: groups
 
     func groups(token: String) async throws -> [GroupSummary] {
-        try decodeList(GroupSummary.self, try await getJSON("groups", token: token))
+        let data = try await getJSON("groups", token: token)
+        if data.isEmpty || data == Data("null".utf8) { return [] }
+        // one entry the app cannot read must never hide every group: read each on its own and say what was skipped
+        struct Lenient: Decodable {
+            let value: GroupSummary?
+            init(from decoder: Decoder) throws { value = try? GroupSummary(from: decoder) }
+        }
+        guard let all = try? JSONDecoder().decode([Lenient].self, from: data) else { throw APIError.decoding }
+        let list = all.compactMap(\.value)
+        NSLog("TF groups: %d from the server, %d read", all.count, list.count)
+        return list
     }
 
     func groupMembers(token: String, groupID: String) async throws -> [GroupMember] {
