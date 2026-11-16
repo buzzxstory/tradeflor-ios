@@ -12,7 +12,7 @@ struct TradeflorApp: App {
             RootView()
                 .environmentObject(store)
                 .environmentObject(live)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(store.session == nil ? .light : .dark) // the sign-in screens are light, like the website
         }
     }
 }

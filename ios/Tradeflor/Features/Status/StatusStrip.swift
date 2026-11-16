@@ -84,7 +84,9 @@ struct StatusStrip: View {
                     }
                 }
                 .lineLimit(1)
-                .frame(maxWidth: 66)
+                .minimumScaleFactor(0.85)
+                .fixedSize(horizontal: sub != nil, vertical: false)
+                .frame(maxWidth: sub != nil ? 80 : 66)
             }
         }
         .buttonStyle(.plain)
