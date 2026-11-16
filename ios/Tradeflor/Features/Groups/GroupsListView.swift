@@ -322,6 +322,14 @@ struct GroupsListView: View {
         do {
             groups = try await APIClient.shared.groups(token: token)
             BadgeStore.shared.groups = groups.filter { $0.unread_count > 0 }.count
+            #if DEBUG
+            // CI only: TF_CI_OPEN_GROUP=1 opens the first group once, for a screenshot of a group chat
+            if ProcessInfo.processInfo.environment["TF_CI_OPEN_GROUP"] == "1", path.isEmpty, let first = groups.first,
+               !UserDefaults.standard.bool(forKey: "tf.ci.groupOpened") {
+                UserDefaults.standard.set(true, forKey: "tf.ci.groupOpened")
+                path = [first]
+            }
+            #endif
             if let feed = try? await APIClient.shared.statusFeed(token: token) {
                 var map: [String: StatusGroup] = [:]
                 for s in feed { if let gid = s.group_id, !s.posts.isEmpty { map[gid] = s } }

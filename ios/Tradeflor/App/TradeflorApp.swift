@@ -11,7 +11,10 @@ struct TradeflorApp: App {
         #if DEBUG
         // CI screenshots: TF_CI_DAY=1 shows the day look; every other CI launch the night look
         let env = ProcessInfo.processInfo.environment
-        if env["TF_CI"] != nil { UserDefaults.standard.set(env["TF_CI_DAY"] == nil, forKey: "tf.night") }
+        if env["TF_CI"] != nil {
+            UserDefaults.standard.set(env["TF_CI_DAY"] == nil, forKey: "tf.night")
+            UserDefaults.standard.set(false, forKey: "tf.ci.groupOpened")
+        }
         #endif
     }
 

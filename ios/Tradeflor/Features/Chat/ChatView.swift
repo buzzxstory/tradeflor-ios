@@ -347,6 +347,15 @@ struct ChatView: View {
             }
         }
         .task { if isGroup { await loadGroupStatus() } }
+        #if DEBUG
+        // CI only: TF_CI_GROUP_INFO=1 opens Group Info over the group chat, for a screenshot
+        .task {
+            if isGroup, ProcessInfo.processInfo.environment["TF_CI_GROUP_INFO"] == "1" {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                showInfo = true
+            }
+        }
+        #endif
         .fullScreenCover(item: $openDoc) { d in DocumentPreview(url: d.url).ignoresSafeArea() }
         .sheet(isPresented: $showFocus) {
             if let doc = focusDoc {
