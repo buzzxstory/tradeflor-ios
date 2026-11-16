@@ -831,7 +831,7 @@ struct CallsPage: View {
                             }
                             Spacer()
                             if let chat {
-                                Button { calls.start(conversationID: chat.conversation_id, peerName: chat.title) } label: {
+                                Button { calls.start(conversationID: chat.conversation_id, peerName: chat.title, peerID: chat.peer_id) } label: {
                                     Image(systemName: "phone").foregroundStyle(Theme.accent).frame(width: 34, height: 34)
                                         .overlay(Circle().stroke(Theme.borderStrong, lineWidth: 1))
                                 }

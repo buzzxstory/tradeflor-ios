@@ -61,7 +61,25 @@ struct RootView: View {
             }
         }
         .tint(Theme.accent)
-        .fullScreenCover(isPresented: $calls.showScreen) { CallScreen(calls: calls) }
+        .fullScreenCover(isPresented: $calls.showScreen) { CallScreen(calls: calls).environmentObject(store) }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !calls.showScreen && calls.phase != .idle && calls.phase != .ended {
+                Button { calls.showScreen = true } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "phone.fill")
+                        Text(calls.peerName).fontWeight(.semibold)
+                        Spacer()
+                        if calls.phase == .active, let t = calls.connectedAt { Text(t, style: .timer).monospacedDigit() }
+                        else { Text("call.return") }
+                    }
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(Color.green.opacity(0.85))
+                }
+                .accessibilityLabel(Text("call.return"))
+            }
+        }
         .fullScreenCover(isPresented: $needsSetup) { IdentitySetupView { needsSetup = false } }
         .task(id: store.session?.token) {
             // a new account (or one that never finished) still has to pick its @username and get its PIN

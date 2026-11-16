@@ -174,7 +174,7 @@ struct ContactInfoView: View {
         HStack(spacing: 10) {
             actionButton("phone", "ci.voice") {
                 dismiss()
-                CallManager.shared.start(conversationID: chat.conversation_id, peerName: name)
+                CallManager.shared.start(conversationID: chat.conversation_id, peerName: name, peerID: chat.peer_id)
             }
             .disabled(!CallManager.shared.enabled || blocked)
             actionButton("magnifyingglass", "ci.search") {

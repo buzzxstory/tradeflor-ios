@@ -1077,3 +1077,7 @@
 "cam.again" = "تسجيل مرة أخرى";
 "cam.send.photo" = "إرسال الصورة";
 "cam.send.video" = "إرسال الفيديو";
+"call.ringing" = "يرن…";
+"call.reconnecting" = "جارٍ إعادة الاتصال…";
+"call.minimize" = "تصغير المكالمة";
+"call.return" = "اضغط للعودة إلى المكالمة";

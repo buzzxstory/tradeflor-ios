@@ -1077,3 +1077,7 @@
 "cam.again" = "Record again";
 "cam.send.photo" = "Send photo";
 "cam.send.video" = "Send video";
+"call.ringing" = "Ringing…";
+"call.reconnecting" = "Reconnecting…";
+"call.minimize" = "Minimize call";
+"call.return" = "Tap to return to the call";

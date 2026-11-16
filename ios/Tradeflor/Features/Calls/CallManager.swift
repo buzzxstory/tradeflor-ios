@@ -30,6 +30,11 @@ final class CallManager: NSObject, ObservableObject {
     @Published private(set) var endReason: String?
     @Published private(set) var enabled = false
     @Published var showScreen = false
+    /// Outgoing: the other side's device is ringing (online), not just "calling".
+    @Published private(set) var ringing = false
+    /// Active call whose connection dropped: trying to get it back (ICE restart).
+    @Published private(set) var reconnecting = false
+    @Published private(set) var peerID: String?
 
     private var live: LiveConnection?
     private var token = ""
@@ -102,7 +107,7 @@ final class CallManager: NSObject, ObservableObject {
 
     // MARK: user actions
 
-    func start(conversationID: String, peerName: String) {
+    func start(conversationID: String, peerName: String, peerID: String? = nil) {
         guard phase == .idle, enabled else { return }
         Task {
             guard await micAllowed() else { endReason = "mic_denied"; finish(); return }
@@ -111,6 +116,7 @@ final class CallManager: NSObject, ObservableObject {
             callID = id.uuidString.lowercased()
             self.conversationID = conversationID
             self.peerName = peerName
+            self.peerID = peerID
             role = .caller
             acknowledged = false
             phase = .outgoing
@@ -167,10 +173,29 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     func toggleMute() {
-        muted.toggle()
+        let want = !muted
+        callController.request(CXTransaction(action: CXSetMutedCallAction(call: uuid, muted: want))) { [weak self] err in
+            if err != nil { Task { @MainActor in self?.applyMute(want) } }
+        }
+    }
+
+    fileprivate func applyMute(_ value: Bool) {
+        guard muted != value else { return }
+        muted = value
         audioTrack?.isEnabled = !muted
         if let id = callID, phase == .connecting || phase == .active { send("call.media", ["call_id": id, "muted": muted]) }
-        provider.reportCall(with: uuid, updated: CXCallUpdate())
+    }
+
+    /// The WebRTC voice-chat audio session (play and record, echo cancellation); CallKit activates it.
+    nonisolated fileprivate static func configureAudioSession() {
+        let s = RTCAudioSession.sharedInstance()
+        s.lockForConfiguration()
+        let cfg = RTCAudioSessionConfiguration.webRTC()
+        cfg.category = AVAudioSession.Category.playAndRecord.rawValue
+        cfg.mode = AVAudioSession.Mode.voiceChat.rawValue
+        cfg.categoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+        try? s.setConfiguration(cfg)
+        s.unlockForConfiguration()
     }
 
     func toggleSpeaker() {
@@ -199,6 +224,8 @@ final class CallManager: NSObject, ObservableObject {
             let summary = (d["call"] as? [String: Any]) ?? d
             guard summary["call_id"] as? String == callID else { return }
             acknowledged = true
+            ringing = (d["ringing"] as? Bool) ?? ringing
+            CallTones.shared.ringback(true)
             provider.reportOutgoingCall(with: uuid, startedConnectingAt: nil)
         case "call.merged":
             guard cid == callID, let into = d["into"] as? String else { return }
@@ -206,7 +233,10 @@ final class CallManager: NSObject, ObservableObject {
             role = .callee
             phase = .connecting
         case "call.accepted":
-            guard cid == callID else { return }
+            guard cid == callID, pc == nil else { return }
+            CallTones.shared.ringback(false)
+            if let r = d["role"] as? String { role = r == "caller" ? .caller : .callee }
+            peerID = (role == .caller ? d["callee_id"] : d["caller_id"]) as? String ?? peerID
             phase = .connecting
             arm(seconds: 45) { [weak self] in self?.hangUp() }
             Task { await setUpPeerConnection() }
@@ -247,6 +277,7 @@ final class CallManager: NSObject, ObservableObject {
         callID = id
         conversationID = d["conversation_id"] as? String
         role = .callee
+        peerID = d["caller_id"] as? String
         uuid = UUID(uuidString: id) ?? UUID()
         phase = .incoming
         peerName = NSLocalizedString("call.someone", comment: "")
@@ -394,13 +425,16 @@ final class CallManager: NSObject, ObservableObject {
         switch state {
         case .connected, .completed:
             disconnectTimer?.cancel()
+            reconnecting = false
         case .disconnected:
+            if phase == .active { reconnecting = true }
             disconnectTimer?.cancel()
             disconnectTimer = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 3_500_000_000)
                 if !Task.isCancelled { await self?.restartIce() }
             }
         case .failed:
+            if phase == .active { reconnecting = true }
             Task { await restartIce() }
         default:
             break
@@ -430,6 +464,7 @@ final class CallManager: NSObject, ObservableObject {
         phase = .active
         safetyTimer?.cancel()
         if connectedAt == nil { connectedAt = Date() }
+        CallTones.shared.connected()
         if role == .caller { provider.reportOutgoingCall(with: uuid, connectedAt: connectedAt) }
     }
 
@@ -445,6 +480,8 @@ final class CallManager: NSObject, ObservableObject {
     private func finish() {
         guard phase != .ended else { return }
         let hadCall = callID != nil
+        CallTones.shared.ringback(false)
+        if hadCall { if endReason == "busy" { CallTones.shared.busy() } else { CallTones.shared.end() } }
         safetyTimer?.cancel()
         disconnectTimer?.cancel()
         pc?.close()
@@ -473,6 +510,9 @@ final class CallManager: NSObject, ObservableObject {
                 muted = false
                 speaker = false
                 peerMuted = false
+                ringing = false
+                reconnecting = false
+                peerID = nil
                 endReason = nil
             }
         }
@@ -513,9 +553,11 @@ extension CallManager: CXProviderDelegate {
         Task { @MainActor in self.finish() }
     }
     nonisolated func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+        CallManager.configureAudioSession()
         action.fulfill()
     }
     nonisolated func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+        CallManager.configureAudioSession()
         Task { @MainActor in self.doAccept() }
         action.fulfill()
     }
@@ -527,7 +569,7 @@ extension CallManager: CXProviderDelegate {
     }
     nonisolated func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
         let wantMuted = action.isMuted
-        Task { @MainActor in if self.muted != wantMuted { self.toggleMute() } }
+        Task { @MainActor in self.applyMute(wantMuted) }
         action.fulfill()
     }
     nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {

@@ -514,7 +514,7 @@ struct ChatView: View {
             .accessibilityIdentifier("chat.info")
             Spacer(minLength: 4)
             if calls.enabled && chat.conversation_id.hasPrefix("dm_") {
-                Button { calls.start(conversationID: chat.conversation_id, peerName: chat.title) } label: {
+                Button { calls.start(conversationID: chat.conversation_id, peerName: chat.title, peerID: chat.peer_id) } label: {
                     Image(systemName: "phone").font(.system(size: 18)).foregroundStyle(Theme.muted).frame(width: 36, height: 44)
                 }
                 .disabled(calls.phase != .idle)
@@ -1085,7 +1085,7 @@ struct ChatView: View {
             SignalCard(info: sig).frame(maxWidth: .infinity, alignment: m.sender_id == me ? .trailing : .leading)
         } else if m.kind == "call" {
             CallEntryRow(message: m, me: me, onCallBack: calls.enabled && !isGroup ? {
-                calls.start(conversationID: chat.conversation_id, peerName: chat.title)
+                calls.start(conversationID: chat.conversation_id, peerName: chat.title, peerID: chat.peer_id)
             } : nil)
         } else if m.kind == "text", !m.isDeleted, let url = LinkPreviewCard.firstURL(in: m.body) {
             VStack(alignment: m.sender_id == me ? .trailing : .leading, spacing: 4) {

@@ -3,18 +3,39 @@ import SwiftUI
 /// The in-app call screen (CallKit also shows the system one on the lock screen and in the status bar).
 struct CallScreen: View {
     @ObservedObject var calls: CallManager
+    @EnvironmentObject private var store: SessionStore
 
     var body: some View {
         ZStack {
             LinearGradient(colors: [Theme.surface, Theme.ground], startPoint: .top, endPoint: .bottom).ignoresSafeArea()
             VStack(spacing: 14) {
-                Spacer().frame(height: 60)
-                Circle()
-                    .fill(Theme.surface)
-                    .frame(width: 120, height: 120)
-                    .overlay(Text(String(calls.peerName.prefix(1)).uppercased()).font(.system(size: 48, weight: .bold))
-                        .foregroundStyle(Theme.accent))
-                    .overlay(Circle().stroke(Theme.accent.opacity(calls.phase == .active ? 0.9 : 0.3), lineWidth: 3))
+                HStack {
+                    Button { calls.showScreen = false } label: {
+                        Image(systemName: "chevron.down").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                            .frame(width: 44, height: 44).background(Color.white.opacity(0.12), in: Circle())
+                    }
+                    .accessibilityLabel(Text("call.minimize"))
+                    .opacity(calls.phase == .ended || calls.phase == .idle ? 0 : 1)
+                    Spacer()
+                    Label("call.voice", systemImage: "phone.fill").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    Color.clear.frame(width: 44, height: 44)
+                }
+                .padding(.top, 8)
+                Spacer().frame(height: 30)
+                Group {
+                    if let pid = calls.peerID {
+                        Avatar(token: store.session?.token ?? "", userID: pid, avatarID: nil, title: calls.peerName, size: 120)
+                    } else {
+                        Circle()
+                            .fill(Theme.surface)
+                            .frame(width: 120, height: 120)
+                            .overlay(Text(String(calls.peerName.prefix(1)).uppercased()).font(.system(size: 48, weight: .bold))
+                                .foregroundStyle(Theme.accent))
+                    }
+                }
+                .overlay(Circle().stroke(Theme.accent.opacity(calls.phase == .active ? 0.9 : 0.3), lineWidth: 3).padding(-4))
+                .shadow(color: Theme.accent.opacity(calls.phase == .outgoing || calls.phase == .incoming ? 0.45 : 0), radius: 18)
                 Text(calls.peerName).font(.title.weight(.semibold)).foregroundStyle(.white)
                 status
                 if calls.peerMuted && calls.phase == .active {
@@ -29,11 +50,13 @@ struct CallScreen: View {
 
     @ViewBuilder private var status: some View {
         switch calls.phase {
-        case .outgoing: Text("call.calling").foregroundStyle(.secondary)
+        case .outgoing: Text(LocalizedStringKey(calls.ringing ? "call.ringing" : "call.calling")).foregroundStyle(.secondary)
         case .incoming: Text("call.incoming").foregroundStyle(.secondary)
         case .connecting: Text("call.connecting").foregroundStyle(.secondary)
         case .active:
-            if let t = calls.connectedAt {
+            if calls.reconnecting {
+                Label("call.reconnecting", systemImage: "wifi.exclamationmark").foregroundStyle(Color.orange)
+            } else if let t = calls.connectedAt {
                 Text(t, style: .timer).monospacedDigit().foregroundStyle(.secondary)
             }
         case .ended, .idle:
