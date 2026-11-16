@@ -22,6 +22,7 @@ struct RootView: View {
     @EnvironmentObject private var live: LiveConnection
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var calls = CallManager.shared
+    @ObservedObject private var badges = BadgeStore.shared
     @State private var needsSetup = false
     @State private var tab: String = {
         #if DEBUG
@@ -39,9 +40,11 @@ struct RootView: View {
                 TabView(selection: $tab) {
                     ChatListView()
                         .tabItem { Label("chats.title", systemImage: "bubble.left") }
+                        .badge(badges.chats)
                         .tag("chats")
                     GroupsListView()
                         .tabItem { Label("groups.title", systemImage: "person.2") }
+                        .badge(badges.groups)
                         .tag("groups")
                     TradeFlorView()
                         .tabItem { Label { Text("TradeFlor") } icon: { Image("TabFlower") } }

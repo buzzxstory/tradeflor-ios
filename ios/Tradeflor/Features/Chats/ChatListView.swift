@@ -20,6 +20,15 @@ struct ChatListView: View {
     @State private var filter = "all" // all | unread | <folder id>
     @State private var prefs: [String: ConversationPrefs] = [:]
     @State private var showArchived = false
+    @State private var lockedIDs: Set<String> = []
+    @State private var blockedIDs: Set<String> = []
+    @State private var hiddenAt: [String: Double] = (UserDefaults.standard.dictionary(forKey: "tf.hiddenChats") as? [String: Double]) ?? [:]
+    @State private var showFolderEditor = false
+    @State private var editingFolder: EditableFolder?
+    @State private var showManageFolders = false
+    @State private var removingFolder: ChatFolder?
+    @State private var lockSheetFor: ConversationSummary?
+    @State private var toast: String?
 
     /// Live events refresh the list at once; this slow poll only covers a socket that is down.
     private let refreshEvery: UInt64 = 30
@@ -27,9 +36,15 @@ struct ChatListView: View {
 
     private var shown: [ConversationSummary] {
         let q = query.trimmingCharacters(in: .whitespaces)
-        let visible = chats.filter { showArchived == (prefs[$0.conversation_id]?.archived ?? false) }
+        let notHidden = chats.filter { c in
+            guard let h = hiddenAt[c.conversation_id] else { return true }
+            return Double(c.last_message_at > 100_000_000_000 ? c.last_message_at / 1000 : c.last_message_at) > h
+        }
+        let visible = notHidden.filter { showArchived == (prefs[$0.conversation_id]?.archived ?? false) && !lockedIDs.contains($0.conversation_id) }
         var base: [ConversationSummary]
         switch filter {
+        case "locked": base = notHidden.filter { lockedIDs.contains($0.conversation_id) }
+        case "blocked": base = notHidden.filter { blockedIDs.contains($0.peer_id) }
         case "all": base = visible
         case "unread": base = visible.filter { isUnread($0) }
         default:
@@ -68,6 +83,33 @@ struct ChatListView: View {
             }
             .refreshable { await load() }
             .background(Theme.panelGradient.ignoresSafeArea())
+            .sheet(isPresented: $showFolderEditor) { FolderEditorView(token: token, chats: chats) { Task { await reloadFolders() } } }
+            .sheet(item: $editingFolder) { f in FolderEditorView(token: token, chats: chats, editing: f) { Task { await reloadFolders() } } }
+            .sheet(isPresented: $showManageFolders) { ManageFoldersView(token: token, chats: chats) { Task { await reloadFolders() } } }
+            .sheet(item: $lockSheetFor) { c in
+                LockChatSheet(conversationID: c.conversation_id, name: c.title, locked: lockedIDs.contains(c.conversation_id)) {
+                    Task { await loadLocks() }
+                }
+                .environmentObject(store)
+            }
+            .confirmationDialog(Text("folder.remove.title"), isPresented: Binding(get: { removingFolder != nil }, set: { if !$0 { removingFolder = nil } }),
+                                titleVisibility: .visible) {
+                Button("folder.remove", role: .destructive) {
+                    if let r = removingFolder {
+                        Task {
+                            try? await FolderStore.save(token: token) { $0.filter { $0.id != r.id } }
+                            if filter == r.id { filter = "all" }
+                            await reloadFolders()
+                        }
+                    }
+                }
+            } message: { Text("folder.remove.note") }
+            .overlay(alignment: .bottom) {
+                if let toast {
+                    Text(toast).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
+                        .padding(.horizontal, 14).padding(.vertical, 8).background(Theme.card, in: Capsule()).padding(.bottom, 16)
+                }
+            }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: ConversationSummary.self) { c in ChatView(chat: c) }
             .sheet(isPresented: $showNew) {
@@ -132,7 +174,43 @@ struct ChatListView: View {
                 FilterChip(title: NSLocalizedString("folders.unread", comment: ""), selected: filter == "unread") { filter = "unread" }
                 ForEach(folders) { f in
                     FilterChip(title: f.name, icon: "folder", selected: filter == f.id) { filter = f.id }
+                        .contextMenu {
+                            Button {
+                                Task {
+                                    if let all = try? await FolderStore.load(token: token), let e = all.1.first(where: { $0.id == f.id }) { editingFolder = e }
+                                }
+                            } label: { Label("folder.edit", systemImage: "pencil") }
+                            Button { showManageFolders = true } label: { Label("folder.manage", systemImage: "list.bullet") }
+                            Button {
+                                Task {
+                                    for c in chats where f.contains(id: c.conversation_id, title: c.title, unread: isUnread(c)) {
+                                        await APIClient.shared.markRead(token: token, conversationID: c.conversation_id)
+                                    }
+                                    await load(quiet: true)
+                                }
+                            } label: { Label("chats.markread", systemImage: "envelope.open") }
+                            Button(role: .destructive) { removingFolder = f } label: { Label("folder.remove", systemImage: "trash") }
+                        }
                 }
+                if !lockedIDs.isEmpty {
+                    FilterChip(title: String(format: NSLocalizedString("chips.locked", comment: ""), lockedIDs.count), icon: "lock",
+                               iconColor: Theme.accent, selected: filter == "locked") { filter = "locked" }
+                }
+                if archivedCount > 0 {
+                    FilterChip(title: String(format: NSLocalizedString("chips.archived", comment: ""), archivedCount), icon: "archivebox",
+                               iconColor: Theme.accent, selected: showArchived) { showArchived.toggle() }
+                }
+                if !blockedIDs.isEmpty {
+                    FilterChip(title: String(format: NSLocalizedString("chips.blocked", comment: ""), chats.filter { blockedIDs.contains($0.peer_id) }.count),
+                               icon: "hand.raised", iconColor: Theme.danger, selected: filter == "blocked") { filter = "blocked" }
+                }
+                Button { showFolderEditor = true } label: {
+                    Image(systemName: "folder.badge.plus").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.muted)
+                        .frame(width: 34, height: 30).background(Theme.chip, in: Capsule())
+                        .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("folder.new"))
             }
             .padding(.horizontal, 16)
         }
@@ -198,6 +276,9 @@ struct ChatListView: View {
     /// Long-press on a chat (the website's row menu): pin, mute, mark as unread, archive.
     @ViewBuilder private func rowMenu(_ c: ConversationSummary) -> some View {
         let p = prefs[c.conversation_id]
+        Button { lockSheetFor = c } label: {
+            Label(LocalizedStringKey(lockedIDs.contains(c.conversation_id) ? "chats.unlock" : "chats.lock"), systemImage: "lock")
+        }
         Button { change(c) { try await APIClient.shared.setPrefs(token: token, conversationID: c.conversation_id, pinned: !(p?.pinned ?? false)) } } label: {
             Label(LocalizedStringKey((p?.pinned ?? false) ? "chats.unpin" : "chats.pin"), systemImage: (p?.pinned ?? false) ? "pin.slash" : "pin")
         }
@@ -218,13 +299,37 @@ struct ChatListView: View {
         Button { change(c) { try await APIClient.shared.setPrefs(token: token, conversationID: c.conversation_id, archived: !(p?.archived ?? false)) } } label: {
             Label(LocalizedStringKey((p?.archived ?? false) ? "chats.unarchive" : "chats.archive"), systemImage: "archivebox")
         }
+        if blockedIDs.contains(c.peer_id) {
+            Button { change(c) { try await APIClient.shared.unblock(token: token, userID: c.peer_id) } } label: { Label("chats.unblock", systemImage: "hand.raised.slash") }
+        } else {
+            Button(role: .destructive) { change(c) { try await APIClient.shared.block(token: token, userID: c.peer_id) } } label: {
+                Label("chats.block", systemImage: "hand.raised")
+            }
+        }
+        Button(role: .destructive) {
+            hiddenAt[c.conversation_id] = Date().timeIntervalSince1970
+            UserDefaults.standard.set(hiddenAt, forKey: "tf.hiddenChats")
+            toast = NSLocalizedString("chats.removed", comment: "")
+            Task { try? await Task.sleep(nanoseconds: 1_800_000_000); toast = nil }
+        } label: { Label("chats.delete", systemImage: "trash") }
     }
 
     private func change(_ c: ConversationSummary, _ work: @escaping () async throws -> Void) {
         Task {
             try? await work()
             await loadPrefs()
+            await loadLocks()
         }
+    }
+
+    private func reloadFolders() async {
+        folders = (try? await APIClient.shared.folders(token: token)) ?? folders
+    }
+
+    private func loadLocks() async {
+        if let st = try? await APIClient.shared.ctLockState(token: token) { lockedIDs = Set((st.locks ?? []).map(\.conversation_id)) }
+        blockedIDs = Set((try? await APIClient.shared.blocked(token: token)) ?? [])
+        BadgeStore.shared.chats = chats.filter { isUnread($0) && !lockedIDs.contains($0.conversation_id) }.count
     }
 
     private func loadPrefs() async {
@@ -236,6 +341,7 @@ struct ChatListView: View {
     private func load(quiet: Bool = false) async {
         guard !token.isEmpty else { return }
         await loadPrefs()
+        await loadLocks()
         if !quiet { loading = true }
         defer { loading = false }
         do {

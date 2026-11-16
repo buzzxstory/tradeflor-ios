@@ -295,6 +295,7 @@ struct GroupsListView: View {
         defer { loading = false }
         do {
             groups = try await APIClient.shared.groups(token: token)
+            BadgeStore.shared.groups = groups.filter { $0.unread_count > 0 }.count
         } catch APIError.badCredentials {
             store.sessionExpired()
             return
