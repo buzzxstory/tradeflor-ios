@@ -78,6 +78,7 @@ struct ChatView: View {
     @State private var pinsHidden = false
     @State private var outboxLoaded = false
     @State private var silentPost = false
+    @State private var profileFor: MemberProfileRef?
     /// Members whose names look like another member's (website nameSkeleton.ts).
     private var lookAlike: Set<String> { NameSkeleton.lookAlikeIDs(members) }
     @State private var groupStatus: StatusGroup?
@@ -156,6 +157,10 @@ struct ChatView: View {
                                            highlighted: searchOpen && searchHits.indices.contains(searchIndex) && searchHits[searchIndex].id == m.id,
                                            roleTag: isGroup ? roleOf(m.sender_id) : nil,
                                            asGroup: asGroup,
+                                           senderAvatar: isGroup && !asGroup && m.sender_id != me && (i == 0 || rows[i - 1].sender_id != m.sender_id)
+                                               ? AnyView(Avatar(token: token, userID: m.sender_id, avatarID: nil, title: memberNames[m.sender_id] ?? "?", size: 34))
+                                               : nil,
+                                           avatarSlot: isGroup && !asGroup,
                                            handle: lookIDs.contains(m.sender_id) ? members.first { $0.user_id == m.sender_id }?.username : nil),
                                        actions: MessageRowActions(
                                            copyLink: {
@@ -169,6 +174,11 @@ struct ChatView: View {
                                            moreReactions: { reactTarget = m; showEmoji = true },
                                            comments: { commentsFor = m },
                                            save: m.file_id == nil ? nil : { Task { await saveAttachment(m) } },
+                                           openSender: !isGroup || asGroup || m.sender_id == me ? nil : {
+                                               if let u = members.first(where: { $0.user_id == m.sender_id }) {
+                                                   profileFor = MemberProfileRef(userID: u.user_id, username: u.username)
+                                               }
+                                           },
                                            openReply: m.reply_to_id == nil ? nil : {
                                                if let id = m.reply_to_id, messages.contains(where: { $0.id == id }) {
                                                    searchText = ""
@@ -337,6 +347,7 @@ struct ChatView: View {
             }
         }
         .sheet(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft) }
+        .sheet(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store) }
         .sheet(isPresented: $addingGroupStatus) {
             StatusCreatorSheet(onPosted: { Task { await loadGroupStatus() } }, groupID: chat.conversation_id, groupName: chat.title)
                 .environmentObject(store)

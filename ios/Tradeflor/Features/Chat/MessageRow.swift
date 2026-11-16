@@ -12,6 +12,9 @@ struct MessageRowOptions {
     var roleTag: String? = nil
     /// The owner speaks as the group (website GroupsView): the group's name with a megaphone mark, no Owner pill.
     var asGroup = false
+    /// Group messages from others: the sender's picture beside the first message of a run (blank space for the rest).
+    var senderAvatar: AnyView? = nil
+    var avatarSlot = false
     /// A member whose name looks like another member's: their real @username beside it.
     var handle: String? = nil
 }
@@ -27,6 +30,8 @@ struct MessageRowActions {
     var comments: () -> Void = {}
     /// Save As... (photos and videos to Photos, documents to Files / share); nil when the message has no attachment.
     var save: (() -> Void)?
+    /// Tapping the sender's picture or name opens their profile.
+    var openSender: (() -> Void)?
     /// Tapping the quoted message goes to the original.
     var openReply: (() -> Void)?
 }
@@ -65,6 +70,19 @@ struct MessageRow<Content: View>: View {
                     .font(.system(size: 22)).foregroundStyle(options.selected ? Theme.accent : Theme.faint)
                     .accessibilityLabel(Text(LocalizedStringKey(options.selected ? "select.deselect" : "select.select")))
             }
+            if options.avatarSlot && !mine {
+                Group {
+                    if let a = options.senderAvatar {
+                        a.onTapGesture { if !options.selecting { actions.openSender?() } }
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityLabel(Text(String(format: NSLocalizedString("member.open", comment: ""), senderName ?? "")))
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(width: 34, height: 34)
+                .frame(maxHeight: .infinity, alignment: .top)
+            }
             column
         }
         .contentShape(Rectangle())
@@ -81,6 +99,7 @@ struct MessageRow<Content: View>: View {
                             .accessibilityLabel(Text("group.voice"))
                     }
                     Text(senderName).font(.caption.weight(.semibold)).foregroundStyle(options.asGroup ? Theme.gold : Theme.accent)
+                        .onTapGesture { if !options.selecting && !options.asGroup { actions.openSender?() } }
                     if let h = options.handle { Text("@" + h).font(.caption2).foregroundStyle(Theme.faint) }
                     if let r = options.roleTag, !options.asGroup {
                         Text(LocalizedStringKey("group.role." + r)).font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.gold)

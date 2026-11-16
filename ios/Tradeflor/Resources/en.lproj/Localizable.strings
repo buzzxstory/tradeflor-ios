@@ -1261,3 +1261,4 @@
 "about.hide" = "Hide";
 "about.clear" = "Clear";
 "lock.forgot.reset" = "Forgot the PIN? Set a new one with your account password";
+"member.open" = "Open %@'s profile";

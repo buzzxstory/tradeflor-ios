@@ -276,6 +276,7 @@ struct GroupInfoView: View {
     @State private var stats: GrpMediaStats?
     @State private var cropping: PickedImage?
     @State private var viewingPicture: String?
+    @State private var profileFor: MemberProfileRef?
     @State private var showAudit = false
     @State private var newLink: String?
     @State private var inviteHours = 0
@@ -365,6 +366,7 @@ struct GroupInfoView: View {
         .fullScreenCover(isPresented: Binding(get: { viewingPicture != nil }, set: { if !$0 { viewingPicture = nil } })) {
             GroupPictureViewer(token: token, groupID: groupID, avatarID: viewingPicture ?? "")
         }
+        .sheet(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store) }
         .fullScreenCover(item: $cropping) { p in
             AvatarEditor(image: p.image) { jpeg in
                 Task { await run { try await APIClient.shared.grpUploadAvatar(token: token, id: groupID, jpeg: jpeg) } }
@@ -724,6 +726,7 @@ struct GroupInfoView: View {
         TFCard {
             ForEach(Array(members.enumerated()), id: \.element.id) { i, m in
                 memberRow(m)
+                    .onTapGesture { if m.user_id != me { profileFor = MemberProfileRef(userID: m.user_id, username: m.username) } }
                     .contextMenu { if admin && m.user_id != me && m.role != "owner" { memberMenu(m) } }
                 if i < members.count - 1 { Rectangle().fill(Theme.rowRule).frame(height: 1).padding(.leading, 62) }
             }
