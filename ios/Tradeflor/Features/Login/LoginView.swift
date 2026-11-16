@@ -6,6 +6,9 @@ struct LoginView: View {
     @State private var password = ""
     @State private var busy = false
     @State private var error: String?
+    @State private var showSignUp = false
+    @State private var showForgot = false
+    @State private var unverifiedUserID: String?
 
     var body: some View {
         ZStack {
@@ -66,6 +69,16 @@ struct LoginView: View {
                     .disabled(busy || username.isEmpty || password.isEmpty)
                     .opacity(username.isEmpty || password.isEmpty ? 0.6 : 1)
                     .accessibilityIdentifier("login.submit")
+
+                    Button("login.forgot") { showForgot = true }
+                        .font(.footnote)
+                        .foregroundStyle(Theme.accent)
+                    HStack(spacing: 4) {
+                        Text("login.noaccount").foregroundStyle(.secondary)
+                        Button("login.signup") { showSignUp = true }.foregroundStyle(Theme.accent).bold()
+                    }
+                    .font(.footnote)
+                    .padding(.top, 8)
                 }
                 .padding(.horizontal, 24)
                 .frame(maxWidth: 440)
@@ -73,6 +86,13 @@ struct LoginView: View {
             }
         }
         .task { await ciAutoLogin() }
+        .sheet(isPresented: $showSignUp) { SignUpView() }
+        .sheet(isPresented: $showForgot) { ForgotPasswordView() }
+        .sheet(isPresented: Binding(get: { unverifiedUserID != nil }, set: { if !$0 { unverifiedUserID = nil } })) {
+            if let id = unverifiedUserID {
+                NavigationStack { VerifyEmailView(userID: id, username: username, displayName: "") }
+            }
+        }
     }
 
     private func submit() async {
@@ -84,6 +104,10 @@ struct LoginView: View {
             try await store.signIn(username: username, password: password)
         } catch let e as APIError {
             error = Self.message(for: e)
+            if case let .emailNotVerified(uid) = e, !uid.isEmpty {
+                unverifiedUserID = uid
+                try? await APIClient.shared.resendCode(userID: uid, purpose: "register")
+            }
         } catch {
             self.error = Self.message(for: .network)
         }

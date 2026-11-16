@@ -71,6 +71,7 @@ if [ -n "${TF_CI_USERNAME:-}" ] && [ -n "${TF_CI_PASSWORD:-}" ]; then
   SIMCTL_CHILD_TF_CI_OPEN_CHAT=1 launch ar ar_SA && sleep 10 && shot 05-chat-ar.png || status=1
   SIMCTL_CHILD_TF_CI_TAB=status launch ar ar_SA && sleep 8 && shot 06-status-ar.png || status=1
   SIMCTL_CHILD_TF_CI_TAB=settings launch ar ar_SA && sleep 8 && shot 07-settings-ar.png || status=1
+  SIMCTL_CHILD_TF_CI_TAB=groups launch ar ar_SA && sleep 8 && shot 08-groups-ar.png || status=1
   # End the CI session on the server (POST /auth/logout) so test runs do not pile up under Linked devices.
   SIMCTL_CHILD_TF_CI_SIGNOUT=1 launch en en_US && sleep 8 || true
 else

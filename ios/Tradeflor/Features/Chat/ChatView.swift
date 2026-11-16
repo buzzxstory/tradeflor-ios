@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// One conversation: history (newest page first, older pages on demand), live incoming messages, and sending text.
 struct ChatView: View {
     let chat: ConversationSummary
+    var canSend = true
 
     @EnvironmentObject private var store: SessionStore
     @EnvironmentObject private var live: LiveConnection
@@ -26,6 +27,9 @@ struct ChatView: View {
     @State private var forwarding: Message?
     @State private var peerTypingUntil: Date?
     @State private var lastTypingSent = Date.distantPast
+    @State private var confirmBlock = false
+    @State private var memberNames: [String: String] = [:]
+    private var isGroup: Bool { chat.conversation_id.hasPrefix("grp_") }
     @ObservedObject private var calls = CallManager.shared
     @State private var showUnlock = false
 
@@ -51,6 +55,9 @@ struct ChatView: View {
                                 DayDivider(date: m.date)
                             }
                             MessageRow(message: m, mine: m.sender_id == me, myID: me, peerName: chat.title,
+                                       senderName: isGroup && m.sender_id != me
+                                           && (i == 0 || messages[i - 1].sender_id != m.sender_id)
+                                           ? (memberNames[m.sender_id] ?? "") : nil,
                                        onReply: { replyingTo = m; composerFocused = true },
                                        onReact: { e in Task { await react(m, e) } },
                                        onCopy: { UIPasteboard.general.string = displayText(m) },
@@ -107,7 +114,12 @@ struct ChatView: View {
                 .onChange(of: pending.count) { _ in scrollToBottom(proxy) }
                 .onChange(of: composerFocused) { f in if f { scrollToBottom(proxy) } }
             }
-            composer
+            if canSend {
+                composer
+            } else {
+                Text("group.readonly").font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity).padding(.vertical, 14).background(.bar)
+            }
         }
         .background(Theme.ground.ignoresSafeArea())
         .toolbarBackground(Theme.ground, for: .navigationBar)
@@ -128,6 +140,16 @@ struct ChatView: View {
                 if let u = peerTypingUntil, u <= Date() { peerTypingUntil = nil }
             }
         }
+        .confirmationDialog(Text(String(format: NSLocalizedString("chat.block.confirm", comment: ""), chat.title)),
+                            isPresented: $confirmBlock, titleVisibility: .visible) {
+            Button("chat.block", role: .destructive) {
+                Task {
+                    do { try await APIClient.shared.block(token: token, userID: chat.peer_id) } catch {
+                        problem = NSLocalizedString("chat.action.failed", comment: "")
+                    }
+                }
+            }
+        }
         .sheet(item: $forwarding) { m in
             ForwardSheet(token: token, message: m) { forwarding = nil }
         }
@@ -143,13 +165,28 @@ struct ChatView: View {
                     .accessibilityLabel(Text("call.voice"))
                 }
             }
+            if !isGroup {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button(role: .destructive) { confirmBlock = true } label: {
+                        Label("chat.block", systemImage: "hand.raised.fill")
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .accessibilityLabel(Text("chat.more"))
+            }
+            }
+        }
+        .task {
+            if isGroup, let list = try? await APIClient.shared.groupMembers(token: token, groupID: chat.conversation_id) {
+                memberNames = Dictionary(list.map { ($0.user_id, $0.title) }, uniquingKeysWith: { a, _ in a })
+            }
         }
         .task { await loadNewest() }
         .onReceive(live.messages) { m in
             guard m.conversation_id == chat.conversation_id else { return }
             merge([m])
             pending.removeAll { $0.id == m.client_key }
-            if m.sender_id != me { Task { await APIClient.shared.markRead(token: token, conversationID: chat.conversation_id) } }
+            if m.sender_id != me { Task { await markSeen() } }
         }
         .onReceive(live.changes) { id in
             guard id == chat.conversation_id else { return }
@@ -288,7 +325,7 @@ struct ChatView: View {
             merge(page)
             problem = nil
             locked = false
-            await APIClient.shared.markRead(token: token, conversationID: chat.conversation_id)
+            await markSeen()
         } catch APIError.badCredentials {
             store.sessionExpired()
         } catch APIError.locked {
@@ -349,6 +386,15 @@ struct ChatView: View {
         } else {
             Bubble(text: displayText(m), mine: m.sender_id == me, date: m.date,
                    state: m.sender_id == me ? receipt(m) : nil, faded: m.isDeleted)
+        }
+    }
+
+    /// Read receipts: a private chat marks everything read; a group records the newest seq I have seen.
+    private func markSeen() async {
+        if isGroup {
+            if let last = messages.last { await APIClient.shared.markGroupRead(token: token, groupID: chat.conversation_id, seq: last.seq) }
+        } else {
+            await APIClient.shared.markRead(token: token, conversationID: chat.conversation_id)
         }
     }
 

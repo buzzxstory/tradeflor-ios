@@ -20,6 +20,7 @@ struct RootView: View {
     @EnvironmentObject private var live: LiveConnection
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var calls = CallManager.shared
+    @State private var needsSetup = false
     @State private var tab: String = {
         #if DEBUG
         // CI only: TF_CI_TAB=status opens on the Status tab for a screenshot.
@@ -36,6 +37,9 @@ struct RootView: View {
                     ChatListView()
                         .tabItem { Label("chats.title", systemImage: "bubble.left.and.bubble.right.fill") }
                         .tag("chats")
+                    GroupsListView()
+                        .tabItem { Label("groups.title", systemImage: "person.3.fill") }
+                        .tag("groups")
                     StatusListView()
                         .tabItem { Label("status.title", systemImage: "circle.dashed.inset.filled") }
                         .tag("status")
@@ -51,6 +55,12 @@ struct RootView: View {
         }
         .tint(Theme.accent)
         .fullScreenCover(isPresented: $calls.showScreen) { CallScreen(calls: calls) }
+        .fullScreenCover(isPresented: $needsSetup) { IdentitySetupView { needsSetup = false } }
+        .task(id: store.session?.token) {
+            // a new account (or one that never finished) still has to pick its @username and get its PIN
+            guard let token = store.session?.token else { needsSetup = false; return }
+            if let me = try? await APIClient.shared.myIdentity(token: token) { needsSetup = me.needs_setup ?? false }
+        }
         .onAppear {
             syncLive()
             #if DEBUG

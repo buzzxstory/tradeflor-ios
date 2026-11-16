@@ -92,6 +92,68 @@ final class APIClient {
         }
     }
 
+    // MARK: sign up, verify, reset (signed out)
+
+    /// POST without a session; 4xx bodies are the server's own readable message.
+    private func publicPost(_ path: String, _ body: [String: Any]) async throws -> Data {
+        let (data, http) = try await send(request(path, method: "POST", token: nil, body: body))
+        if (400..<500).contains(http.statusCode) && http.statusCode != 429 {
+            throw APIError.refused(String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+        }
+        try check(http, data)
+        return data
+    }
+
+    func usernameAvailableSignup(_ u: String) async -> (available: Bool, reason: String?) {
+        struct Out: Decodable { let available: Bool; let reason: String? }
+        guard let out = try? await send(request("auth/username-available?u=\(Self.q(u))", method: "GET", token: nil, body: nil, rawQuery: true)),
+              let o = try? JSONDecoder().decode(Out.self, from: out.0) else { return (true, nil) }
+        return (o.available, o.reason)
+    }
+
+    /// Returns the new user id; a 6-digit code goes to the email.
+    func register(fullName: String, email: String, phone: String, password: String) async throws -> String {
+        let data = try await publicPost("auth/register", ["FullName": fullName, "Email": email, "Phone": phone, "Password": password])
+        struct Out: Decodable { let user_id: String }
+        guard let o = try? JSONDecoder().decode(Out.self, from: data) else { throw APIError.decoding }
+        return o.user_id
+    }
+
+    func verifyEmail(userID: String, code: String, username: String) async throws -> Session {
+        let data = try await publicPost("auth/verify-email", ["UserID": userID, "Code": code])
+        guard let o = try? JSONDecoder().decode(LoginResponse.self, from: data) else { throw APIError.decoding }
+        return Session(token: o.token, userID: o.user_id, username: username)
+    }
+
+    func resendCode(userID: String, purpose: String) async throws {
+        _ = try await publicPost("auth/resend-otp", ["UserID": userID, "Purpose": purpose])
+    }
+
+    func forgotPassword(email: String) async throws {
+        _ = try await publicPost("auth/forgot-password", ["Email": email])
+    }
+
+    func resetPassword(email: String, code: String, newPassword: String) async throws {
+        _ = try await publicPost("auth/reset-password", ["Email": email, "Code": code, "NewPassword": newPassword])
+    }
+
+    // MARK: identity (username + PIN)
+
+    func myIdentity(token: String) async throws -> IdentityCard {
+        let data = try await getJSON("identity/me", token: token)
+        do { return try JSONDecoder().decode(IdentityCard.self, from: data) } catch { throw APIError.decoding }
+    }
+
+    func setupIdentity(token: String, username: String, displayName: String) async throws -> IdentityCard {
+        let (data, http) = try await send(request("identity/setup", method: "POST", token: token,
+                                                  body: ["Username": username, "DisplayName": displayName]))
+        if http.statusCode == 400 || http.statusCode == 409 {
+            throw APIError.refused(String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+        }
+        try check(http, data)
+        do { return try JSONDecoder().decode(IdentityCard.self, from: data) } catch { throw APIError.decoding }
+    }
+
     func logout(token: String) async {
         _ = try? await send(request("auth/logout", method: "POST", token: token, body: nil))
     }
@@ -218,6 +280,89 @@ final class APIClient {
         let (data, http) = try await send(req)
         try check(http, data)
         do { return try JSONDecoder().decode(Message.self, from: data) } catch { throw APIError.decoding }
+    }
+
+    // MARK: groups
+
+    func groups(token: String) async throws -> [GroupSummary] {
+        try decodeList(GroupSummary.self, try await getJSON("groups", token: token))
+    }
+
+    func groupMembers(token: String, groupID: String) async throws -> [GroupMember] {
+        try decodeList(GroupMember.self, try await getJSON("groups/\(groupID)/members", token: token))
+    }
+
+    /// Groups count reads by sequence number (the newest message I have seen).
+    func markGroupRead(token: String, groupID: String, seq: Int64) async {
+        _ = try? await send(request("groups/\(groupID)/read", method: "POST", token: token, body: ["Seq": seq]))
+    }
+
+    func groupAvatar(token: String, groupID: String, avatarID: String) async -> Data? {
+        let key = "g/\(groupID)/\(avatarID)" as NSString
+        if let hit = avatarCache.object(forKey: key) { return hit as Data }
+        guard var comps = URLComponents(url: base.appendingPathComponent("groups").appendingPathComponent(groupID)
+                                            .appendingPathComponent("avatar"), resolvingAgainstBaseURL: false) else { return nil }
+        comps.queryItems = [URLQueryItem(name: "v", value: avatarID)]
+        guard let url = comps.url else { return nil }
+        var req = URLRequest(url: url)
+        req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        guard let out = try? await send(req), out.1.statusCode == 200, !out.0.isEmpty else { return nil }
+        avatarCache.setObject(out.0 as NSData, forKey: key, cost: out.0.count)
+        return out.0
+    }
+
+    // MARK: contacts
+
+    /// Finds a person by TRADEFLOR PIN (digits) or @username.
+    func lookup(token: String, query: String) async throws -> IdentityCard {
+        let q = query.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+        let isPIN = !q.isEmpty && q.allSatisfy(\.isNumber)
+        let param = (isPIN ? "pin=" : "username=") + Self.q(q)
+        let (data, http) = try await send(request("identity/lookup?\(param)", method: "GET", token: token, body: nil, rawQuery: true))
+        if http.statusCode == 404 { throw APIError.server(status: 404) }
+        try check(http, data)
+        do { return try JSONDecoder().decode(IdentityCard.self, from: data) } catch { throw APIError.decoding }
+    }
+
+    /// Sends a contact request (the other person accepts before you can chat).
+    func connect(token: String, userID: String) async throws {
+        let (data, http) = try await send(request("identity/connect", method: "POST", token: token, body: ["UserID": userID]))
+        try check(http, data)
+    }
+
+    func incomingRequests(token: String) async throws -> [ContactRequest] {
+        try decodeList(ContactRequest.self, try await getJSON("contacts/requests", token: token))
+    }
+
+    func respond(token: String, requestID: String, accept: Bool) async throws {
+        let (data, http) = try await send(request("contacts/respond", method: "POST", token: token,
+                                                  body: ["RequestID": requestID, "Accept": accept]))
+        try check(http, data)
+    }
+
+    /// The private chat with someone who is a contact (created on first use).
+    func directConversation(token: String, with userID: String) async throws -> String {
+        let (data, http) = try await send(request("conversations/direct", method: "POST", token: token, body: ["WithUserID": userID]))
+        try check(http, data)
+        struct Out: Decodable { let conversation_id: String }
+        guard let o = try? JSONDecoder().decode(Out.self, from: data) else { throw APIError.decoding }
+        return o.conversation_id
+    }
+
+    func block(token: String, userID: String) async throws {
+        let (data, http) = try await send(request("contacts/block", method: "POST", token: token, body: ["UserID": userID]))
+        try check(http, data)
+    }
+
+    func unblock(token: String, userID: String) async throws {
+        let (data, http) = try await send(request("contacts/unblock", method: "POST", token: token, body: ["UserID": userID]))
+        try check(http, data)
+    }
+
+    func blocked(token: String) async throws -> [String] {
+        let data = try await getJSON("contacts/blocked", token: token)
+        return (try? JSONDecoder().decode([String].self, from: data)) ?? []
     }
 
     // MARK: chat lock

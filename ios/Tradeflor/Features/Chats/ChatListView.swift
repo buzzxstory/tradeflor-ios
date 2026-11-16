@@ -11,6 +11,7 @@ struct ChatListView: View {
     @State private var query = ""
     @State private var path: [ConversationSummary] = []
     @State private var ciOpened = false
+    @State private var showNew = false
 
     /// Live events refresh the list at once; this slow poll only covers a socket that is down.
     private let refreshEvery: UInt64 = 30
@@ -33,6 +34,21 @@ struct ChatListView: View {
                 .searchable(text: $query, prompt: Text("chats.search"))
                 .refreshable { await load() }
                 .navigationDestination(for: ConversationSummary.self) { c in ChatView(chat: c) }
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button { showNew = true } label: { Image(systemName: "square.and.pencil") }
+                            .accessibilityLabel(Text("new.title"))
+                            .accessibilityIdentifier("chats.new")
+                    }
+                }
+                .sheet(isPresented: $showNew) {
+                    NewChatView { c in
+                        Task {
+                            await load(quiet: true)
+                            path = [c]
+                        }
+                    }
+                }
         }
         .onReceive(live.messages) { _ in Task { await load(quiet: true) } }
         .onReceive(live.changes) { _ in Task { await load(quiet: true) } }
@@ -176,6 +192,7 @@ struct Avatar: View {
     let userID: String
     let avatarID: String?
     let title: String
+    var groupID: String? = nil
     @State private var image: UIImage?
 
     var body: some View {
@@ -193,7 +210,10 @@ struct Avatar: View {
         .clipShape(Circle())
         .task(id: avatarID) {
             guard let avatarID, !avatarID.isEmpty, !token.isEmpty else { image = nil; return }
-            if let data = await APIClient.shared.avatar(token: token, userID: userID, avatarID: avatarID) {
+            let data = groupID != nil
+                ? await APIClient.shared.groupAvatar(token: token, groupID: groupID ?? "", avatarID: avatarID)
+                : await APIClient.shared.avatar(token: token, userID: userID, avatarID: avatarID)
+            if let data {
                 image = UIImage(data: data)
             }
         }

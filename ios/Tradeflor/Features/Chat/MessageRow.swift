@@ -7,6 +7,7 @@ struct MessageRow<Content: View>: View {
     let mine: Bool
     let myID: String
     let peerName: String
+    let senderName: String?
     let onReply: () -> Void
     let onReact: (String) -> Void
     let onCopy: () -> Void
@@ -18,6 +19,9 @@ struct MessageRow<Content: View>: View {
 
     var body: some View {
         VStack(alignment: mine ? .trailing : .leading, spacing: 3) {
+            if let senderName, !senderName.isEmpty {
+                Text(senderName).font(.caption.weight(.semibold)).foregroundStyle(Theme.accent).padding(.horizontal, 10)
+            }
             if message.forwarded == true && !message.isDeleted {
                 Label("chat.forwarded", systemImage: "arrowshape.turn.up.right.fill")
                     .font(.caption2).foregroundStyle(.secondary).padding(.horizontal, 8)

@@ -15,6 +15,12 @@ final class SessionStore: ObservableObject {
         session = s
     }
 
+    /// After sign-up and email verification: the server's session for the new account.
+    func adopt(_ s: Session) {
+        Keychain.save(s)
+        session = s
+    }
+
     func signOut() async {
         if let token = session?.token {
             await APIClient.shared.relockChats(token: token)

@@ -167,3 +167,56 @@ struct Reaction: Hashable {
     let count: Int
     let mine: Bool
 }
+
+/// Mirrors `IdentityCard` (desktop/src/shared/api/api.ts): who a PIN or @username belongs to, and how I relate to them.
+struct IdentityCard: Decodable, Equatable {
+    let user_id: String
+    let username: String
+    let display_name: String
+    let avatar_id: String
+    let pin: String
+    let relation: String? // self | contact | requested | incoming | none
+    let needs_setup: Bool?
+
+    var title: String { display_name.isEmpty ? username : display_name }
+}
+
+struct ContactRequest: Decodable, Identifiable {
+    let id: String
+    let from_user_id: String
+    let from_username: String
+    let created_at: Int64
+}
+
+/// Mirrors `Group` (desktop/src/shared/api/types.ts): the fields the groups list and a group chat need.
+struct GroupSummary: Decodable, Identifiable, Hashable {
+    let conversation_id: String
+    let name: String
+    let avatar_id: String?
+    let member_count: Int
+    let my_role: String?
+    let can_send: Bool
+    let unread_count: Int
+    let last_message: String
+    let last_message_kind: String?
+    let last_message_at: Int64
+    let last_sender_name: String?
+
+    var id: String { conversation_id }
+    var lastDate: Date? { serverDate(last_message_at) }
+
+    /// A group opens in the same chat screen as a private chat.
+    var asConversation: ConversationSummary {
+        ConversationSummary(conversation_id: conversation_id, peer_id: "", peer_username: name, peer_display_name: name,
+                            peer_avatar_id: nil, last_message: last_message, last_message_at: last_message_at,
+                            last_message_mine: false, unread_count: unread_count, last_message_kind: last_message_kind)
+    }
+}
+
+struct GroupMember: Decodable, Identifiable {
+    let user_id: String
+    let username: String
+    let display_name: String?
+    var id: String { user_id }
+    var title: String { (display_name?.isEmpty == false ? display_name : nil) ?? username }
+}
