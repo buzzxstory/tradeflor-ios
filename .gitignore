@@ -1,0 +1,10 @@
+/ios/Tradeflor.xcodeproj/
+/ios/Tradeflor/Resources/Info.plist
+/ios/build/
+/ios/shots/
+/ios/Payload/
+*.ipa
+*.log
+*.enc
+.DS_Store
+xcuserdata/

@@ -1,0 +1,110 @@
+# Builds the native Swift iPhone app on a GitHub-hosted Mac. No Apple Developer account and no signing:
+# One job on one Mac (macOS minutes are billed x10 on private repos, so nothing runs twice):
+#  - build + unit tests, boot an iPhone simulator, install, launch, screenshots (artifact "screenshots")
+#  - unsigned Release IPA (artifact "Tradeflor-unsigned-ipa") for Sideloadly / AltStore with a free Apple ID
+#
+# Repo secrets (Settings > Secrets and variables > Actions):
+#   TF_CI_USERNAME, TF_CI_PASSWORD  a TEST account, never a real one: the Debug simulator build signs in to
+#                                   https://app.tradeflor.com/api for the signed-in screenshots, then signs out
+#   SHOTS_KEY                       encrypts the screenshots artifact (decrypt: openssl enc -d -aes-256-cbc -pbkdf2
+#                                   -iter 200000 -pass env:SHOTS_KEY -in screenshots.tgz.enc | tar xz)
+name: iOS
+
+on:
+  push:
+    branches: [ios-app]
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+          xcodebuild -version
+
+      - name: Pick an iPhone simulator
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j \
+            | jq -r '[.devices | to_entries[] | select(.key | test("iOS")) | .value[] | select(.name | test("^iPhone [0-9]+( Pro)?$"))] | last | .udid')
+          test -n "$UDID" && test "$UDID" != "null"
+          xcrun simctl list devices | grep "$UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Build and unit-test (Debug, simulator)
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project Tradeflor.xcodeproj -scheme Tradeflor -configuration Debug \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath build | tee build.log | grep -E "error:|warning:|Test Case|\*\* (TEST|BUILD)" || true
+          grep -q "\*\* TEST SUCCEEDED \*\*" build.log
+
+      - name: Build unsigned Release for iPhone
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project Tradeflor.xcodeproj -scheme Tradeflor -configuration Release \
+            -sdk iphoneos -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | tee build-release.log | grep -E "error:|\*\* BUILD" || true
+          grep -q "\*\* BUILD SUCCEEDED \*\*" build-release.log
+      - name: Package IPA
+        run: |
+          rm -rf Payload && mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/Tradeflor.app Payload/
+          # Guard: the Release build must not contain the CI auto sign-in hook.
+          if strings Payload/Tradeflor.app/Tradeflor | grep -q TF_CI_PASSWORD; then echo "CI hook leaked into Release"; exit 1; fi
+          zip -qry Tradeflor-unsigned.ipa Payload
+          ls -la Tradeflor-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Tradeflor-unsigned-ipa
+          path: ios/Tradeflor-unsigned.ipa
+          retention-days: 30
+
+      - name: Screenshots on a fresh simulator
+        timeout-minutes: 15
+        env:
+          TF_CI_USERNAME: ${{ secrets.TF_CI_USERNAME }}
+          TF_CI_PASSWORD: ${{ secrets.TF_CI_PASSWORD }}
+        run: |
+          bash scripts/ci-screenshots.sh "${{ steps.sim.outputs.udid }}"             build/Build/Products/Debug-iphonesimulator/Tradeflor.app shots
+
+      # Screenshots show the test account's chats, and artifacts of a public repository can be downloaded by anyone:
+      # they are uploaded only encrypted (AES-256, key in the SHOTS_KEY secret). Without the key, nothing is uploaded.
+      - name: Encrypt screenshots
+        if: always()
+        env:
+          SHOTS_KEY: ${{ secrets.SHOTS_KEY }}
+        run: |
+          if [ -z "$SHOTS_KEY" ]; then echo "::notice::SHOTS_KEY not set: screenshots are not uploaded."; exit 0; fi
+          tar czf - shots build.log 2>/dev/null | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:SHOTS_KEY -out screenshots.tgz.enc
+          rm -rf shots
+          ls -la screenshots.tgz.enc
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-encrypted
+          path: ios/screenshots.tgz.enc
+          if-no-files-found: ignore
+          retention-days: 14

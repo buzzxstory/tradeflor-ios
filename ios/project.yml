@@ -1,0 +1,84 @@
+# XcodeGen spec. The .xcodeproj is generated from this file on the macOS CI runner
+# (`xcodegen generate`), so no Mac is needed to edit the project: change this file, push, CI builds.
+name: Tradeflor
+options:
+  bundleIdPrefix: com.tradeflor
+  deploymentTarget:
+    iOS: "16.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    # The one server the app talks to. Same production API the website uses.
+    TF_API_BASE: "https://app.tradeflor.com/api"
+packages:
+  WebRTC:
+    url: https://github.com/stasel/WebRTC
+    exactVersion: 125.0.0
+targets:
+  Tradeflor:
+    type: application
+    platform: iOS
+    sources:
+      - path: Tradeflor
+    dependencies:
+      - package: WebRTC
+    info:
+      path: Tradeflor/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Tradeflor
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, ar]
+        LSRequiresIPhoneOS: true
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIApplicationSupportsIndirectInputEvents: true
+        ITSAppUsesNonExemptEncryption: false
+        TFAPIBase: $(TF_API_BASE)
+        # Usage strings (English base; Arabic in ar.lproj/InfoPlist.strings).
+        NSCameraUsageDescription: Tradeflor uses the camera so you can take photos and videos for chats and statuses, and for video calls.
+        NSMicrophoneUsageDescription: Tradeflor uses the microphone for voice messages and calls.
+        NSPhotoLibraryUsageDescription: Tradeflor opens your photo library so you can send photos and videos and post statuses.
+        NSPhotoLibraryAddUsageDescription: Tradeflor saves photos and videos you choose to keep into your library.
+        NSFaceIDUsageDescription: Tradeflor uses Face ID to unlock your locked chats.
+        # Keeps a call's audio going when the screen locks or another app is opened.
+        UIBackgroundModes: [audio]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tradeflor.ios
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
+        # Device builds stay unsigned: Sideloadly/AltStore signs the IPA with the owner's own free Apple ID.
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
+        # Simulator builds are ad-hoc signed ("-", no Apple account), so the Keychain works in the simulator.
+        "CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": YES
+        "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+  TradeflorTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: TradeflorTests
+    dependencies:
+      - target: Tradeflor
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+schemes:
+  Tradeflor:
+    build:
+      targets:
+        Tradeflor: all
+        TradeflorTests: [test]
+    test:
+      targets: [TradeflorTests]
