@@ -119,11 +119,11 @@ struct LoginView: View {
         }
         .environment(\.colorScheme, .light)
         .task { await ciAutoLogin() }
-        .sheet(isPresented: $showSignUp) { SignUpView() }
-        .sheet(isPresented: $showForgot) { ForgotPasswordView() }
+        .sheet(isPresented: $showSignUp) { SignUpView().preferredColorScheme(.dark) }
+        .sheet(isPresented: $showForgot) { ForgotPasswordView().preferredColorScheme(.dark) }
         .sheet(isPresented: Binding(get: { unverifiedUserID != nil }, set: { if !$0 { unverifiedUserID = nil } })) {
             if let id = unverifiedUserID {
-                NavigationStack { VerifyEmailView(userID: id, username: username, displayName: "") }
+                NavigationStack { VerifyEmailView(userID: id, username: username, displayName: "") }.preferredColorScheme(.dark)
             }
         }
     }
