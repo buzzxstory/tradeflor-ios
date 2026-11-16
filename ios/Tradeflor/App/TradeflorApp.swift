@@ -35,7 +35,6 @@ struct RootView: View {
     var body: some View {
         Group {
             if store.session != nil {
-                TabView(selection: $tab) {
                 // The website's phone tab bar: Chats, Groups, TradeFlor, Calendar, Settings
                 TabView(selection: $tab) {
                     ChatListView()
