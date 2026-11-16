@@ -44,7 +44,7 @@ final class DeliveryStats: ObservableObject {
         return s[min(s.count - 1, Int(Double(s.count - 1) * p))]
     }
 
-    static func ms(_ v: Int?) -> String {
+    nonisolated static func ms(_ v: Int?) -> String {
         guard let v else { return "–" }
         return v < 1000 ? "\(v) ms" : String(format: "%.1f s", Double(v) / 1000)
     }
