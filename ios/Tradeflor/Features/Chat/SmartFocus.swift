@@ -171,7 +171,7 @@ struct SmartFocusSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .tfColorScheme()
     }
 
     private func save() async {

@@ -217,7 +217,7 @@ struct FolderEditorView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .tfColorScheme()
         .onAppear { if let editing { f = editing } }
     }
 
@@ -353,7 +353,7 @@ struct ManageFoldersView: View {
                 }
             } message: { Text("folder.remove.note") }
         }
-        .preferredColorScheme(.dark)
+        .tfColorScheme()
         .task { await reload() }
     }
 

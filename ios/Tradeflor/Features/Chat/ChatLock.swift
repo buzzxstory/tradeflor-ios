@@ -91,7 +91,7 @@ struct UnlockSheet: View {
         NavigationStack {
             VStack(spacing: 18) {
                 Image(systemName: "lock.fill").font(.system(size: 40)).foregroundStyle(Theme.accent).padding(.top, 30)
-                Text("lock.title").font(.title3.weight(.semibold)).foregroundStyle(.white)
+                Text("lock.title").font(.title3.weight(.semibold)).foregroundStyle(Theme.text)
                 Text("lock.subtitle").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 SecureField("lock.pin", text: $pin)
                     .keyboardType(.numberPad)

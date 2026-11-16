@@ -39,7 +39,7 @@ struct NewChatView: View {
                             Avatar(token: token, userID: card.user_id, avatarID: card.avatar_id.isEmpty ? nil : card.avatar_id,
                                    title: card.title)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(card.title).font(.headline).foregroundStyle(.white)
+                                Text(card.title).font(.headline).foregroundStyle(Theme.text)
                                 Text("@\(card.username) · \(card.pin)").font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -58,7 +58,7 @@ struct NewChatView: View {
                     Section(header: Text("new.requests")) {
                         ForEach(requests) { r in
                             HStack {
-                                Text("@\(r.from_username)").foregroundStyle(.white)
+                                Text("@\(r.from_username)").foregroundStyle(Theme.text)
                                 Spacer()
                                 Button { Task { await respond(r, accept: false) } } label: {
                                     Image(systemName: "xmark").frame(width: 34, height: 34).background(Color.white.opacity(0.12), in: Circle())

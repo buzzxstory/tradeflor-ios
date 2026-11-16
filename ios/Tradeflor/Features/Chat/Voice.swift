@@ -441,21 +441,21 @@ struct RecordingBar: View {
                 .accessibilityLabel(Text(LocalizedStringKey(recorder.previewPlaying ? "chat.voice.preview.pause" : "chat.voice.preview")))
                 Waveform(samples: VoiceRecorder.downsample(recorder.levels, to: 40), progress: recorder.previewProgress, color: Theme.accent)
                     .frame(height: 26)
-                Text(VoiceBubble.length(Int64(recorder.elapsed * 1000))).monospacedDigit().foregroundStyle(.white)
+                Text(VoiceBubble.length(Int64(recorder.elapsed * 1000))).monospacedDigit().foregroundStyle(Theme.text)
             } else {
                 Circle().fill(.red).frame(width: 8, height: 8).opacity(recorder.paused ? 0.3 : 1)
                 Text(VoiceBubble.length(Int64(recorder.elapsed * 1000)))
                     .monospacedDigit()
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Theme.text)
                 Waveform(samples: Array(recorder.levels.suffix(40)), progress: 1, color: Theme.accent)
                     .frame(height: 26)
                 Button { if recorder.paused { recorder.resume() } else { recorder.pause() } } label: {
                     Image(systemName: recorder.paused ? "mic.fill" : "pause.fill")
-                        .font(.system(size: 16, weight: .bold)).foregroundStyle(recorder.paused ? .red : .white).frame(width: 32, height: 40)
+                        .font(.system(size: 16, weight: .bold)).foregroundStyle(recorder.paused ? Color.red : Theme.text).frame(width: 32, height: 40)
                 }
                 .accessibilityLabel(Text(LocalizedStringKey(recorder.paused ? "chat.voice.resume" : "chat.voice.pause")))
                 Button { recorder.review() } label: {
-                    Image(systemName: "stop.circle").font(.system(size: 20, weight: .semibold)).foregroundStyle(.white).frame(width: 32, height: 40)
+                    Image(systemName: "stop.circle").font(.system(size: 20, weight: .semibold)).foregroundStyle(Theme.text).frame(width: 32, height: 40)
                 }
                 .accessibilityLabel(Text("chat.voice.review"))
             }

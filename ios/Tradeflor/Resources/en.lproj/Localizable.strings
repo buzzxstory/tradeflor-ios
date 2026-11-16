@@ -856,7 +856,7 @@
 "set.c.missed" = "Missed";
 "set.night" = "Night Mode";
 "set.night.sub" = "Dark colours";
-"set.night.note" = "The iPhone app uses the night look; a day look comes later.";
+"set.night.note" = "Night Mode off switches the app to the day look (light).";
 "set.version" = "Version";
 "set.server" = "Server";
 "adm.title" = "Admin Center";

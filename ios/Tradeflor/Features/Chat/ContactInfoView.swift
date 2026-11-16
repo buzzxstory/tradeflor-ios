@@ -472,7 +472,7 @@ struct ScheduleSheet: View {
                     Section(header: Text("schedule.list")) {
                         ForEach(items) { s in
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(s.body).foregroundStyle(.white).lineLimit(2)
+                                Text(s.body).foregroundStyle(Theme.text).lineLimit(2)
                                 HStack {
                                     Text(s.date, style: .date)
                                     Text(s.date, style: .time)

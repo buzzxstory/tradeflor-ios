@@ -23,7 +23,7 @@ struct OfficialRow: View {
                         }
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 4) {
-                                Text(c.name).font(.body.weight(.semibold)).foregroundStyle(.white)
+                                Text(c.name).font(.body.weight(.semibold)).foregroundStyle(Theme.text)
                                 Image(systemName: "checkmark.seal.fill").foregroundStyle(Theme.accent).font(.caption)
                             }
                             Text("official.subtitle").font(.subheadline).foregroundStyle(.secondary)

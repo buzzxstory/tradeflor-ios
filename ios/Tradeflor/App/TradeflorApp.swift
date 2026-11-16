@@ -3,16 +3,24 @@ import SwiftUI
 @main
 struct TradeflorApp: App {
     @StateObject private var store = SessionStore()
+    @AppStorage("tf.night") private var night = true
     @StateObject private var live = LiveConnection()
 
-    init() { Theme.applyAppearance() }
+    init() {
+        Theme.applyAppearance()
+        #if DEBUG
+        // CI screenshots: TF_CI_DAY=1 shows the day look; every other CI launch the night look
+        let env = ProcessInfo.processInfo.environment
+        if env["TF_CI"] != nil { UserDefaults.standard.set(env["TF_CI_DAY"] == nil, forKey: "tf.night") }
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
                 .environmentObject(live)
-                .preferredColorScheme(store.session == nil ? .light : .dark) // the sign-in screens are light, like the website
+                .preferredColorScheme(store.session == nil ? .light : (night ? .dark : .light)) // sign-in is light, like the website
         }
     }
 }
@@ -75,7 +83,7 @@ struct RootView: View {
             }
             Button("grp.cancel", role: .cancel) { calls.confirming = nil }
         }
-        .fullScreenCover(isPresented: $calls.showScreen) { CallScreen(calls: calls).environmentObject(store) }
+        .fullScreenCover(isPresented: $calls.showScreen) { CallScreen(calls: calls).environmentObject(store).preferredColorScheme(.dark) }
         .safeAreaInset(edge: .top, spacing: 0) {
             if !calls.showScreen && calls.phase != .idle && calls.phase != .ended {
                 Button { calls.showScreen = true } label: {

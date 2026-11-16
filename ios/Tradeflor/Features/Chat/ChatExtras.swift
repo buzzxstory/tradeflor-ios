@@ -122,7 +122,7 @@ struct PollComposer: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .tfColorScheme()
     }
 
     private func send() async {
@@ -262,7 +262,7 @@ struct SignalComposer: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .tfColorScheme()
     }
 
     private func send() async {
@@ -363,7 +363,7 @@ struct CommentsSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
         }
-        .preferredColorScheme(.dark)
+        .tfColorScheme()
         .task { await load() }
     }
 
@@ -499,7 +499,7 @@ struct EmojiPickerSheet: View {
         }
         .background(Theme.panel.ignoresSafeArea())
         .presentationDetents([.medium, .large])
-        .preferredColorScheme(.dark)
+        .tfColorScheme()
     }
 }
 
@@ -536,7 +536,7 @@ struct ShareLocationSheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
         }
         .presentationDetents([.height(260)])
-        .preferredColorScheme(.dark)
+        .tfColorScheme()
     }
 }
 

@@ -200,7 +200,7 @@ struct ForwardSheet: View {
                 } label: {
                     HStack(spacing: 12) {
                         Avatar(token: token, userID: c.peer_id, avatarID: c.peer_avatar_id, title: c.title)
-                        Text(c.title).foregroundStyle(.white)
+                        Text(c.title).foregroundStyle(Theme.text)
                         Spacer()
                         if sending == c.conversation_id { ProgressView() }
                         if sent.contains(c.conversation_id) { Image(systemName: "checkmark").foregroundStyle(Theme.accent) }

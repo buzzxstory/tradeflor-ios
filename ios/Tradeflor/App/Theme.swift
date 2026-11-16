@@ -7,75 +7,85 @@ enum Theme {
         Color(.sRGB, red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255, opacity: a)
     }
 
+    /// A colour with the night value (01-tokens.css) and the day value (21-light.css); it follows the app's colour scheme.
+    static func ui(_ night: UInt32, _ day: UInt32, _ na: CGFloat = 1, _ da: CGFloat = 1) -> UIColor {
+        func make(_ v: UInt32, _ a: CGFloat) -> UIColor {
+            UIColor(red: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255, blue: CGFloat(v & 0xFF) / 255, alpha: a)
+        }
+        let n = make(night, na), d = make(day, da)
+        return UIColor { $0.userInterfaceStyle == .light ? d : n }
+    }
+    static func dyn(_ night: UInt32, _ day: UInt32, _ na: CGFloat = 1, _ da: CGFloat = 1) -> Color { Color(uiColor: ui(night, day, na, da)) }
+
     // grounds
-    static let ground = hex(0x00131B)          // --bg-app
-    static let panel = hex(0x00161F)           // --bg-panel / --surface
-    static let header = hex(0x001119)          // --tf-bg-header
-    static let card = hex(0x08222D)            // --bg-card / --raised
-    static let surface = hex(0x0D252F)         // --bg-input
-    static let bubbleIn = hex(0x112C38)        // --bg-bubble
-    static let chip = hex(0x011F2B)            // --bg-chip
-    static let active = hex(0x023446)          // --bg-active
+    static let ground = dyn(0x00131B, 0xEEF3F7)          // --bg-app
+    static let panel = dyn(0x00161F, 0xF3F7FA)           // --bg-panel / --surface
+    static let header = dyn(0x001119, 0xF6F9FC)          // --tf-bg-header
+    static let card = dyn(0x08222D, 0xFFFFFF)            // --bg-card / --raised
+    static let surface = dyn(0x0D252F, 0xFFFFFF)         // --bg-input
+    static let bubbleIn = dyn(0x112C38, 0xFFFFFF)        // --bg-bubble
+    static let chip = dyn(0x011F2B, 0xE8F0F5)            // --bg-chip
+    static let active = dyn(0x023446, 0xDFF2F5)          // --bg-active
 
     // lines
-    static let border = Color(.sRGB, red: 40 / 255, green: 140 / 255, blue: 175 / 255, opacity: 0.22)   // --border-c
-    static let borderStrong = hex(0x124C64)                                                         // --border-strong-c
-    static let borderActive = Color(.sRGB, red: 2 / 255, green: 207 / 255, blue: 218 / 255, opacity: 0.75)
-    static let rowRule = Color(.sRGB, red: 60 / 255, green: 140 / 255, blue: 170 / 255, opacity: 0.16)
+    static let border = dyn(0x288CAF, 0x1E5A78, 0.22, 0.14)         // --border-c
+    static let borderStrong = dyn(0x124C64, 0xD3E1EA)               // --border-strong-c
+    static let borderActive = dyn(0x02CFDA, 0x0097A5, 0.75, 0.55)
+    static let rowRule = dyn(0x3C8CAA, 0x1E5A78, 0.16, 0.10)
 
     // text
-    static let text = hex(0xF2F7FA)
-    static let muted = hex(0xCFDBE2)
-    static let faint = hex(0xA9B9C5)
+    static let text = dyn(0xF2F7FA, 0x0F2533)
+    static let muted = dyn(0xCFDBE2, 0x3C5668)
+    static let faint = dyn(0xA9B9C5, 0x5F7686)
 
     // brand
-    static let accent = hex(0x00D4DF)
-    static let onAccent = hex(0x052B3A)
-    static let gold = hex(0xEFBE33)
-    static let online = hex(0x00CC83)
+    static let accent = dyn(0x00D4DF, 0x0097A5)
+    static let onAccent = dyn(0x052B3A, 0xFFFFFF)
+    static let gold = dyn(0xEFBE33, 0xB98700)
+    static let online = dyn(0x00CC83, 0x00A86C)
     static let verified = hex(0x127DD6)
-    static let wordmark = hex(0x00C5E3)
-    static let danger = hex(0xF0525B)
-    static let buy = hex(0x14C27A)
+    static let wordmark = dyn(0x00C5E3, 0x0093C4)
+    static let danger = dyn(0xF0525B, 0xD8404A)
+    static let buy = dyn(0x14C27A, 0x0C9A5F)
 
     // gradients
-    static let panelGradient = LinearGradient(colors: [hex(0x00161F), hex(0x00141C), hex(0x001018)], startPoint: .top, endPoint: .bottom)
-    static let inputGradient = LinearGradient(colors: [hex(0x0A2C39), hex(0x082835)], startPoint: .top, endPoint: .bottom)
-    static let cardGradient = LinearGradient(colors: [hex(0x082F3F, 0.92), hex(0x042634, 0.92), hex(0x032330, 0.92)],
+    static let panelGradient = LinearGradient(colors: [dyn(0x00161F, 0xF6F9FC), dyn(0x00141C, 0xF1F6F9), dyn(0x001018, 0xEEF4F8)], startPoint: .top, endPoint: .bottom)
+    static let inputGradient = LinearGradient(colors: [dyn(0x0A2C39, 0xFFFFFF), dyn(0x082835, 0xFFFFFF)], startPoint: .top, endPoint: .bottom)
+    static let cardGradient = LinearGradient(colors: [dyn(0x082F3F, 0xFFFFFF, 0.92), dyn(0x042634, 0xFFFFFF, 0.92), dyn(0x032330, 0xFFFFFF, 0.92)],
                                              startPoint: .topLeading, endPoint: .bottomTrailing)
-    static let selectedGradient = LinearGradient(colors: [hex(0x023446), hex(0x012B3E), hex(0x022F42)], startPoint: .top, endPoint: .bottom)
-    static let navActiveGradient = LinearGradient(colors: [hex(0x014759), hex(0x003F52), hex(0x014A5C)], startPoint: .top, endPoint: .bottom)
-    static let bubbleOut = LinearGradient(colors: [hex(0x0A4756), hex(0x0A3445)], startPoint: .topLeading, endPoint: .bottomTrailing)
+    static let selectedGradient = LinearGradient(colors: [dyn(0x023446, 0xE3F5F7), dyn(0x012B3E, 0xDDF2F5), dyn(0x022F42, 0xD9F0F4)], startPoint: .top, endPoint: .bottom)
+    static let navActiveGradient = LinearGradient(colors: [dyn(0x014759, 0xDEF3F6), dyn(0x003F52, 0xD8F0F4), dyn(0x014A5C, 0xD2EDF2)], startPoint: .top, endPoint: .bottom)
+    static let bubbleOut = LinearGradient(colors: [dyn(0x0A4756, 0xD5F2F5), dyn(0x0A3445, 0xC5EBF0)], startPoint: .topLeading, endPoint: .bottomTrailing)
     static let sendGradient = RadialGradient(colors: [hex(0x14D6E2), hex(0x04AEC4), hex(0x047D95)],
                                              center: UnitPoint(x: 0.4, y: 0.25), startRadius: 0, endRadius: 40)
-    static let avatarGradient = RadialGradient(colors: [hex(0x1B4C60), hex(0x0E3342), hex(0x0A2A36)],
+    static let avatarGradient = RadialGradient(colors: [dyn(0x1B4C60, 0xE8F3F8), dyn(0x0E3342, 0xD6E7F0), dyn(0x0A2A36, 0xCFE2EC)],
                                                center: UnitPoint(x: 0.35, y: 0.3), startRadius: 0, endRadius: 40)
 
     /// Native bars styled like the website's mobile tab bar and headers.
     static func applyAppearance() {
         let tab = UITabBarAppearance()
         tab.configureWithOpaqueBackground()
-        tab.backgroundColor = UIColor(panel)
-        tab.shadowColor = UIColor(border)
+        tab.backgroundColor = ui(0x00161F, 0xF3F7FA)
+        tab.shadowColor = ui(0x288CAF, 0x1E5A78, 0.22, 0.14)
         for layout in [tab.stackedLayoutAppearance, tab.inlineLayoutAppearance, tab.compactInlineLayoutAppearance] {
-            layout.normal.iconColor = UIColor(faint)
-            layout.normal.titleTextAttributes = [.foregroundColor: UIColor(faint), .font: UIFont.systemFont(ofSize: 10.5, weight: .medium)]
-            layout.selected.iconColor = UIColor(accent)
-            layout.selected.titleTextAttributes = [.foregroundColor: UIColor(accent), .font: UIFont.systemFont(ofSize: 10.5, weight: .semibold)]
+            layout.normal.iconColor = ui(0xA9B9C5, 0x5F7686)
+            layout.normal.titleTextAttributes = [.foregroundColor: ui(0xA9B9C5, 0x5F7686), .font: UIFont.systemFont(ofSize: 10.5, weight: .medium)]
+            layout.selected.iconColor = ui(0x00D4DF, 0x0097A5)
+            layout.selected.titleTextAttributes = [.foregroundColor: ui(0x00D4DF, 0x0097A5), .font: UIFont.systemFont(ofSize: 10.5, weight: .semibold)]
         }
         UITabBar.appearance().standardAppearance = tab
         UITabBar.appearance().scrollEdgeAppearance = tab
 
         let nav = UINavigationBarAppearance()
         nav.configureWithOpaqueBackground()
-        nav.backgroundColor = UIColor(header)
-        nav.shadowColor = UIColor(borderStrong)
-        nav.titleTextAttributes = [.foregroundColor: UIColor(text)]
-        nav.largeTitleTextAttributes = [.foregroundColor: UIColor(text)]
+        nav.backgroundColor = ui(0x001119, 0xF6F9FC)
+        nav.shadowColor = ui(0x124C64, 0xD3E1EA)
+        nav.titleTextAttributes = [.foregroundColor: ui(0xF2F7FA, 0x0F2533)]
+        nav.largeTitleTextAttributes = [.foregroundColor: ui(0xF2F7FA, 0x0F2533)]
         UINavigationBar.appearance().standardAppearance = nav
         UINavigationBar.appearance().scrollEdgeAppearance = nav
         UINavigationBar.appearance().compactAppearance = nav
-        UINavigationBar.appearance().tintColor = UIColor(accent)
+        UINavigationBar.appearance().tintColor = ui(0x00D4DF, 0x0097A5)
     }
 }
 
@@ -90,11 +100,11 @@ struct Starfield: View {
                 let r = 0.6 + rng.next() * 1.0
                 let a = 0.15 + rng.next() * 0.35
                 ctx.fill(Path(ellipseIn: CGRect(x: x, y: y, width: r * 2, height: r * 2)),
-                         with: .color(Color(.sRGB, red: 0.55, green: 0.85, blue: 0.95, opacity: a)))
+                         with: .color(Theme.dyn(0x8CD9F2, 0x5AA9C4, a, a * 0.35)))
             }
         }
         .background(
-            LinearGradient(colors: [Theme.hex(0x02242F), Theme.hex(0x01161F), Theme.hex(0x000F16)],
+            LinearGradient(colors: [Theme.dyn(0x02242F, 0xF3F7FA), Theme.dyn(0x01161F, 0xEEF3F7), Theme.dyn(0x000F16, 0xE9F0F5)],
                            startPoint: .topTrailing, endPoint: .bottomLeading)
         )
         .ignoresSafeArea()
@@ -279,4 +289,15 @@ extension UINavigationController: UIGestureRecognizerDelegate {
     public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         viewControllers.count > 1
     }
+}
+
+
+/// Settings › Appearance › Night Mode (on by default, like the website): the colour scheme of the signed-in app.
+struct TFColorScheme: ViewModifier {
+    @AppStorage("tf.night") private var night = true
+    func body(content: Content) -> some View { content.preferredColorScheme(night ? .dark : .light) }
+}
+
+extension View {
+    func tfColorScheme() -> some View { modifier(TFColorScheme()) }
 }
