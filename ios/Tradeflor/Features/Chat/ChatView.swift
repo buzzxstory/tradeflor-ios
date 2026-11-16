@@ -37,12 +37,14 @@ struct ChatView: View {
     @ObservedObject private var calls = CallManager.shared
     @State private var showUnlock = false
 
+    @Environment(\.dismiss) private var dismissView
     private let pageSize = 50
     private var me: String { store.session?.userID ?? "" }
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
         VStack(spacing: 0) {
+            topBar
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 6) {
@@ -125,20 +127,8 @@ struct ChatView: View {
                     .frame(maxWidth: .infinity).padding(.vertical, 14).background(.bar)
             }
         }
-        .background(Theme.ground.ignoresSafeArea())
-        .toolbarBackground(Theme.ground, for: .navigationBar)
-        .navigationTitle(chat.title)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Button { showInfo = true } label: {
-                    VStack(spacing: 1) {
-                        Text(chat.title).font(.headline).foregroundStyle(.white).lineLimit(1)
-                        if let subtitle { Text(subtitle).font(.caption2).foregroundStyle(Theme.accent) }
-                    }
-                }
-                .accessibilityIdentifier("chat.info")
-            }
-        }
+        .background(Starfield())
+        .toolbar(.hidden, for: .navigationBar)
         .onReceive(live.typing) { t in
             guard t.conversation == chat.conversation_id, t.user != me else { return }
             peerTypingUntil = Date().addingTimeInterval(5)
@@ -173,27 +163,6 @@ struct ChatView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar) // full height for the conversation, like other messengers
-        .toolbar {
-            if calls.enabled && chat.conversation_id.hasPrefix("dm_") {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        calls.start(conversationID: chat.conversation_id, peerName: chat.title)
-                    } label: { Image(systemName: "phone.fill") }
-                    .disabled(calls.phase != .idle)
-                    .accessibilityLabel(Text("call.voice"))
-                }
-            }
-            if !isGroup {
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Menu {
-                    Button(role: .destructive) { confirmBlock = true } label: {
-                        Label("chat.block", systemImage: "hand.raised.fill")
-                    }
-                } label: { Image(systemName: "ellipsis.circle") }
-                .accessibilityLabel(Text("chat.more"))
-            }
-            }
-        }
         .task {
             if isGroup, let list = try? await APIClient.shared.groupMembers(token: token, groupID: chat.conversation_id) {
                 memberNames = Dictionary(list.map { ($0.user_id, $0.title) }, uniquingKeysWith: { a, _ in a })
@@ -267,10 +236,66 @@ struct ChatView: View {
             }
             composerBar
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.bar)
+        .background(Theme.header.ignoresSafeArea(edges: .bottom))
+        .overlay(alignment: .top) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
     }
+
+    /// The website's conversation header (.topbar): back, avatar with the online dot, name, status line, and the
+    /// call / search / more buttons.
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            Button { dismissView() } label: {
+                Image(systemName: "chevron.backward").font(.system(size: 20, weight: .semibold)).foregroundStyle(Theme.accent)
+                    .frame(width: 32, height: 44)
+            }
+            .accessibilityLabel(Text("chat.back"))
+            Button { showInfo = true } label: {
+                HStack(spacing: 10) {
+                    Avatar(token: token, userID: chat.peer_id, avatarID: chat.peer_avatar_id, title: chat.title,
+                           groupID: isGroup ? chat.conversation_id : nil, size: 40,
+                           online: isGroup ? nil : live.online.contains(chat.peer_id))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(chat.title).font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                        HStack(spacing: 4) {
+                            if !isGroup {
+                                Circle().fill(live.online.contains(chat.peer_id) ? Theme.online : Theme.faint.opacity(0.6)).frame(width: 6, height: 6)
+                            }
+                            Text(subtitle ?? NSLocalizedString(isGroup ? "group.info" : "chat.offline", comment: ""))
+                                .font(.system(size: 13)).foregroundStyle(peerTypingUntil != nil ? Theme.accent : Theme.faint).lineLimit(1)
+                        }
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("chat.info")
+            Spacer(minLength: 4)
+            if calls.enabled && chat.conversation_id.hasPrefix("dm_") {
+                Button { calls.start(conversationID: chat.conversation_id, peerName: chat.title) } label: {
+                    Image(systemName: "phone").font(.system(size: 18)).foregroundStyle(Theme.muted).frame(width: 36, height: 44)
+                }
+                .disabled(calls.phase != .idle)
+                .accessibilityLabel(Text("call.voice"))
+            }
+            Menu {
+                Button { showInfo = true } label: { Label(isGroup ? "group.info" : "info.title", systemImage: "info.circle") }
+                Button { showSchedule = true } label: { Label("schedule.title", systemImage: "clock") }
+                if !isGroup {
+                    Button(role: .destructive) { confirmBlock = true } label: { Label("chat.block", systemImage: "hand.raised.fill") }
+                }
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.muted).frame(width: 36, height: 44)
+            }
+            .accessibilityLabel(Text("chat.more"))
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 60)
+        .background(Theme.header.ignoresSafeArea(edges: .top))
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
+    }
+
+    static let quickEmoji = ["😀", "😂", "😍", "🥰", "😎", "🤔", "😢", "😡", "👍", "👏", "🙏", "🔥", "❤️", "💯", "🎉", "📈", "📉", "💰", "✅", "👋"]
 
     private var composerBar: some View {
         Group {
@@ -285,53 +310,60 @@ struct ChatView: View {
     private var draftIsEmpty: Bool { draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     private var typingBar: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            Menu {
+        HStack(alignment: .center, spacing: 8) {
+            HStack(alignment: .center, spacing: 2) {
+                Menu {
+                    if CameraPicker.isAvailable {
+                        Button { showNoteRecorder = true } label: { Label("note.record", systemImage: "video.circle") }
+                    }
+                    Button { showSchedule = true } label: { Label("schedule.title", systemImage: "clock") }
+                } label: { composerIcon("paperclip") }
+                .accessibilityLabel(Text("chat.more"))
                 Menu {
                     Button("location.15m") { location.start(token: token, conversationID: chat.conversation_id, minutes: 15) }
                     Button("location.1h") { location.start(token: token, conversationID: chat.conversation_id, minutes: 60) }
                     Button("location.8h") { location.start(token: token, conversationID: chat.conversation_id, minutes: 480) }
-                } label: { Label("location.share", systemImage: "location.fill") }
-                if location.sharing.contains(chat.conversation_id) {
-                    Button(role: .destructive) { location.stop(conversationID: chat.conversation_id) } label: {
-                        Label("location.stop", systemImage: "location.slash")
+                    if location.sharing.contains(chat.conversation_id) {
+                        Button(role: .destructive) { location.stop(conversationID: chat.conversation_id) } label: {
+                            Label("location.stop", systemImage: "location.slash")
+                        }
                     }
+                } label: { composerIcon("mappin.and.ellipse") }
+                .accessibilityLabel(Text("location.share"))
+                PhotosPicker(selection: $picked, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
+                    composerIcon("photo")
                 }
-                if CameraPicker.isAvailable {
-                    Button { showNoteRecorder = true } label: { Label("note.record", systemImage: "video.circle") }
-                }
-                Button { showSchedule = true } label: { Label("schedule.title", systemImage: "clock") }
-            } label: {
-                Image(systemName: "plus.circle").font(.system(size: 22)).frame(width: 32, height: 40)
+                .accessibilityLabel(Text("chat.photos"))
+                .accessibilityIdentifier("chat.photos")
+                TextField("chat.placeholder", text: $draft, axis: .vertical)
+                    .onChange(of: draft) { v in
+                        guard !v.isEmpty, Date().timeIntervalSince(lastTypingSent) > 3 else { return }
+                        lastTypingSent = Date()
+                        live.sendTyping(conversationID: chat.conversation_id)
+                    }
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1...6)
+                    .focused($composerFocused)
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 4)
+                    .accessibilityIdentifier("chat.composer")
+                Menu {
+                    ForEach(Self.quickEmoji, id: \.self) { e in Button(e) { draft += e } }
+                } label: { composerIcon("face.smiling") }
+                .accessibilityLabel(Text("chat.emoji"))
             }
-            .accessibilityLabel(Text("chat.more"))
-            PhotosPicker(selection: $picked, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 20))
-                    .frame(width: 36, height: 40)
-            }
-            .accessibilityLabel(Text("chat.photos"))
-            .accessibilityIdentifier("chat.photos")
+            .padding(.leading, 6)
+            .padding(.trailing, 6)
+            .frame(minHeight: 50)
+            .background(Theme.inputGradient, in: RoundedRectangle(cornerRadius: 25, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 25, style: .continuous)
+                .stroke(composerFocused ? Theme.borderActive : Theme.hex(0x1C8CB2, 0.85), lineWidth: 1.5))
+            .shadow(color: Theme.hex(0x00BEDC, 0.12), radius: 6)
             if CameraPicker.isAvailable {
-                Button { showCamera = true } label: {
-                    Image(systemName: "camera")
-                        .font(.system(size: 20))
-                        .frame(width: 36, height: 40)
-                }
-                .accessibilityLabel(Text("chat.camera"))
+                Button { showCamera = true } label: { composerIcon("camera") }
+                    .accessibilityLabel(Text("chat.camera"))
             }
-            TextField("chat.placeholder", text: $draft, axis: .vertical)
-                .onChange(of: draft) { v in
-                    guard !v.isEmpty, Date().timeIntervalSince(lastTypingSent) > 3 else { return }
-                    lastTypingSent = Date()
-                    live.sendTyping(conversationID: chat.conversation_id)
-                }
-                .lineLimit(1...6)
-                .focused($composerFocused)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .accessibilityIdentifier("chat.composer")
             Button {
                 if draftIsEmpty {
                     VoicePlayer.shared.stop()
@@ -340,15 +372,20 @@ struct ChatView: View {
                     Task { await sendDraft() }
                 }
             } label: {
-                Image(systemName: draftIsEmpty ? "mic.fill" : "arrow.up")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(Theme.onAccent)
-                    .frame(width: 40, height: 40)
-                    .background(Theme.accent, in: Circle())
+                Image(systemName: draftIsEmpty ? "mic" : "paperplane.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Theme.hex(0xF4FBFD))
+                    .frame(width: 48, height: 48)
+                    .background(Theme.sendGradient, in: Circle())
+                    .shadow(color: Theme.hex(0x00C8DC, 0.28), radius: 9, y: 4)
             }
             .accessibilityLabel(Text(draftIsEmpty ? "chat.voice.record" : "chat.send"))
             .accessibilityIdentifier(draftIsEmpty ? "chat.mic" : "chat.send")
         }
+    }
+
+    private func composerIcon(_ name: String) -> some View {
+        Image(systemName: name).font(.system(size: 19)).foregroundStyle(Theme.muted).frame(width: 34, height: 40)
     }
 
     // MARK: loading
@@ -632,7 +669,7 @@ struct PhotoBubble<Content: View>: View {
                     .contentShape(Rectangle())
                 if !caption.isEmpty {
                     Text(caption)
-                        .foregroundStyle(mine ? Theme.onAccent : Color.white)
+                        .foregroundStyle(Theme.text)
                         .frame(maxWidth: 240, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -641,11 +678,11 @@ struct PhotoBubble<Content: View>: View {
                     if let state { Bubble.tickView(state) }
                 }
                 .font(.caption2)
-                .foregroundStyle(mine ? Theme.onAccent.opacity(0.7) : Color.white.opacity(0.55))
+                .foregroundStyle(Theme.muted.opacity(0.85))
                 .padding(.trailing, 4)
             }
             .padding(4)
-            .background(mine ? Theme.accent : Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .tfBubble(mine: mine)
             if !mine { Spacer(minLength: 48) }
         }
     }
@@ -697,7 +734,7 @@ struct Bubble: View {
                 Text(text)
                     .font(.body)
                     .italic(faded)
-                    .foregroundStyle(mine ? Theme.onAccent : Color.white)
+                    .foregroundStyle(Theme.text)
                     .opacity(faded ? 0.7 : 1)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
@@ -706,12 +743,11 @@ struct Bubble: View {
                     if let state { tick(state) }
                 }
                 .font(.caption2)
-                .foregroundStyle(mine ? Theme.onAccent.opacity(0.7) : Color.white.opacity(0.55))
+                .foregroundStyle(Theme.muted.opacity(0.85))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(mine ? Theme.accent : Theme.surface,
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .tfBubble(mine: mine)
             .fixedSize(horizontal: false, vertical: true)
             if !mine { Spacer(minLength: 48) }
         }

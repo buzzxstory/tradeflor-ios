@@ -137,9 +137,9 @@ struct LocationCard: View {
                     Label("location.ended", systemImage: "location.slash").font(.subheadline)
                 }
             }
-            .foregroundStyle(mine ? Theme.onAccent : .white)
+            .foregroundStyle(Theme.text)
             .padding(10)
-            .background(mine ? Theme.accent : Theme.surface, in: RoundedRectangle(cornerRadius: 18))
+            .tfBubble(mine: mine)
             if !mine { Spacer(minLength: 48) }
         }
         .task(id: message.id) {

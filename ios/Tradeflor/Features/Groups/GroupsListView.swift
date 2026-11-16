@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The Groups tab: my groups, newest activity first; a group opens in the shared chat screen.
+/// The Groups screen as on the website: "Groups" with the new-group button, "Search groups or @link", the chips and
+/// the group rows; a group opens in the shared chat screen.
 struct GroupsListView: View {
     @EnvironmentObject private var store: SessionStore
     @EnvironmentObject private var live: LiveConnection
@@ -9,40 +10,61 @@ struct GroupsListView: View {
     @State private var path: [GroupSummary] = []
     @State private var showCreate = false
     @State private var showJoin = false
+    @State private var query = ""
+    @State private var unreadOnly = false
 
     private var token: String { store.session?.token ?? "" }
+    private var shown: [GroupSummary] {
+        var g = unreadOnly ? groups.filter { $0.unread_count > 0 } : groups
+        let q = query.trimmingCharacters(in: .whitespaces)
+        if !q.isEmpty { g = g.filter { $0.name.localizedCaseInsensitiveContains(q) } }
+        return g
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
-            Group {
-                if loading && groups.isEmpty {
-                    ProgressView()
-                } else if groups.isEmpty {
-                    Text("groups.empty").foregroundStyle(.secondary)
-                } else {
-                    List(groups) { g in
-                        NavigationLink(value: g) { row(g) }
-                            .listRowBackground(Theme.ground)
+            ScrollView {
+                VStack(spacing: 0) {
+                    HStack(spacing: 10) {
+                        Text("groups.title").font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.text)
+                        Spacer()
+                        Menu {
+                            Button { showCreate = true } label: { Label("group.create", systemImage: "plus") }
+                            Button { showJoin = true } label: { Label("group.join", systemImage: "link") }
+                        } label: {
+                            Image(systemName: "person.2.badge.plus")
+                                .font(.system(size: 17)).foregroundStyle(Theme.text)
+                                .frame(width: 43, height: 43)
+                                .background(Theme.inputGradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.borderStrong, lineWidth: 1))
+                        }
+                        .accessibilityLabel(Text("group.create"))
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
+                    .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 12)
+                    SearchPill(placeholder: "groups.search", text: $query).padding(.horizontal, 16)
+                    HStack(spacing: 7) {
+                        FilterChip(title: NSLocalizedString("folders.all", comment: ""), selected: !unreadOnly) { unreadOnly = false }
+                        FilterChip(title: NSLocalizedString("folders.unread", comment: ""), selected: unreadOnly) { unreadOnly = true }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+                    if loading && groups.isEmpty {
+                        ProgressView().tint(Theme.accent).padding(.top, 60)
+                    } else if shown.isEmpty {
+                        Text("groups.empty").font(.system(size: 13)).foregroundStyle(Theme.faint).padding(.top, 40)
+                    } else {
+                        LazyVStack(spacing: 0) {
+                            ForEach(shown) { g in
+                                NavigationLink(value: g) { row(g) }.buttonStyle(.plain)
+                            }
+                        }
+                    }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Theme.ground.ignoresSafeArea())
-            .toolbarBackground(Theme.ground, for: .navigationBar)
-            .navigationTitle(Text("groups.title"))
-            .navigationDestination(for: GroupSummary.self) { g in ChatView(chat: g.asConversation, canSend: g.can_send) }
             .refreshable { await load() }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Menu {
-                        Button { showCreate = true } label: { Label("group.create", systemImage: "plus") }
-                        Button { showJoin = true } label: { Label("group.join", systemImage: "link") }
-                    } label: { Image(systemName: "plus.circle.fill").font(.title3) }
-                    .accessibilityLabel(Text("group.create"))
-                }
-            }
+            .background(Theme.panelGradient.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: GroupSummary.self) { g in ChatView(chat: g.asConversation, canSend: g.can_send) }
             .sheet(isPresented: $showCreate) { CreateGroupView { id in Task { await open(id) } } }
             .sheet(isPresented: $showJoin) { JoinGroupView { id in Task { await open(id) } } }
         }
@@ -51,27 +73,31 @@ struct GroupsListView: View {
     }
 
     private func row(_ g: GroupSummary) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 16) {
             Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(g.name).font(.body.weight(.semibold)).lineLimit(1)
-                    Spacer()
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(g.name).font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                    Spacer(minLength: 8)
                     if let d = g.lastDate {
-                        Text(d, style: .date).font(.caption).foregroundStyle(g.unread_count > 0 ? Theme.accent : .secondary)
+                        Text(ChatRow.timeLabel(d)).font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(g.unread_count > 0 ? Theme.accent : Theme.faint)
                     }
                 }
                 HStack {
-                    Text(preview(g)).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                    Spacer()
+                    Text(preview(g)).font(.system(size: 15)).foregroundStyle(Theme.muted).lineLimit(1)
+                    Spacer(minLength: 6)
                     if g.unread_count > 0 {
-                        Text("\(g.unread_count)").font(.caption2.bold()).foregroundStyle(Theme.onAccent)
-                            .padding(.horizontal, 7).padding(.vertical, 2).background(Theme.accent, in: Capsule())
+                        Text("\(g.unread_count)").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.onAccent)
+                            .padding(.horizontal, 7).frame(minWidth: 22, minHeight: 22).background(Theme.accent, in: Capsule())
                     }
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.leading, 15).padding(.trailing, 14)
+        .frame(height: 83)
+        .overlay(alignment: .top) { Rectangle().fill(Theme.rowRule).frame(height: 1) }
+        .contentShape(Rectangle())
     }
 
     private func preview(_ g: GroupSummary) -> String {

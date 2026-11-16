@@ -68,11 +68,11 @@ if [ -n "${TF_CI_USERNAME:-}" ] && [ -n "${TF_CI_PASSWORD:-}" ]; then
   # Relaunch without the account: the session must come back from the Keychain.
   launch en en_US && sleep 8 && shot 04-chats-en-relaunch.png || status=1
   # The newest chat opened (Debug-only TF_CI_OPEN_CHAT hook); stays on the list if the account has no chats.
-  SIMCTL_CHILD_TF_CI_OPEN_CHAT=1 launch ar ar_SA && sleep 10 && shot 05-chat-ar.png || status=1
-  SIMCTL_CHILD_TF_CI_TAB=status launch ar ar_SA && sleep 8 && shot 06-status-ar.png || status=1
-  SIMCTL_CHILD_TF_CI_TAB=settings launch ar ar_SA && sleep 8 && shot 07-settings-ar.png || status=1
-  SIMCTL_CHILD_TF_CI_TAB=groups launch ar ar_SA && sleep 8 && shot 08-groups-ar.png || status=1
-  SIMCTL_CHILD_TF_CI_TAB=calendar launch ar ar_SA && sleep 10 && shot 09-calendar-ar.png || status=1
+  SIMCTL_CHILD_TF_CI_OPEN_CHAT=1 launch en en_US && sleep 10 && shot 05-chat-en.png || status=1
+  SIMCTL_CHILD_TF_CI_TAB=tradeflor launch en en_US && sleep 10 && shot 06-tradeflor-en.png || status=1
+  SIMCTL_CHILD_TF_CI_TAB=settings launch en en_US && sleep 8 && shot 07-settings-en.png || status=1
+  SIMCTL_CHILD_TF_CI_TAB=groups launch en en_US && sleep 8 && shot 08-groups-en.png || status=1
+  SIMCTL_CHILD_TF_CI_TAB=calendar launch en en_US && sleep 10 && shot 09-calendar-en.png || status=1
   # End the CI session on the server (POST /auth/logout) so test runs do not pile up under Linked devices.
   SIMCTL_CHILD_TF_CI_SIGNOUT=1 launch en en_US && sleep 8 || true
 else

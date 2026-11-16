@@ -5,6 +5,8 @@ struct TradeflorApp: App {
     @StateObject private var store = SessionStore()
     @StateObject private var live = LiveConnection()
 
+    init() { Theme.applyAppearance() }
+
     var body: some Scene {
         WindowGroup {
             RootView()
@@ -34,24 +36,24 @@ struct RootView: View {
         Group {
             if store.session != nil {
                 TabView(selection: $tab) {
+                // The website's phone tab bar: Chats, Groups, TradeFlor, Calendar, Settings
+                TabView(selection: $tab) {
                     ChatListView()
-                        .tabItem { Label("chats.title", systemImage: "bubble.left.and.bubble.right.fill") }
+                        .tabItem { Label("chats.title", systemImage: "bubble.left") }
                         .tag("chats")
                     GroupsListView()
-                        .tabItem { Label("groups.title", systemImage: "person.3.fill") }
+                        .tabItem { Label("groups.title", systemImage: "person.2") }
                         .tag("groups")
-                    StatusListView()
-                        .tabItem { Label("status.title", systemImage: "circle.dashed.inset.filled") }
-                        .tag("status")
+                    TradeFlorView()
+                        .tabItem { Label { Text("TradeFlor") } icon: { Image("TabFlower") } }
+                        .tag("tradeflor")
                     CalendarView()
                         .tabItem { Label("calendar.title", systemImage: "calendar") }
                         .tag("calendar")
                     SettingsView()
-                        .tabItem { Label("settings.title", systemImage: "gearshape.fill") }
+                        .tabItem { Label("settings.title", systemImage: "gearshape") }
                         .tag("settings")
                 }
-                .toolbarBackground(Theme.ground, for: .tabBar)
-                .toolbarBackground(.visible, for: .tabBar)
             } else {
                 LoginView()
             }
@@ -95,9 +97,4 @@ struct RootView: View {
     }
 }
 
-enum Theme {
-    static let accent = Color("AccentColor")
-    static let ground = Color(red: 0x00 / 255, green: 0x13 / 255, blue: 0x30 / 255)
-    static let surface = Color(red: 0x05 / 255, green: 0x22 / 255, blue: 0x45 / 255)
-    static let onAccent = Color(red: 0x05 / 255, green: 0x2B / 255, blue: 0x3A / 255)
-}
+

@@ -283,7 +283,7 @@ struct VoiceBubble: View {
     }
 
     var body: some View {
-        let fg: Color = mine ? Theme.onAccent : .white
+        let fg: Color = Theme.text
         HStack {
             if mine { Spacer(minLength: 48) }
             HStack(spacing: 10) {
@@ -322,7 +322,7 @@ struct VoiceBubble: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(mine ? Theme.accent : Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .tfBubble(mine: mine)
             if !mine { Spacer(minLength: 48) }
         }
     }
