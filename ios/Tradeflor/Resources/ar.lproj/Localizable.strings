@@ -1843,3 +1843,12 @@
 "ed.color.blue" = "أزرق";
 "ed.color.purple" = "بنفسجي";
 "ed.color.pink" = "وردي";
+
+"mv.photo" = "صورة";
+"mv.share" = "مشاركة";
+"mv.share.failed" = "تعذّر تجهيز الملف. حاول مرة أخرى.";
+"mv.showinchat" = "عرض في الدردشة";
+"mv.speed" = "سرعة التشغيل";
+"mv.pip" = "صورة داخل صورة";
+"mv.react" = "إضافة تفاعل";
+"mv.saving" = "جارٍ الحفظ…";

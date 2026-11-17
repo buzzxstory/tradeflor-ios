@@ -126,49 +126,12 @@ struct RemoteImage: View {
     }
 }
 
-/// Full-screen photo: pinch to zoom, double-tap to reset, swipe down or Done to close.
+/// Full-screen photo (contact info, shared media): the WhatsApp-style media viewer (MediaViewer.swift) for one photo.
 struct PhotoViewer: View {
     let token: String
     let fileID: String
-    @Environment(\.dismiss) private var dismiss
-    @State private var scale: CGFloat = 1
-    @State private var lastScale: CGFloat = 1
-    @State private var drag: CGSize = .zero
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black.ignoresSafeArea()
-            RemoteImage(token: token, fileID: fileID, thumb: false, contentMode: .fit)
-                .scaleEffect(scale)
-                .offset(y: scale == 1 ? drag.height : 0)
-                .gesture(
-                    MagnificationGesture()
-                        .onChanged { v in scale = max(1, min(5, lastScale * v)) }
-                        .onEnded { _ in lastScale = scale }
-                )
-                .simultaneousGesture(
-                    DragGesture()
-                        .onChanged { v in if scale == 1 { drag = v.translation } }
-                        .onEnded { v in
-                            if scale == 1 && abs(v.translation.height) > 120 { dismiss() } else { drag = .zero }
-                        }
-                )
-                .onTapGesture(count: 2) {
-                    withAnimation { scale = 1; lastScale = 1 }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(.ultraThinMaterial, in: Circle())
-            }
-            .padding()
-            .accessibilityLabel(Text("chat.close"))
-        }
-        .overlay(alignment: .topLeading) { SaveMediaButton(token: token, fileID: fileID, video: false) }
+        MediaViewer(token: token, items: [MediaViewerItem(fileID: fileID, video: false)])
     }
 }

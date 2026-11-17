@@ -282,7 +282,9 @@ struct ChatView: View {
                                                   forward: restricted ? nil : { p in forwarding = p },
                                                   save: restricted ? nil : { p in Task { await saveAttachment(p) } },
                                                   delete: { p in deleteTargets = [p]; showDelete = true },
-                                                  select: { p in selecting = true; selected = Set(album.map(\.id)) })) { fid in viewing = ViewedPhoto(id: fid) }
+                                                  select: { p in selecting = true; selected = Set(album.map(\.id)) })) { fid in
+                                        viewing = ViewedPhoto(id: fid, messageID: album.first(where: { $0.file_id == fid })?.id)
+                                    }
                                 } else {
                                     messageContent(m)
                                 }
@@ -386,6 +388,7 @@ struct ChatView: View {
                     .padding(.top, 8)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })
                 .overlay(alignment: .bottomTrailing) {
                     // WhatsApp's arrow (website d454d16): dark, light chevron; the count of others' new messages on its upper
                     // left, counting down as they come into view; in groups the "@" (next mention) stands above it
@@ -769,14 +772,14 @@ struct ChatView: View {
                          onGallery: { Task { try? await Task.sleep(nanoseconds: 700_000_000); showPhotoPicker = true } })
         }
         .fullScreenCover(item: $viewing) { v in
-            PhotoViewer(token: token, fileID: v.id)
+            mediaViewer(v)
         }
         .sheet(isPresented: $showUnlock) {
             UnlockSheet(token: token) { Task { await loadNewest() } }
                 .presentationDetents([.large])
         }
         .fullScreenCover(item: $watching) { v in
-            VideoScreen(token: token, fileID: v.id)
+            mediaViewer(v)
         }
         .onAppear {
             TabChrome.shared.conversationOpened() // the dock steps aside inside a conversation (web: one region at a time)
@@ -1702,20 +1705,20 @@ struct ChatView: View {
         } else if m.kind == "location", !m.isDeleted {
             LocationCard(token: token, message: m, mine: m.sender_id == me)
         } else if VideoNotePrep.isNote(m), let fid = m.file_id, !m.isDeleted {
-            VideoNoteBubble(token: token, message: m, mine: m.sender_id == me) { watching = ViewedPhoto(id: fid) }
+            VideoNoteBubble(token: token, message: m, mine: m.sender_id == me) { watching = ViewedPhoto(id: fid, messageID: m.id) }
         } else if m.kind == "voice", m.audio_id != nil, !m.isDeleted {
             VoiceBubble(token: token, message: m, mine: m.sender_id == me, state: m.sender_id == me ? receipt(m) : nil,
                         avatarID: m.sender_id == me ? nil : (isGroup ? memberAvatars[m.sender_id] : chat.peer_avatar_id),
                         name: isGroup ? memberNames[m.sender_id] : (m.sender_id == me ? nil : chat.title))
         } else if m.kind == "file", let fid = m.file_id, (m.file_mime ?? "").hasPrefix("video/"), !m.isDeleted {
             VideoBubble(token: token, message: m, mine: m.sender_id == me, state: m.sender_id == me ? receipt(m) : nil) {
-                watching = ViewedPhoto(id: fid)
+                watching = ViewedPhoto(id: fid, messageID: m.id)
             }
         } else if m.kind == "image", let fid = m.file_id, !m.isDeleted {
             PhotoBubble(mine: m.sender_id == me, date: m.date, state: m.sender_id == me ? receipt(m) : nil, caption: m.body, fileID: fid) {
                 RemoteImage(token: token, fileID: fid)
             }
-            .onTapGesture { viewing = ViewedPhoto(id: fid) }
+            .onTapGesture { viewing = ViewedPhoto(id: fid, messageID: m.id) }
         } else if m.kind == "file", m.file_id != nil, !m.isDeleted {
             FileBubble(message: m, mine: m.sender_id == me, state: m.sender_id == me ? receipt(m) : nil) {
                 Task { await openDocument(m) }
@@ -1732,6 +1735,36 @@ struct ChatView: View {
         defer { openingDoc = false }
         flash("file.opening")
         if let url = await MediaSaver.localFile(token: token, fileID: fid, name: m.file_name) { openDoc = LocalDoc(url: url) } else { flash("file.failed") }
+    }
+
+    /// The chat's photos and videos, oldest first, for the full-screen viewer (its strip and its sideways swipe).
+    private var viewerItems: [MediaViewerItem] {
+        messages.compactMap { m in
+            guard !m.isDeleted, let fid = m.file_id else { return nil }
+            let video = (m.kind == "file" && (m.file_mime ?? "").hasPrefix("video/")) || VideoNotePrep.isNote(m)
+            guard m.kind == "image" || video else { return nil }
+            let mine = m.sender_id == me
+            let sender = mine ? NSLocalizedString("chat.you", comment: "")
+                : (isGroup ? (memberNames[m.sender_id] ?? chat.title) : chat.title)
+            return MediaViewerItem(fileID: fid, video: video, message: m, mine: mine, sender: sender)
+        }
+    }
+
+    /// The WhatsApp-style viewer (MediaViewer.swift) on this message, with the chat's own actions.
+    @MainActor private func mediaViewer(_ v: ViewedPhoto) -> some View {
+        var items = viewerItems
+        if !items.contains(where: { $0.id == v.messageID || $0.fileID == v.id }) {
+            // not in the loaded list (should not happen): show just this file
+            items = [MediaViewerItem(fileID: v.id, video: watching?.id == v.id)]
+        }
+        return MediaViewer(
+            token: token, items: items, startID: v.messageID ?? v.id, me: me,
+            actions: MediaViewerActions(
+                forward: !restricted,
+                reply: canSend ? { m in replyingTo = m; composerFocused = true } : nil,
+                showInChat: { m in searchText = ""; jumpTarget = m.id },
+                delete: { m in deleteTargets = [m]; showDelete = true },
+                react: { m, e in Task { await react(m, e) } }))
     }
 
     /// Save As...: photos and videos go to Photos; documents open in Quick Look (Save to Files / share from there).
@@ -2070,72 +2103,137 @@ struct PendingMessage: Identifiable, Equatable {
 
 struct ViewedPhoto: Identifiable {
     let id: String // the file id
+    /// The message it belongs to, when known (the full-screen viewer opens on that message).
+    var messageID: String? = nil
 }
 
-/// A photo message (website 063cc7e / 03f13cf): the picture on its own, no card, in a box that keeps its shape (the space
-/// is kept before it loads); the time over the picture; a round forward arrow beside it. With a caption it keeps its card.
+/// A photo or a video message, as WhatsApp iOS draws it: the media fills its bubble edge to edge inside a 3 pt bubble
+/// rim, in a box with the media's own shape (MediaDims.box, the same rule for photos and videos; the space is kept before
+/// it loads and the box never changes while the row is on screen). The time and ticks sit bottom-right over a soft dark
+/// gradient; a video adds its length bottom-left and a round play button in the middle. A caption goes under the media
+/// inside the same bubble. The round forward button sits outside the bubble, on its outer side, centred on it.
 struct PhotoBubble<Content: View>: View {
     let mine: Bool
     let date: Date?
     let state: Bubble.Delivery?
     let caption: String
     var fileID: String? = nil
-    /// The picture's own size when known here (a picture being sent).
+    /// The picture's own size when known here (a picture being sent, a video's cover).
     var size: CGSize? = nil
+    /// A video: the play button and the length chip are drawn over it.
+    var video = false
+    var seconds: Double? = nil
     @ViewBuilder let content: () -> Content
     @Environment(\.tfMediaForward) private var forward
     /// The box chosen the first time this bubble is drawn: it never changes afterwards while it is on screen.
     @State private var frozen: CGSize?
 
+    static var innerRadius: CGFloat { 13 }
+
     var body: some View {
         let box = frozen ?? MediaDims.box(size ?? fileID.flatMap { MediaDims.shared.size($0) })
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .center, spacing: 10) {
             if mine { Spacer(minLength: 0) }
             if mine, let forward { forwardButton(forward) }
-            VStack(alignment: .trailing, spacing: 4) {
-                content()
-                    .frame(width: box.width, height: box.height)
-                    .background(Theme.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: caption.isEmpty ? 12 : 10, style: .continuous))
-                    .contentShape(Rectangle())
-                    .overlay(alignment: .bottomTrailing) {
-                        if caption.isEmpty { MediaTimeChip(date: date, state: state).padding(6) }
-                    }
+            VStack(alignment: .leading, spacing: 0) {
+                media(box)
                 if !caption.isEmpty {
                     ZStack(alignment: .bottomTrailing) {
                         (Text(caption) + Text(Bubble.metaSpacer(date: date, ticks: state != nil, edited: false)).foregroundColor(.clear).font(.system(size: 11)))
                             .font(.system(size: 15))
                             .foregroundStyle(Theme.text)
-                            .frame(maxWidth: box.width, alignment: .leading)
+                            .frame(maxWidth: box.width - 12, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
                         Bubble.meta(date: date, state: state, edited: false)
                     }
-                    .padding(.horizontal, 6).padding(.bottom, 2)
+                    .padding(.horizontal, 6).padding(.top, 5).padding(.bottom, 3)
+                    .frame(width: box.width, alignment: .leading)
                 }
             }
-            .padding(caption.isEmpty ? 0 : 3)
-            .modifier(CaptionCard(on: !caption.isEmpty, mine: mine))
+            .padding(3)
+            .tfBubble(mine: mine)
             .onAppear { if frozen == nil { frozen = box } }
             if !mine, let forward { forwardButton(forward) }
             if !mine { Spacer(minLength: 0) }
         }
     }
 
+    private func media(_ box: CGSize) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Self.innerRadius, style: .continuous)
+        return ZStack {
+            content()
+                .frame(width: box.width, height: box.height)
+                .clipped()
+            // the soft shade under the time / the length (WhatsApp), never over the whole picture
+            if caption.isEmpty || video {
+                LinearGradient(colors: [.clear, .black.opacity(0.42)], startPoint: .top, endPoint: .bottom)
+                    .frame(height: min(54, box.height * 0.4))
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .allowsHitTesting(false)
+            }
+            if video {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.leading, 3)
+                    .frame(width: 56, height: 56)
+                    .background(Color.black.opacity(0.42), in: Circle())
+                    .overlay(Circle().stroke(.white.opacity(0.18), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
+                    .allowsHitTesting(false)
+            }
+            HStack(alignment: .bottom, spacing: 6) {
+                if video {
+                    HStack(spacing: 4) {
+                        Image(systemName: "video.fill").font(.system(size: 10, weight: .semibold))
+                        if let seconds { Text(RemoteMedia.clock(seconds)).monospacedDigit() }
+                    }
+                }
+                Spacer(minLength: 4)
+                if caption.isEmpty {
+                    HStack(spacing: 3) {
+                        if let date { Text(Bubble.timeString(date)).monospacedDigit() }
+                        if let state { Bubble.tickView(state) }
+                    }
+                }
+            }
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .shadow(color: .black.opacity(0.35), radius: 1.5, y: 0.5)
+            .environment(\.layoutDirection, .leftToRight) // length bottom-left, time bottom-right, in every language
+            .padding(.horizontal, 8).padding(.bottom, 5)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .allowsHitTesting(false)
+        }
+        .frame(width: box.width, height: box.height)
+        .background(Theme.surface)
+        .clipShape(shape)
+        .contentShape(shape)
+        // a picture still being sent keeps its own cancel button reachable
+        .accessibilityElement(children: fileID == nil ? AccessibilityChildBehavior.contain : AccessibilityChildBehavior.ignore)
+        .accessibilityLabel(Text(LocalizedStringKey(video ? "chat.video" : "mv.photo")))
+        .accessibilityValue(Text(spokenValue))
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private var spokenValue: String {
+        var parts: [String] = []
+        if video, let seconds { parts.append(RemoteMedia.clock(seconds)) }
+        if let date { parts.append(Bubble.timeString(date)) }
+        return parts.joined(separator: ", ")
+    }
+
+    /// WhatsApp's forward button: a 34 pt grey see-through circle with a white arrow, outside the bubble.
     private func forwardButton(_ f: @escaping () -> Void) -> some View {
         Button(action: f) {
-            Image(systemName: "arrowshape.turn.up.right.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
-                .frame(width: 32, height: 32).background(Theme.card.opacity(0.85), in: Circle())
+            Image(systemName: "arrowshape.turn.up.right.fill").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: 34, height: 34)
+                .background(Color(white: 0.5, opacity: 0.38), in: Circle())
+                .environment(\.layoutDirection, .leftToRight) // the arrow always points forward
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text("chat.forward"))
-    }
-}
-
-private struct CaptionCard: ViewModifier {
-    let on: Bool
-    let mine: Bool
-    func body(content: Content) -> some View {
-        if on { content.tfBubble(mine: mine) } else { content }
     }
 }
 

@@ -1843,3 +1843,12 @@
 "ed.color.blue" = "Blue";
 "ed.color.purple" = "Purple";
 "ed.color.pink" = "Pink";
+
+"mv.photo" = "Photo";
+"mv.share" = "Share";
+"mv.share.failed" = "Could not prepare the file. Try again.";
+"mv.showinchat" = "Show in Chat";
+"mv.speed" = "Playback speed";
+"mv.pip" = "Picture in Picture";
+"mv.react" = "Add reaction";
+"mv.saving" = "Saving…";

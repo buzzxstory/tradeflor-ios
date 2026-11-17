@@ -88,14 +88,26 @@ final class MediaDims: ObservableObject {
         DispatchQueue.main.async { self.version += 1 }
     }
 
-    /// The box for a picture of size `s` (website 03f13cf): up to 76% of the screen wide and 80% tall-ish, the shape
-    /// clamped between 9:16 and 2:1.
+    /// Widest a photo or video is drawn (WhatsApp iOS: about 70% of the screen, 275 pt on a 393 pt iPhone).
+    static var maxWidth: CGFloat { (UIScreen.main.bounds.width * 0.70).rounded() }
+    /// Tallest (about 80% of the screen width, 316 pt on a 393 pt iPhone).
+    static var maxHeight: CGFloat { (UIScreen.main.bounds.width * 0.80).rounded() }
+
+    /// The box for a photo or a video of size `s`, the same rule for both (measured on WhatsApp iOS): the media's own
+    /// shape fitted inside maxWidth × maxHeight (9:16 → 177 × 316, 4:5 → 253 × 316, 3:4 → 237 × 316, landscape → full
+    /// width). A very tall one never gets narrower than 40% of the screen and a very wide one never lower than 120 pt:
+    /// beyond that it is cropped (the picture fills the box). Unknown shape: a square.
     static func box(_ s: CGSize?) -> CGSize {
         let screen = UIScreen.main.bounds.width
-        let maxW = min(330, screen * 0.76), maxH = min(340, screen * 0.8)
-        let ar: CGFloat = s.map { min(2, max(9.0 / 16.0, $0.width / $0.height)) } ?? 1
-        let w = min(maxW, maxH * ar)
-        return CGSize(width: w, height: w / ar)
+        let maxW = maxWidth, maxH = maxHeight
+        let minW = (screen * 0.40).rounded(), minH: CGFloat = 120
+        guard let s, s.width > 0, s.height > 0 else { return CGSize(width: maxW, height: maxW) }
+        let ar = s.width / s.height
+        var w = maxW, h = maxW / ar
+        if h > maxH { h = maxH; w = maxH * ar }
+        w = min(maxW, max(minW, w))
+        h = min(maxH, max(minH, h))
+        return CGSize(width: w.rounded(), height: h.rounded())
     }
 }
 
@@ -179,7 +191,8 @@ struct AlbumGrid: View {
     var actions = AlbumTileActions()
     let onOpen: (String) -> Void
 
-    private var width: CGFloat { min(330, UIScreen.main.bounds.width * 0.8) }
+    /// As wide as a single photo (MediaDims.maxWidth) plus the 3 pt bubble edge on each side.
+    private var width: CGFloat { MediaDims.maxWidth + 6 }
 
     var body: some View {
         let gap: CGFloat = 3

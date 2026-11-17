@@ -65,10 +65,9 @@ enum RemoteMedia {
     }
 }
 
-/// A video in the chat, as in WhatsApp (website 3f50eb5 + 10038d8): its picture with a round play button in the middle,
-/// a camera and the length at the bottom on one side, the time and ticks on the other. No bubble card: the picture is
-/// the message (rounded 14 pt), at the video's own shape (9:16 ... 2:1, up to 260 x 340). It never plays inline: a tap
-/// opens the full-screen player.
+/// A video in the chat, as in WhatsApp iOS: its cover with a round play button in the middle, a camera and the length
+/// bottom-left, the time and ticks bottom-right, in the same bubble and box as a photo (PhotoBubble, MediaDims.box). It
+/// never plays inline: a tap opens the full-screen viewer.
 struct VideoBubble: View {
     let token: String
     let message: Message
@@ -93,144 +92,40 @@ struct VideoBubble: View {
         }
     }
 
-    private static let time: DateFormatter = {
-        let f = DateFormatter()
-        f.timeStyle = .short
-        f.dateStyle = .none
-        return f
-    }()
-
-    /// Width / height, as the website's mediaAR: a taller video is cropped to 9:16, a wider one to 2:1; 16:9 until known.
-    private var ratio: CGFloat {
-        guard let c = cover, c.size.width > 0, c.size.height > 0 else { return 16.0 / 9.0 }
-        return min(2, max(9.0 / 16.0, c.size.width / c.size.height))
-    }
-
-    private var box: CGSize {
-        var w: CGFloat = 260
-        var h = w / ratio
-        if h > 340 { h = 340; w = h * ratio }
-        return CGSize(width: w.rounded(), height: h.rounded())
-    }
-
+    /// Drawn by PhotoBubble, exactly like a photo (same box rule, same rim, same time over a soft shade), plus the play
+    /// button and the length. The cover's shape is remembered in MediaDims, so the box is right the next time.
     var body: some View {
-        let size = box
-        HStack(spacing: 0) {
-            if mine { Spacer(minLength: 48) }
-            VStack(alignment: mine ? .trailing : .leading, spacing: 4) {
-                media(size)
-                if !message.body.isEmpty {
-                    Text(message.body)
-                        .foregroundStyle(Theme.text)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .tfBubble(mine: mine)
-                        .frame(maxWidth: size.width, alignment: mine ? .trailing : .leading)
-                }
-            }
-            if !mine { Spacer(minLength: 48) }
-        }
-        .task(id: message.file_id) {
-            guard let fid = message.file_id else { return }
-            if cover == nil, let c = await RemoteMedia.cover(token: token, fileID: fid) { cover = c }
-            if seconds == nil { seconds = await RemoteMedia.length(token: token, fileID: fid) }
-        }
-    }
-
-    private func media(_ size: CGSize) -> some View {
-        ZStack {
+        PhotoBubble(mine: mine, date: message.date, state: state, caption: message.body, fileID: message.file_id,
+                    size: cover?.size ?? message.file_id.flatMap { MediaDims.shared.size($0) },
+                    video: true, seconds: seconds) {
             if let cover {
-                Image(uiImage: cover)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: size.width, height: size.height)
-                    .clipped()
+                Image(uiImage: cover).resizable().scaledToFill()
             } else {
                 Color.black.opacity(0.35)
             }
-            Image(systemName: "play.fill")
-                .font(.system(size: 22, weight: .bold))
-                .foregroundStyle(.white)
-                .padding(.leading, 3)
-                .frame(width: 56, height: 56)
-                .background(.black.opacity(0.45), in: Circle())
-                .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
-            chips
-                .padding(7)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
-        .frame(width: size.width, height: size.height)
-        .background(Theme.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onTapGesture(perform: onPlay)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("chat.video"))
-        .accessibilityValue(Text(seconds.map { RemoteMedia.clock($0) } ?? ""))
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { onPlay() }
-    }
-
-    /// Camera + length on one side, time + ticks on the other; when they cannot fit side by side (a narrow video, a
-    /// long time format), the length goes on its own row above, so they never overlap.
-    private var chips: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) {
-                lengthChip
-                Spacer(minLength: 6)
-                timeChip
-            }
-            VStack(spacing: 4) {
-                HStack(spacing: 0) { lengthChip; Spacer(minLength: 0) }
-                HStack(spacing: 0) { Spacer(minLength: 0); timeChip }
-            }
+        .task(id: message.file_id) {
+            guard let fid = message.file_id else { return }
+            if cover == nil, let c = await RemoteMedia.cover(token: token, fileID: fid) { cover = c }
+            if let c = cover { MediaDims.shared.set(fid, c.size) }
+            if seconds == nil { seconds = await RemoteMedia.length(token: token, fileID: fid) }
         }
-    }
-
-    private var lengthChip: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "video.fill").font(.system(size: 9, weight: .semibold)).opacity(0.9)
-            if let seconds { Text(RemoteMedia.clock(seconds)).monospacedDigit() }
-        }
-        .modifier(VideoChip())
-    }
-
-    @ViewBuilder private var timeChip: some View {
-        if message.date != nil || state != nil {
-            HStack(spacing: 3) {
-                if let d = message.date { Text(Self.time.string(from: d)).monospacedDigit() }
-                if let state { Bubble.tickView(state) }
-            }
-            .modifier(VideoChip())
-        }
-    }
-}
-
-/// The small dark chips over a video's picture (white 11 pt on black 45 %).
-private struct VideoChip: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .font(.system(size: 11))
-            .foregroundStyle(.white)
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 7)
-            .frame(height: 20)
-            .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 }
 
 // MARK: - full-screen player
 
 /// The video's picture, drawn by an AVPlayerLayer (no system controls, no system full screen).
-private final class PlayerLayerUIView: UIView {
+final class PlayerLayerUIView: UIView {
     override class var layerClass: AnyClass { AVPlayerLayer.self }
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 }
 
-private struct PlayerLayerView: UIViewRepresentable {
+struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
+    /// Hands the drawing view out once it exists (the media viewer's Picture in Picture uses its layer).
+    var onView: (@MainActor (PlayerLayerUIView) -> Void)? = nil
 
     func makeUIView(context: Context) -> PlayerLayerUIView {
         let v = PlayerLayerUIView()
@@ -238,6 +133,7 @@ private struct PlayerLayerView: UIViewRepresentable {
         v.isUserInteractionEnabled = false // the SwiftUI layer above takes the taps and the swipe
         v.playerLayer.videoGravity = .resizeAspect
         v.playerLayer.player = player
+        if let onView { Task { @MainActor in onView(v) } }
         return v
     }
 
@@ -258,6 +154,8 @@ final class VideoPlayback: ObservableObject {
     @Published private(set) var muted = false
     @Published private(set) var total: Double = 0
     @Published var current: Double = 0
+    /// Playback speed (the viewer's 1× / 1.5× / 2×); kept from one video to the next while the viewer is open.
+    @Published private(set) var rate: Float = 1
     /// While the finger is on the seek bar the clock follows the finger, not the player.
     var scrubbing = false
 
@@ -267,6 +165,14 @@ final class VideoPlayback: ObservableObject {
 
     func load(token: String, fileID: String) {
         guard player.currentItem == nil else { return }
+        // a fresh start (the viewer reuses one playback for each video it shows)
+        ready = false
+        ended = false
+        failed = false
+        buffering = false
+        total = 0
+        current = 0
+        player.defaultRate = rate // play() starts at this speed (iOS 16+)
         let asset = RemoteMedia.asset(token: token, fileID: fileID)
         let item = AVPlayerItem(asset: asset)
         // start as soon as a little is there (WhatsApp-like), instead of buffering ahead first
@@ -337,6 +243,16 @@ final class VideoPlayback: ObservableObject {
         }
     }
 
+    /// 1× → 1.5× → 2× → 1×.
+    func cycleRate() {
+        let next: Float = rate < 1.25 ? 1.5 : (rate < 1.75 ? 2 : 1)
+        rate = next
+        player.defaultRate = next
+        if player.timeControlStatus != .paused { player.rate = next }
+    }
+
+    func pause() { player.pause() }
+
     func toggleMute() {
         player.isMuted.toggle()
         muted = player.isMuted
@@ -351,216 +267,23 @@ final class VideoPlayback: ObservableObject {
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = nil
         player.replaceCurrentItem(with: nil)
+        playing = false
+        buffering = false
     }
 }
 
-/// Full-screen video player with our own controls only (website 9092b7e + 43dac41): X and Save at the top, a big play /
-/// pause in the middle (replay at the end), the time played, a seek bar, the length and sound on/off at the bottom. A tap
-/// shows or hides the controls; they hide by themselves after ~3 s while it plays. Swipe the video down to go back.
+/// Full-screen video (contact info, shared media): the WhatsApp-style media viewer (MediaViewer.swift) for one video.
 struct VideoScreen: View {
     let token: String
     let fileID: String
-    @Environment(\.dismiss) private var dismiss
-    @StateObject private var model = VideoPlayback()
-    @State private var shown = true
-    @State private var hideTask: Task<Void, Never>?
-    @State private var drag: CGFloat = 0
-
-    /// The chat shows through while the video is dragged down only where the cover can have a clear background.
-    private var seeThrough: Bool {
-        if #available(iOS 16.4, *) { return true }
-        return false
-    }
-    private var controlsVisible: Bool { (shown || !model.playing) && drag == 0 }
-    private var backdrop: Double { seeThrough ? 1 - min(1, Double(drag) / 420) : 1 }
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(backdrop).ignoresSafeArea()
-            video
-            controls
-                .opacity(controlsVisible ? 1 : 0)
-                .allowsHitTesting(controlsVisible)
-                .animation(.easeOut(duration: 0.2), value: controlsVisible)
-        }
-        .modifier(ClearCover())
-        .statusBarHidden(!controlsVisible)
-        .onAppear {
-            VoicePlayer.shared.stop()
-            if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback) } // never cut a running call's microphone
-            if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setActive(true) } // never cut a running call's microphone
-            model.load(token: token, fileID: fileID)
-            keepShown()
-        }
-        .onDisappear {
-            hideTask?.cancel()
-            model.stop()
-        }
-        .onChange(of: model.playing) { playing in
-            if playing { keepShown() } else { hideTask?.cancel(); shown = true }
-        }
-    }
-
-    private var video: some View {
-        ZStack {
-            if !model.ready, let cover = RemoteMedia.cachedCover(fileID) {
-                Image(uiImage: cover).resizable().scaledToFit()
-            }
-            PlayerLayerView(player: model.player)
-            Color.clear.contentShape(Rectangle())
-        }
-        .ignoresSafeArea()
-        .scaleEffect(1 - min(0.2, drag / 1800))
-        .offset(y: drag)
-        .onTapGesture {
-            if shown && model.playing {
-                hideTask?.cancel()
-                shown = false
-            } else {
-                keepShown()
-            }
-        }
-        .gesture(
-            DragGesture(minimumDistance: 14, coordinateSpace: .global)
-                .onChanged { v in
-                    let dy = v.translation.height
-                    guard drag > 0 || (dy > 0 && dy > abs(v.translation.width)) else { return }
-                    drag = max(0, dy)
-                }
-                .onEnded { v in
-                    if drag > 130 || (drag > 0 && v.predictedEndTranslation.height > 360) {
-                        dismiss()
-                    } else {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { drag = 0 }
-                    }
-                }
-        )
-    }
-
-    private var controls: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                HStack(alignment: .top) {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 17, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 40, height: 40)
-                            .background(.ultraThinMaterial, in: Circle())
-                    }
-                    .padding()
-                    .accessibilityLabel(Text("chat.close"))
-                    Spacer()
-                    SaveMediaButton(token: token, fileID: fileID, video: true)
-                }
-                .background(
-                    LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom)
-                        .ignoresSafeArea(edges: .top)
-                        .allowsHitTesting(false)
-                )
-                Spacer(minLength: 0)
-                bottomBar
-            }
-            centre
-        }
-    }
-
-    @ViewBuilder private var centre: some View {
-        if model.failed {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 30))
-                .foregroundStyle(.white)
-                .frame(width: 74, height: 74)
-                .background(.black.opacity(0.42), in: Circle())
-        } else if model.buffering && !model.ended {
-            ProgressView().tint(.white).scaleEffect(1.4)
-                .frame(width: 74, height: 74)
-                .background(.black.opacity(0.42), in: Circle())
-        } else {
-            Button {
-                model.toggle()
-                keepShown()
-            } label: {
-                Image(systemName: model.ended ? "arrow.counterclockwise" : (model.playing ? "pause.fill" : "play.fill"))
-                    .font(.system(size: model.ended ? 28 : 30, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.leading, !model.ended && !model.playing ? 4 : 0)
-                    .frame(width: 74, height: 74)
-                    .background(.black.opacity(0.42), in: Circle())
-            }
-            .accessibilityLabel(Text(LocalizedStringKey(model.ended ? "vp.replay" : (model.playing ? "vp.pause" : "vp.play"))))
-        }
-    }
-
-    private var bottomBar: some View {
-        HStack(spacing: 10) {
-            Text(RemoteMedia.clock(model.current))
-                .modifier(PlayerClock())
-            Slider(
-                value: Binding(
-                    get: { min(model.current, max(model.total, 0.01)) },
-                    set: { v in
-                        model.current = v
-                        model.seek(to: v, exact: false)
-                        keepShown()
-                    }
-                ),
-                in: 0...max(model.total, 0.01),
-                onEditingChanged: { editing in
-                    model.scrubbing = editing
-                    if !editing { model.seek(to: model.current, exact: true) }
-                    keepShown()
-                }
-            )
-            .tint(.white)
-            .disabled(model.total <= 0)
-            .accessibilityLabel(Text("vp.seek"))
-            Text(RemoteMedia.clock(model.total))
-                .modifier(PlayerClock())
-            Button {
-                model.toggleMute()
-                keepShown()
-            } label: {
-                Image(systemName: model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-            }
-            .accessibilityLabel(Text(LocalizedStringKey(model.muted ? "vp.unmute" : "vp.mute")))
-        }
-        .padding(.leading, 14)
-        .padding(.trailing, 6)
-        .padding(.vertical, 6)
-        .background(Color(red: 20 / 255, green: 24 / 255, blue: 28 / 255).opacity(0.62), in: Capsule())
-        .environment(\.layoutDirection, .leftToRight) // a time line runs left to right in every language
-        .padding(.horizontal, 12)
-        .padding(.bottom, 14)
-    }
-
-    private func keepShown() {
-        shown = true
-        hideTask?.cancel()
-        hideTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard !Task.isCancelled, model.playing, !model.scrubbing else { return }
-            shown = false
-        }
-    }
-}
-
-private struct PlayerClock: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .font(.system(size: 12.5).monospacedDigit())
-            .foregroundStyle(.white.opacity(0.85))
-            .lineLimit(1)
-            .fixedSize()
-            .frame(minWidth: 38)
+        MediaViewer(token: token, items: [MediaViewerItem(fileID: fileID, video: true)])
     }
 }
 
 /// A clear cover background (iOS 16.4+), so the chat shows through while the video is swiped down.
-private struct ClearCover: ViewModifier {
+struct ClearCover: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 16.4, *) {
             content.presentationBackground(.clear)
