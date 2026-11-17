@@ -254,19 +254,10 @@ struct MessageRow<Content: View>: View {
     /// The long-press menu (MessageMenu.swift): the same actions, in the same order and on the same conditions, as the
     /// system menu below, which is only used when the screen has no menu host.
     private func menuContent() -> MessageMenuContent {
+        // the website's order (ChatScreen.tsx / GroupsView.tsx messageActions)
         var items = [MessageMenuItem("chat.reply", systemImage: "arrowshape.turn.up.left") { onReply() }]
-        if message.kind == "text" && !options.restricted {
-            items.append(MessageMenuItem("chat.copy.text", systemImage: "doc.on.doc") { onCopy() })
-        }
         if let edit = actions.edit {
             items.append(MessageMenuItem("chat.edit", systemImage: "pencil") { edit() })
-        }
-        items.append(MessageMenuItem("chat.copy.link", systemImage: "link") { actions.copyLink() })
-        if let save = actions.save, !options.restricted, !message.isDeleted {
-            items.append(MessageMenuItem("chat.save.as", systemImage: "arrow.down.to.line") { save() })
-        }
-        if !options.restricted {
-            items.append(MessageMenuItem("chat.forward", systemImage: "arrowshape.turn.up.right") { onForward() })
         }
         if options.canPin {
             let pinned = options.pinned
@@ -274,11 +265,21 @@ struct MessageRow<Content: View>: View {
                 actions.pin(!pinned)
             })
         }
+        if message.kind == "text" && !options.restricted {
+            items.append(MessageMenuItem("chat.copy.text", systemImage: "doc.on.doc") { onCopy() })
+        }
+        if let save = actions.save, !options.restricted, !message.isDeleted {
+            items.append(MessageMenuItem("chat.save.as", systemImage: "arrow.down.to.line") { save() })
+        }
+        items.append(MessageMenuItem("chat.copy.link", systemImage: "link") { actions.copyLink() })
+        if !options.restricted {
+            items.append(MessageMenuItem("chat.forward", systemImage: "arrowshape.turn.up.right") { onForward() })
+        }
+        items.append(MessageMenuItem("chat.delete", systemImage: "trash", destructive: true) { onDelete(false) })
         if options.isGroup && !mine {
             items.append(MessageMenuItem("chat.report", systemImage: "exclamationmark.bubble") { actions.report() })
         }
         items.append(MessageMenuItem("chat.select", systemImage: "checkmark") { actions.select() })
-        items.append(MessageMenuItem("chat.delete", systemImage: "trash", destructive: true) { onDelete(false) })
         let mineReactions = Set(message.reactionList(me: myID).filter(\.mine).map(\.emoji))
         let preview = content()
             .environment(\.tfBubbleHead, inside ? head : nil)

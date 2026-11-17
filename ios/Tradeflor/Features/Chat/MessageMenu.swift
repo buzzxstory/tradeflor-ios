@@ -16,7 +16,7 @@ enum MessageMenuStyle {
     /// The quick reactions (MessageContextMenu.tsx QUICK_REACTIONS).
     static let quickEmoji = ["❤️", "🔥", "👏", "👍", "😂", "😮", "😡"]
     /// The last button of the reaction bar (the web draws a small chevron here: "chevron.down").
-    static let moreSymbol = "plus"
+    static let moreSymbol = "chevron.down"
     /// --tf shadow of the menus (0 20px 50px rgba(0,0,0,.5); light theme rgba(20,50,75,.13)).
     static let shadow = Theme.dyn(0x000000, 0x14324B, 0.5, 0.13)
     /// .msg-menu-backdrop on phones.
@@ -293,46 +293,20 @@ struct MessageMenuOverlay: View {
     let close: ((() -> Void)?) -> Void
     let pickMore: (@escaping (String) -> Void) -> Void
 
-    let barH: CGFloat = 50
-    let gap: CGFloat = 8
-    let rowH: CGFloat = 44
+    let barH: CGFloat = 60
+    let rowH: CGFloat = 46
     let pad: CGFloat = 6
 
-    private struct Layout {
-        var source: CGRect?
-        var message: CGRect?
-        var scale: CGFloat
-        var bar: CGRect
-        var card: CGRect
-        var trailing: Bool
-    }
-
     var body: some View {
-        let l = layout()
+        let card = layout()
         ZStack(alignment: .topLeading) {
             backdrop
-            if let preview = request.content.preview, let src = l.source, let dst = l.message {
-                preview
-                    .frame(width: src.width, height: src.height)
-                    .environment(\.layoutDirection, direction)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-                    .scaleEffect(shown ? l.scale : 1)
-                    .shadow(color: MessageMenuStyle.shadow.opacity(shown ? 0.8 : 0), radius: 18, y: 8)
-                    .position(x: shown ? dst.midX : src.midX, y: shown ? dst.midY : src.midY)
-            }
-            reactionBar
-                .frame(width: l.bar.width, height: l.bar.height)
+            menuCard
+                .frame(width: card.width, height: card.height)
                 .environment(\.layoutDirection, direction)
-                .scaleEffect(shown ? 1 : 0.6, anchor: l.trailing ? .bottomTrailing : .bottomLeading)
+                .scaleEffect(shown ? 1 : 0.96, anchor: card.midY > space.size.height / 2 ? .bottom : .top)
                 .opacity(shown ? 1 : 0)
-                .position(x: l.bar.midX, y: l.bar.midY)
-            actionCard
-                .frame(width: l.card.width, height: l.card.height)
-                .environment(\.layoutDirection, direction)
-                .scaleEffect(shown ? 1 : 0.96, anchor: l.trailing ? .topTrailing : .topLeading)
-                .opacity(shown ? 1 : 0)
-                .position(x: l.card.midX, y: l.card.midY)
+                .position(x: card.midX, y: card.midY)
         }
         .frame(width: space.size.width, height: space.size.height, alignment: .topLeading)
         .accessibilityElement(children: .contain)
@@ -340,137 +314,106 @@ struct MessageMenuOverlay: View {
         .accessibilityAction(.escape) { close(nil) }
     }
 
-    /// The dimmed, blurred chat; a tap anywhere outside the menu closes it.
+    /// .msg-menu-backdrop on phones: the chat dimmed; a tap anywhere outside the menu closes it.
     private var backdrop: some View {
-        ZStack {
-            Rectangle().fill(.ultraThinMaterial)
-            MessageMenuStyle.dim
-        }
-        .opacity(shown ? 1 : 0)
-        .contentShape(Rectangle())
-        .onTapGesture { close(nil) }
-        .accessibilityLabel(Text("chat.close"))
-        .accessibilityAddTraits(.isButton)
+        MessageMenuStyle.dim
+            .opacity(shown ? 1 : 0)
+            .contentShape(Rectangle())
+            .onTapGesture { close(nil) }
+            .accessibilityLabel(Text("chat.close"))
+            .accessibilityAddTraits(.isButton)
     }
 
-    /// .msg-reaction-bar: the quick reactions in one row, then "more".
-    private var reactionBar: some View {
+    /// The web phone menu: one card, the quick reactions in a row (and ⌄ for all emoji), a rule, then the actions.
+    private var menuCard: some View {
         let c = request.content
-        return HStack(spacing: 2) {
-            ForEach(c.reactions, id: \.self) { e in
-                Button { close { c.onReact(e) } } label: {
-                    Text(e)
-                        .font(.system(size: 24))
-                        .frame(maxWidth: .infinity, minHeight: 38)
-                        .background(c.active.contains(e) ? Theme.active : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        return VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                ForEach(c.reactions, id: \.self) { e in
+                    Button { close { c.onReact(e) } } label: {
+                        Text(e)
+                            .font(.system(size: 25))
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .background(c.active.contains(e) ? Theme.hex(0x00D4DF, 0.16) : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(MenuEmojiButtonStyle())
+                    .accessibilityLabel(Text(e))
+                    .accessibilityAddTraits(c.active.contains(e) ? .isSelected : [])
+                }
+                Button {
+                    if let more = c.moreReactions {
+                        close(more)
+                    } else {
+                        let react = c.onReact
+                        close { pickMore(react) }
+                    }
+                } label: {
+                    Image(systemName: MessageMenuStyle.moreSymbol)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.text)
+                        .frame(maxWidth: .infinity, minHeight: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(MenuEmojiButtonStyle())
-                .accessibilityLabel(Text(e))
-                .accessibilityAddTraits(c.active.contains(e) ? .isSelected : [])
+                .accessibilityLabel(Text("chat.more.reactions"))
             }
-            Button {
-                if let more = c.moreReactions {
-                    close(more)
-                } else {
-                    let react = c.onReact
-                    close { pickMore(react) }
-                }
-            } label: {
-                Image(systemName: MessageMenuStyle.moreSymbol)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.muted)
-                    .frame(width: 30, height: 30)
-                    .background(Theme.card, in: Circle())
-                    .frame(maxWidth: .infinity, minHeight: 38)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(MenuEmojiButtonStyle())
-            .accessibilityLabel(Text("chat.more.reactions"))
-        }
-        .padding(.horizontal, 6)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.panel, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.border, lineWidth: 1))
-        .shadow(color: MessageMenuStyle.shadow, radius: 22, y: 12)
-    }
-
-    /// .msg-context-menu-list: icon (muted) + label, "danger" rows in red.
-    private var actionCard: some View {
-        VStack(spacing: 0) {
-            ForEach(request.content.items) { item in
-                Button { close(item.action) } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: item.systemImage)
-                            .font(.system(size: 16))
-                            .foregroundStyle(item.destructive ? Theme.danger : Theme.muted)
-                            .frame(width: 22)
-                        Text(item.title)
-                            .font(.system(size: 15))
-                            .foregroundStyle(item.destructive ? Theme.danger : Theme.text)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
-                        Spacer(minLength: 0)
+            .padding(.horizontal, 8)
+            .frame(height: barH)
+            Rectangle().fill(Theme.border).frame(height: 1)
+            VStack(spacing: 0) {
+                ForEach(request.content.items) { item in
+                    Button { close(item.action) } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: item.systemImage)
+                                .font(.system(size: 16))
+                                .foregroundStyle(item.destructive ? Theme.danger : Theme.text)
+                                .frame(width: 22)
+                            Text(item.title)
+                                .font(.system(size: 16))
+                                .foregroundStyle(item.destructive ? Theme.danger : Theme.text)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(height: rowH)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.horizontal, 10)
-                    .frame(height: rowH)
-                    .contentShape(Rectangle())
+                    .buttonStyle(MenuRowButtonStyle(pressed: Theme.hex(0x163845), radius: 10))
                 }
-                .buttonStyle(MenuRowButtonStyle(pressed: Theme.card, radius: 9))
             }
+            .padding(pad)
         }
-        .padding(pad)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.panel, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.border, lineWidth: 1))
         .shadow(color: MessageMenuStyle.shadow, radius: 22, y: 12)
     }
 
-    /// The reactions just over the message, the actions just under it; when that does not fit, the three move up or
-    /// down together (and a very tall message is drawn smaller), like WhatsApp.
-    private func layout() -> Layout {
+    /// Where the card goes: under the pressed message when it fits there, else over it, else as near as the screen allows;
+    /// its side follows the bubble (mine on the trailing side), kept 12 pt inside the screen.
+    private func layout() -> CGRect {
         let w = space.size.width
-        let count = CGFloat(request.content.reactions.count + 1)
-        let barW = min(w - 24, count * 38 + 12)
-        let cardW = min(w - 24, 260)
-        let cardH = CGFloat(request.content.items.count) * rowH + pad * 2
+        let cardW = min(w - 24, 300)
+        let itemsH = CGFloat(request.content.items.count) * rowH + pad * 2
+        let cardH = min(barH + 1 + itemsH, space.bottom - space.top)
         let src = request.frame.map { $0.offsetBy(dx: -space.origin.x, dy: -space.origin.y) }
-        // which edge the bubble hangs from: mine on the trailing side (the left in Arabic)
         let trailing = request.content.mine.map { $0 != (direction == .rightToLeft) } ?? ((src?.midX ?? w / 2) > w / 2)
-        let top = space.top, bottom = space.bottom
-
-        var showMessage = false
-        var scale: CGFloat = 1
-        var messageH: CGFloat = 0
-        if let src, request.content.preview != nil, src.height > 0 {
-            let room = bottom - top - barH - cardH - gap * 2
-            if room >= 40 {
-                showMessage = true
-                scale = min(1, room / src.height)
-                messageH = src.height * scale
-            }
-        }
-        let blockH = barH + gap + (showMessage ? messageH + gap : 0) + cardH
+        let gap: CGFloat = 8
         var y: CGFloat
-        if let src { y = src.minY - gap - barH } else { y = (top + bottom - blockH) / 2 }
-        y = max(min(y, bottom - blockH), top)
-
-        func x(_ width: CGFloat) -> CGFloat {
-            guard let src else { return (w - width) / 2 }
-            let raw = trailing ? src.maxX - width : src.minX
-            return min(max(raw, 12), w - 12 - width)
+        if let src {
+            if src.maxY + gap + cardH <= space.bottom { y = src.maxY + gap }
+            else if src.minY - gap - cardH >= space.top { y = src.minY - gap - cardH }
+            else { y = space.bottom - cardH }   // a tall message: the card rests at the bottom, over it
+        } else {
+            y = (space.top + space.bottom - cardH) / 2
         }
-        let bar = CGRect(x: x(barW), y: y, width: barW, height: barH)
-        var cardY = y + barH + gap
-        var message: CGRect?
-        if showMessage, let src {
-            let mw = src.width * scale
-            message = CGRect(x: trailing ? src.maxX - mw : src.minX, y: cardY, width: mw, height: messageH)
-            cardY += messageH + gap
-        }
-        let card = CGRect(x: x(cardW), y: cardY, width: cardW, height: cardH)
-        return Layout(source: showMessage ? src : nil, message: message, scale: scale, bar: bar, card: card, trailing: trailing)
+        y = max(min(y, space.bottom - cardH), space.top)
+        var x: CGFloat
+        if let src { x = trailing ? src.maxX - cardW : src.minX } else { x = (w - cardW) / 2 }
+        x = min(max(x, 12), w - 12 - cardW)
+        return CGRect(x: x, y: y, width: cardW, height: cardH)
     }
 }
 
