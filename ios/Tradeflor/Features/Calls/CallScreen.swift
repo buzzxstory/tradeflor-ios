@@ -135,6 +135,11 @@ struct CallScreen: View {
                 Text(LocalizedStringKey(Self.endedKey(calls.endReason)))
                 if let d = calls.lastDuration, d >= 1 { Text("· " + CallClock.format(d)).monospacedDigit() }
             }
+            // the exact cause, small, when the call never connected (so a failure can be told apart)
+            if calls.lastDuration == nil || (calls.lastDuration ?? 0) < 1, let r = calls.endReason,
+               !["declined", "busy", "no_answer", "hangup", "canceled", "completed"].contains(r) {
+                Text(r).font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.white.opacity(0.45)).padding(.top, 4)
+            }
         }
     }
 
@@ -145,8 +150,16 @@ struct CallScreen: View {
         case "declined": return "call.ended.declined"
         case "mic_denied": return "call.ended.mic"
         case "not_allowed": return "call.ended.notallowed"
-        case "failed", "ice_timeout", "connection_lost": return "call.ended.failed"
-        default: return "call.ended"
+        case "rate_limited": return "call3.ended.ratelimited"
+        case "already_in_call": return "call3.ended.inacall"
+        case "answered_elsewhere": return "call3.ended.elsewhere"
+        case "canceled", "hangup_before_media": return "call3.ended.canceled"
+        case "connection_lost": return "call3.ended.lost"
+        case "ice_failed", "ice_timeout": return "call3.ended.noconnect"
+        case "not_found", "invalid", "stale", "offline", "system_end": return "call.ended.failed"
+        case "failed", "negotiation_failed": return "call.ended.failed"
+        case nil, "hangup", "completed", "blocked": return "call.ended"
+        default: return "call.ended.failed"
         }
     }
 

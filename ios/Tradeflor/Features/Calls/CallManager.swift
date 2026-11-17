@@ -53,6 +53,10 @@ final class CallManager: NSObject, ObservableObject {
     private var subs = Set<AnyCancellable>()
 
     private var callID: String?
+    /// The user pressed End on this phone (so a CallKit end that follows is theirs, not the system's).
+    private var userEnding = false
+    /// Why this phone ended the call itself, when the server would only say "canceled".
+    private var localReason: String?
     private var conversationID: String?
     /// The chat this call belongs to (the call screen's "Message" button).
     var conversation: String? { conversationID }
@@ -98,8 +102,6 @@ final class CallManager: NSObject, ObservableObject {
         cfg.supportedHandleTypes = [.generic]
         // not in the Phone app's Recents: tapping one there would open the app without placing the call (no call intents)
         cfg.includesCallsInRecents = false
-        // the flower on the system call screen (CallKit uses the image's alpha only)
-        cfg.iconTemplateImageData = UIImage(named: "TabFlower")?.pngData()
         provider = CXProvider(configuration: cfg)
         super.init()
         provider.setDelegate(self, queue: nil)
@@ -169,6 +171,8 @@ final class CallManager: NSObject, ObservableObject {
             self.peerID = peerID
             role = .caller
             acknowledged = false
+            userEnding = false
+            localReason = nil
             phase = .outgoing
             showScreen = true
             let handle = CXHandle(type: .generic, value: peerName)
@@ -218,6 +222,7 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     func hangUp() {
+        userEnding = true
         guard let id = callID else { finish(); return }
         switch phase {
         case .outgoing: send("call.cancel", ["call_id": id])
@@ -339,7 +344,7 @@ final class CallManager: NSObject, ObservableObject {
             peerMuted = (d["muted"] as? Bool) ?? false
         case "call.ended":
             guard cid == callID else { return }
-            endReason = d["reason"] as? String
+            endReason = localReason ?? (d["reason"] as? String)
             finish()
         case "call.sync":
             let call = d["call"] as? [String: Any]
@@ -369,6 +374,8 @@ final class CallManager: NSObject, ObservableObject {
         callID = id
         conversationID = d["conversation_id"] as? String
         role = .callee
+        userEnding = false
+        localReason = nil
         peerID = d["caller_id"] as? String
         uuid = UUID(uuidString: id) ?? UUID()
         phase = .incoming
@@ -757,7 +764,12 @@ extension CallManager: RTCPeerConnectionDelegate {
 
 extension CallManager: CXProviderDelegate {
     nonisolated func providerDidReset(_ provider: CXProvider) {
-        Task { @MainActor in self.finish() }
+        // CallKit lost its calls (its daemon restarted): ours goes on, with the audio switched on by the app itself
+        Task { @MainActor in
+            if self.phase == .idle || self.phase == .ended { return }
+            if self.phase == .incoming { self.endReason = "system_end"; self.finish(); return }
+            self.audioWithoutCallKit()
+        }
     }
     nonisolated func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         CallManager.configureAudioSession()
@@ -770,7 +782,11 @@ extension CallManager: CXProviderDelegate {
     }
     nonisolated func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         Task { @MainActor in
-            if self.phase == .incoming { self.decline() } else if self.phase != .ended && self.phase != .idle { self.hangUp() }
+            if self.phase == .incoming { self.decline() }
+            else if self.phase != .ended && self.phase != .idle {
+                if self.phase == .outgoing && !self.userEnding { self.localReason = "system_end" }
+                self.hangUp()
+            }
         }
         action.fulfill()
     }

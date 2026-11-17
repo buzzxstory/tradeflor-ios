@@ -1797,3 +1797,10 @@
 "ux3.set.theme" = "Theme";
 "ux3.set.theme.sub" = "Night or day colours on this device";
 "ux3.set.version.n" = "Version %@";
+
+"call3.ended.ratelimited" = "Too many calls — try again in a minute";
+"call3.ended.inacall" = "You are already in a call";
+"call3.ended.elsewhere" = "Answered on another device";
+"call3.ended.canceled" = "Call canceled";
+"call3.ended.lost" = "Connection lost";
+"call3.ended.noconnect" = "Couldn't connect the call";

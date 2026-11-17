@@ -1797,3 +1797,10 @@
 "ux3.set.theme" = "المظهر";
 "ux3.set.theme.sub" = "ألوان ليلية أو نهارية على هذا الجهاز";
 "ux3.set.version.n" = "الإصدار %@";
+
+"call3.ended.ratelimited" = "مكالمات كثيرة — حاول بعد دقيقة";
+"call3.ended.inacall" = "أنت في مكالمة أخرى بالفعل";
+"call3.ended.elsewhere" = "تم الرد من جهاز آخر";
+"call3.ended.canceled" = "أُلغيت المكالمة";
+"call3.ended.lost" = "انقطع الاتصال";
+"call3.ended.noconnect" = "تعذّر توصيل المكالمة";
