@@ -68,7 +68,8 @@ struct LockChatSheet: View {
             UnlockSheet(token: token) { Task { await finish() } }
         }
         .sheet(isPresented: $needPIN) {
-            SetLockPINView { Task { await go() } }
+            // the PIN form is still closing: asking for the unlock sheet now was dropped by iOS (the tap seemed to do nothing)
+            SetLockPINView { Task { try? await Task.sleep(nanoseconds: 700_000_000); await go() } }
         }
     }
 
@@ -80,6 +81,7 @@ struct LockChatSheet: View {
     }
 
     private func go() async {
+        guard !busy, !needUnlock, !needPIN else { return } // a second tap while the lock state is read
         problem = nil
         if APIClient.shared.unlockToken != nil {
             await finish()

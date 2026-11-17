@@ -359,6 +359,8 @@ struct JoinGroupView: View {
 /// the permanent link, description, invite links, Group Management, join requests, recent actions, stats, leave/delete.
 struct GroupInfoView: View {
     let groupID: String
+    /// I left or deleted the group from here: the chat behind closes too.
+    var onGone: (() -> Void)? = nil
     @EnvironmentObject private var store: SessionStore
     @Environment(\.dismiss) private var dismiss
     @State private var tab = 0
@@ -387,6 +389,10 @@ struct GroupInfoView: View {
     @State private var confirmLeave = false
     @State private var confirmDelete = false
     @State private var transferTo: GrpMember?
+    /// Remove / Ban asked from a member's menu: confirmed first (they can't be undone from here).
+    @State private var memberDanger: MemberDanger?
+    /// Join requests being answered: a second tap on ✓ / ✕ is ignored.
+    @State private var deciding: Set<String> = []
     @State private var problem: String?
     @State private var toast: String?
     @State private var addingMembers = false
@@ -451,8 +457,16 @@ struct GroupInfoView: View {
             .confirmationDialog(Text("grp.delete.confirm"), isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("grp.delete", role: .destructive) {
                     Task {
-                        await run { try await APIClient.shared.grpDelete(token: token, id: groupID) }
-                        dismiss()
+                        // closes only once the group is gone; a refusal stays on screen with its reason
+                        do {
+                            try await APIClient.shared.grpDelete(token: token, id: groupID)
+                            onGone?()
+                            dismiss()
+                        } catch APIError.refused(let why) {
+                            problem = why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why
+                        } catch {
+                            problem = NSLocalizedString("chat.action.failed", comment: "")
+                        }
                     }
                 }
             }
@@ -460,6 +474,22 @@ struct GroupInfoView: View {
                                 isPresented: Binding(get: { transferTo != nil }, set: { if !$0 { transferTo = nil } }), titleVisibility: .visible) {
                 Button("grp.m.transfer", role: .destructive) {
                     if let m = transferTo { Task { await run { try await APIClient.shared.grpTransfer(token: token, id: groupID, userID: m.user_id) } } }
+                }
+            }
+            .confirmationDialog(Text(String(format: NSLocalizedString(memberDanger?.ban == true ? "grp.m.ban.confirm" : "grp.m.remove.confirm",
+                                                                      comment: ""), memberDanger?.member.title ?? "")),
+                                isPresented: Binding(get: { memberDanger != nil }, set: { if !$0 { memberDanger = nil } }),
+                                titleVisibility: .visible) {
+                if let d = memberDanger {
+                    Button(LocalizedStringKey(d.ban ? "grp.m.ban" : "grp.m.remove"), role: .destructive) {
+                        let uid = d.member.user_id
+                        Task {
+                            await run {
+                                if d.ban { try await APIClient.shared.grpBan(token: token, id: groupID, userID: uid) }
+                                else { try await APIClient.shared.grpRemove(token: token, id: groupID, userID: uid) }
+                            }
+                        }
+                    }
                 }
             }
             .alert(Text(problem ?? ""), isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
@@ -690,8 +720,16 @@ struct GroupInfoView: View {
                     ForEach(requests) { r in
                         JoinRequestRow(token: token, request: r, now: ctx.date, live: freshIDs.contains(r.user_id), animate: !reduceMotion,
                                        decide: { approve in
-                                           freshIDs.remove(r.user_id)
-                                           Task { await run { try await APIClient.shared.grpDecide(token: token, id: groupID, userID: r.user_id, approve: approve) } }
+                                           // once per request: the row leaves at once (a refusal brings it back on reload)
+                                           let uid = r.user_id
+                                           guard !deciding.contains(uid) else { return }
+                                           deciding.insert(uid)
+                                           freshIDs.remove(uid)
+                                           requests.removeAll { $0.user_id == uid }
+                                           Task {
+                                               await run { try await APIClient.shared.grpDecide(token: token, id: groupID, userID: uid, approve: approve) }
+                                               deciding.remove(uid)
+                                           }
                                        })
                     }
                 }
@@ -1308,10 +1346,10 @@ struct GroupInfoView: View {
             }
         }
         }
-        Button(role: .destructive) { Task { await run { try await APIClient.shared.grpRemove(token: token, id: groupID, userID: m.user_id) } } } label: {
+        Button(role: .destructive) { memberDanger = MemberDanger(member: m, ban: false) } label: {
             Label("grp.m.remove", systemImage: "person.fill.xmark")
         }
-        Button(role: .destructive) { Task { await run { try await APIClient.shared.grpBan(token: token, id: groupID, userID: m.user_id) } } } label: {
+        Button(role: .destructive) { memberDanger = MemberDanger(member: m, ban: true) } label: {
             Label("grp.m.ban", systemImage: "nosign")
         }
     }
@@ -1445,6 +1483,7 @@ struct GroupInfoView: View {
     private func leave() async {
         do {
             try await APIClient.shared.grpRemove(token: token, id: groupID, userID: "")
+            onGone?()
             dismiss()
         } catch APIError.refused(let why) {
             problem = owner ? NSLocalizedString("grp.leave.owner", comment: "") : (why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why)
@@ -1478,6 +1517,12 @@ struct GroupInfoView: View {
 
 
 /// "View group picture" (website GroupInfoPanel / PictureViewer): the group's logo full screen.
+/// A member's Remove or Ban waiting for its confirmation (Group Info › Members).
+struct MemberDanger {
+    let member: GrpMember
+    let ban: Bool
+}
+
 struct GroupPictureViewer: View {
     let token: String
     let groupID: String

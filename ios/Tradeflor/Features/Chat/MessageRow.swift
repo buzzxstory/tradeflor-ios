@@ -21,6 +21,8 @@ struct MessageRowOptions {
     var replySenderName: String? = nil
     var replyPhotoID: String? = nil
     var token = ""
+    /// false for an album: its photos carry their own long-press menus (a menu on the whole row would take the press).
+    var ownMenu = true
 }
 
 /// The extra long-press actions (MessageContextMenu.tsx).
@@ -248,7 +250,7 @@ struct MessageRow<Content: View>: View {
     }
 
     private var menuEnabled: Bool {
-        !message.isDeleted && message.kind != "notice" && message.kind != "call" && !options.selecting
+        options.ownMenu && !message.isDeleted && message.kind != "notice" && message.kind != "call" && !options.selecting
     }
 
     /// The long-press menu (MessageMenu.swift): the same actions, in the same order and on the same conditions, as the
@@ -334,6 +336,7 @@ struct ForwardSheet: View {
     @State private var chats: [ConversationSummary] = []
     @State private var sending: String?
     @State private var sent: Set<String> = []
+    @State private var failed: Set<String> = []
 
     var body: some View {
         NavigationStack {
@@ -347,6 +350,11 @@ struct ForwardSheet: View {
                         Spacer()
                         if sending == c.conversation_id { ProgressView() }
                         if sent.contains(c.conversation_id) { Image(systemName: "checkmark").foregroundStyle(Theme.accent) }
+                        else if failed.contains(c.conversation_id) && sending != c.conversation_id {
+                            // not forwarded: a red mark, and a tap tries again
+                            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Theme.danger)
+                                .accessibilityLabel(Text("chat.action.failed"))
+                        }
                     }
                 }
                 .disabled(sending != nil || sent.contains(c.conversation_id))
@@ -366,11 +374,15 @@ struct ForwardSheet: View {
     }
 
     private func forward(to c: ConversationSummary) async {
+        guard sending == nil else { return }
         sending = c.conversation_id
         defer { sending = nil }
         if (try? await APIClient.shared.forward(token: token, messageID: message.id, to: c.conversation_id,
                                                 key: UUID().uuidString.lowercased())) != nil {
             sent.insert(c.conversation_id)
+            failed.remove(c.conversation_id)
+        } else {
+            failed.insert(c.conversation_id)
         }
     }
 }

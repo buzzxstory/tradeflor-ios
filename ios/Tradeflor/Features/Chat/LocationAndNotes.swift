@@ -62,7 +62,15 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
         Task { @MainActor in await self.handle(loc) }
     }
 
-    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {}
+    /// Location turned off for the app (or by Screen Time) while a share was asked: say so (Settings), instead of
+    /// waiting for a fix that never comes. Other errors pass; Core Location keeps trying by itself.
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        guard (error as? CLError)?.code == .denied else { return }
+        Task { @MainActor in
+            if self.pendingStart != nil { self.denied = true; self.pendingStart = nil }
+            if self.sharing.isEmpty { manager.stopUpdatingLocation() }
+        }
+    }
 
     private func handle(_ loc: CLLocation) async {
         if let p = pendingStart {
@@ -204,6 +212,7 @@ enum VideoNotePrep {
         let rect = CGRect(origin: .zero, size: natural).applying(transform)
         let w = abs(rect.width), h = abs(rect.height)
         let side = min(w, h)
+        guard side > 0 else { return nil } // a track with no picture size: nothing to crop (and no division by zero)
         let out: CGFloat = 480
         let scale = out / side
 

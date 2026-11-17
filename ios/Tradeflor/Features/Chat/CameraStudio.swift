@@ -185,6 +185,7 @@ struct CameraStudio: View {
     @StateObject private var cam = CameraModel()
     @State private var mode: Mode = .photo
     @State private var reviewPlayer: AVPlayer?
+    @State private var sent = false
 
     private var reviewing: Bool { cam.photo != nil || cam.videoURL != nil }
 
@@ -331,6 +332,8 @@ struct CameraStudio: View {
             }
             Spacer()
             Button {
+                guard !sent else { return } // once: a second tap while the camera closes sent it twice
+                sent = true
                 reviewPlayer?.pause()
                 if let img = cam.photo { onPhoto(img) } else if let u = cam.videoURL { onVideo(u) }
                 dismiss()

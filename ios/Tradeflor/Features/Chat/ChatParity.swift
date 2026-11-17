@@ -330,7 +330,10 @@ struct UnreadDivider: View {
 struct SwipeToReply: ViewModifier {
     let enabled: Bool
     let onReply: () -> Void
-    @State private var dx: CGFloat = 0
+    /// The finger's pull. A gesture state, so it springs back to 0 by itself even when the drag is cancelled (the list
+    /// took over the touch to scroll, a call came in): a plain state stayed where it was and left the bubble shifted.
+    @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.25, dampingFraction: 0.8)))
+    private var dx: CGFloat = 0
     @State private var fired = false
 
     func body(content: Content) -> some View {
@@ -348,20 +351,25 @@ struct SwipeToReply: ViewModifier {
                 }
             }
             .simultaneousGesture(DragGesture(minimumDistance: 18, coordinateSpace: .local)
+                .updating($dx) { v, state, _ in state = Self.pull(v) }
                 .onChanged { v in
-                    let x = v.translation.width, y = v.translation.height
-                    guard x > 0, abs(x) > abs(y) * 1.6 else { return }
-                    dx = min(72, x * 0.8)
-                    if dx >= 56 && !fired {
+                    if Self.pull(v) >= 56 && !fired {
                         fired = true
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
                 }
-                .onEnded { _ in
-                    if dx >= 56 { onReply() }
+                .onEnded { v in
+                    if Self.pull(v) >= 56 { onReply() }
                     fired = false
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { dx = 0 }
                 }, including: enabled ? .all : .subviews)
+            .onChange(of: dx) { d in if d == 0 { fired = false } } // a cancelled pull arms the tap again
+    }
+
+    /// How far the bubble follows: only a rightward, mostly sideways move (a scroll never pulls it).
+    private static func pull(_ v: DragGesture.Value) -> CGFloat {
+        let x = v.translation.width, y = v.translation.height
+        guard x > 0, abs(x) > abs(y) * 1.6 else { return 0 }
+        return min(72, x * 0.8)
     }
 }
 

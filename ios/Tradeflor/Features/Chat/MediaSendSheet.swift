@@ -511,6 +511,7 @@ struct MediaSendSheet: View {
         let quality = hd
         let edited = snapshot.contains { !$0.isVideo && !(allEdits[$0.id]?.isEmpty ?? true) }
         guard edited else {
+            sending = true // a second tap while the screen closes must not send everything twice
             onSend(snapshot, quality)
             dismiss()
             return

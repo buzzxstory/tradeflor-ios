@@ -129,6 +129,11 @@ struct ChatView: View {
     @State private var addingGroupStatus = false
     @Environment(\.scenePhase) private var scenePhase
     @State private var openingDoc = false
+    /// The pending rows last seen: the list follows to the end only when one is added (a sent one leaving must not
+    /// pull me down while I read the history).
+    @State private var pendingCountSeen = 0
+    /// Group Info left or deleted this group: the chat closes once the sheet has gone.
+    @State private var groupGone = false
     // hold-to-record voice: press = record, release = send, slide left = cancel, slide up = lock (hands free)
     @State private var micPressed = false
     @State private var holdRec = false
@@ -239,7 +244,9 @@ struct ChatView: View {
                                            handle: lookIDs.contains(m.sender_id) ? members.first { $0.user_id == m.sender_id }?.username : nil,
                                            replySenderName: isGroup ? m.reply_sender_id.flatMap { memberNames[$0] } : nil,
                                            replyPhotoID: m.reply_to_id.flatMap { rid in messages.first { $0.id == rid && $0.kind == "image" && !$0.isDeleted }?.file_id },
-                                           token: token),
+                                           token: token,
+                                           // an album: each photo opens its own menu (the row's would win the long press)
+                                           ownMenu: albums.at[m.id] == nil),
                                        actions: MessageRowActions(
                                            copyLink: {
                                                UIPasteboard.general.string = "tradeflor://chat/\(chat.conversation_id)/message/\(m.id)"
@@ -489,7 +496,7 @@ struct ChatView: View {
                             for d in [0.35, 0.9, 1.6] {
                                 DispatchQueue.main.asyncAfter(deadline: .now() + d) {
                                     // pictures took their room: settle on the end again, but only if I haven't scrolled away
-                                    if bottomVisible && !userScrolledUp { proxy.scrollTo("bottom", anchor: .bottom) }
+                                    if !userScrolledUp { proxy.scrollTo("bottom", anchor: .bottom) }
                                 }
                             }
                         }
@@ -498,10 +505,24 @@ struct ChatView: View {
                     // at the end, new messages are simply followed; up in the history they are counted instead
                     if bottomVisible || messages.last?.sender_id == me { scrollToBottom(proxy) }
                 }
+                // while the chat is still opening, anything added above (the server's page after the copy kept on this
+                // phone, the unread line, a day label) must not push the end out of view: settle on it again
+                .onChange(of: messages.count) { _ in
+                    guard openedAtEnd, !userScrolledUp, unreadMarkID == nil || unreadMarkCount == 0,
+                          Date().timeIntervalSince(openedAtTime) < 2.5 else { return }
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) { proxy.scrollTo("bottom", anchor: .bottom) }
+                }
                 .onChange(of: unreadMarkID) { id in
                     if id != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { proxy.scrollTo("unread-mark", anchor: .top) } }
                 }
-                .onChange(of: pending.count) { _ in scrollToBottom(proxy) }
+                .onChange(of: pending.count) { n in
+                    // something I just sent goes to the end; one that left (sent, cancelled) never moves the list
+                    let added = n > pendingCountSeen
+                    pendingCountSeen = n
+                    if added || bottomVisible { scrollToBottom(proxy) }
+                }
                 .onChange(of: composerFocused) { f in if f { scrollToBottom(proxy) } }
             }
             if selecting {
@@ -547,20 +568,24 @@ struct ChatView: View {
                             isPresented: $confirmBlock, titleVisibility: .visible) {
             Button("chat.block", role: .destructive) {
                 Task {
+                    // `problem` only shows on an empty chat: the toast is what the user sees here
                     do { try await APIClient.shared.block(token: token, userID: chat.peer_id) } catch {
-                        problem = NSLocalizedString("chat.action.failed", comment: "")
+                        flash("chat.action.failed")
                     }
                 }
             }
         }
         .sheet(isPresented: $showInfo, onDismiss: {
+            // left or deleted from Group Info: back to the list (the group is no longer mine to read)
+            if groupGone { dismissView(); return }
             Task {
                 themeID = await ChatThemeStore.load(token: token, conversationID: chat.conversation_id)
                 await loadMeta()
             }
         }) {
             if isGroup {
-                GroupInfoView(groupID: chat.conversation_id).environmentObject(store).environmentObject(live)
+                GroupInfoView(groupID: chat.conversation_id, onGone: { groupGone = true })
+                    .environmentObject(store).environmentObject(live)
             } else {
                 ContactInfoView(chat: chat, onSearch: { showInfo = false; searchOpen = true })
                     .environmentObject(store).environmentObject(live)
@@ -674,8 +699,15 @@ struct ChatView: View {
             if myRole != "owner" {
                 Button("group.leave", role: .destructive) {
                     Task {
-                        try? await APIClient.shared.removeGroupMember(token: token, id: chat.conversation_id, userID: "")
-                        dismissView()
+                        // the chat closes only once the server has let me go; otherwise I stay and see why
+                        do {
+                            try await APIClient.shared.removeGroupMember(token: token, id: chat.conversation_id, userID: "")
+                            dismissView()
+                        } catch APIError.refused(let why) {
+                            flashText(why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why)
+                        } catch {
+                            flash("chat.action.failed")
+                        }
                     }
                 }
             }
@@ -683,8 +715,14 @@ struct ChatView: View {
         .confirmationDialog(Text("group.delete.confirm"), isPresented: $confirmDeleteGroup, titleVisibility: .visible) {
             Button("group.delete", role: .destructive) {
                 Task {
-                    _ = try? await APIClient.shared.postJSON("groups/\(chat.conversation_id)/delete", token: token, body: [:])
-                    dismissView()
+                    do {
+                        _ = try await APIClient.shared.postJSON("groups/\(chat.conversation_id)/delete", token: token, body: [:])
+                        dismissView()
+                    } catch APIError.refused(let why) {
+                        flashText(why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why)
+                    } catch {
+                        flash("chat.action.failed")
+                    }
                 }
             }
         }
@@ -1225,6 +1263,8 @@ struct ChatView: View {
             Button {
                 if let first = chosen.first { forwarding = first }
                 selecting = false
+                selected = []
+                allPicked = false
             } label: { Label("chat.forward", systemImage: "arrowshape.turn.up.right") }
             .disabled(chosen.isEmpty || restricted)
             Spacer()
@@ -1316,10 +1356,11 @@ struct ChatView: View {
     }
 
     private func flash(_ key: String) {
-        toast = NSLocalizedString(key, comment: "")
+        let text = NSLocalizedString(key, comment: "")
+        toast = text
         Task {
             try? await Task.sleep(nanoseconds: 1_800_000_000)
-            toast = nil
+            if toast == text { toast = nil } // a newer note keeps its own time on screen
         }
     }
 
@@ -1529,7 +1570,8 @@ struct ChatView: View {
                                                              fileName: url.lastPathComponent, mime: mime, caption: "", key: UUID().uuidString.lowercased())
             merge([m])
         } catch APIError.refused(let why) {
-            toast = why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why
+            // a timed toast (it was set without one and stayed on screen for good)
+            flashText(why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why)
         } catch { flash("chat.action.failed") }
     }
 
@@ -1878,7 +1920,7 @@ struct ChatView: View {
         pending.append(placeholder)
         guard let out = await VideoPrep.mp4(from: url) else {
             if let i = pending.firstIndex(where: { $0.id == key }) { pending[i].failed = true }
-            problem = NSLocalizedString("chat.video.toolarge", comment: "")
+            flash("chat.video.toolarge") // `problem` only shows on an empty chat
             return
         }
         guard let i = pending.firstIndex(where: { $0.id == key }) else { return } // cancelled (the X) while it was prepared
@@ -2039,7 +2081,10 @@ struct ChatView: View {
                 return .wait
             }
             if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = true }
-            if case let .refused(why)? = error as? APIError, !why.isEmpty { problem = why }
+            if case let .refused(why)? = error as? APIError, !why.isEmpty {
+                problem = why
+                flashText(why) // why it was not sent, also when the chat already has messages
+            }
             return .failed
         }
     }

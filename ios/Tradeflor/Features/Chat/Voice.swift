@@ -590,12 +590,20 @@ struct VoiceBubble: View {
             .frame(width: 150, height: 26)
             .overlay {
                 GeometryReader { geo in
+                    // a tap seeks (and plays from there); a sideways drag scrubs the note that is playing. A finger that
+                    // lands here to scroll the chat, or to press and hold for the menu, no longer starts the note or
+                    // blocks the scroll (a drag from 0 pt with high priority did both).
                     Color.clear
                         .contentShape(Rectangle())
-                        .highPriorityGesture(
-                            DragGesture(minimumDistance: 0)
+                        .gesture(SpatialTapGesture().onEnded { v in
+                            guard geo.size.width > 0 else { return }
+                            player.seek(token: token, message: message, to: v.location.x / geo.size.width)
+                        })
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 8)
                                 .onChanged { v in
-                                    guard geo.size.width > 0 else { return }
+                                    guard geo.size.width > 0, isCurrent,
+                                          abs(v.translation.width) > abs(v.translation.height) * 1.5 else { return }
                                     player.seek(token: token, message: message, to: v.location.x / geo.size.width)
                                 }
                         )

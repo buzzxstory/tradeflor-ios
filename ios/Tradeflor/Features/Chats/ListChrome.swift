@@ -258,8 +258,10 @@ struct ListSearchField: View {
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(Theme.faint)
+                        .frame(width: 32, height: 32).contentShape(Rectangle()) // a finger-sized target
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(Text("cal.clear"))
             }
         }
         .foregroundStyle(ListLook.searchInk)

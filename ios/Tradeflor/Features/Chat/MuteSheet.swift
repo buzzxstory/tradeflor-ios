@@ -51,6 +51,7 @@ struct MuteSheet: View {
                 if failed { Text("ci.save.failed").font(.system(size: 12)).foregroundStyle(Theme.danger) }
                 Spacer()
             }
+            .disabled(busy) // one choice at a time: a second tap while it saves is ignored
             .padding(16)
             .background(Theme.panelGradient.ignoresSafeArea())
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("mute.cancel") { dismiss() } } }
@@ -69,7 +70,9 @@ struct MuteSheet: View {
     }
 
     private func apply(seconds: Int = 0, forever: Bool = false) async {
+        guard !busy else { return }
         busy = true
+        failed = false
         defer { busy = false }
         do {
             try await APIClient.shared.setPrefs(token: token, conversationID: conversationID,

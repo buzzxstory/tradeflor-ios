@@ -820,6 +820,8 @@ struct CommentsSheet: View {
     @State private var text = ""
     @State private var replyTo: GroupComment?
     @State private var loading = true
+    @State private var posting = false
+    @State private var postFailed = false
 
     var body: some View {
         NavigationStack {
@@ -861,13 +863,19 @@ struct CommentsSheet: View {
                     }
                     .padding(14)
                 }
+                .scrollDismissesKeyboard(.interactively)
                 VStack(spacing: 6) {
                     if let r = replyTo {
                         HStack {
                             Text(r.body).font(.system(size: 12)).foregroundStyle(Theme.faint).lineLimit(1)
                             Spacer()
                             Button { replyTo = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.faint) }
+                                .accessibilityLabel(Text("chat.close"))
                         }
+                    }
+                    if postFailed {
+                        Text("chat.action.failed").font(.system(size: 12)).foregroundStyle(Theme.danger)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     HStack {
                         TextField("comments.write", text: $text, axis: .vertical).lineLimit(1...4).foregroundStyle(Theme.text)
@@ -877,15 +885,26 @@ struct CommentsSheet: View {
                         Button {
                             Task {
                                 let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                                guard !t.isEmpty else { return }
+                                guard !t.isEmpty, !posting else { return }
+                                posting = true
+                                postFailed = false
                                 text = ""
-                                try? await APIClient.shared.chAddComment(token: token, groupID: groupID, postID: postID, body: t, replyTo: replyTo?.id ?? "")
-                                replyTo = nil
+                                do {
+                                    try await APIClient.shared.chAddComment(token: token, groupID: groupID, postID: postID, body: t, replyTo: replyTo?.id ?? "")
+                                    replyTo = nil
+                                } catch {
+                                    // not posted: the words come back to try again, never lost
+                                    if text.isEmpty { text = t }
+                                    postFailed = true
+                                }
+                                posting = false
                                 await load()
                             }
                         } label: {
                             Image(systemName: "paperplane.fill").foregroundStyle(.white).frame(width: 42, height: 42).background(Theme.sendGradient, in: Circle())
                         }
+                        .disabled(posting || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .opacity(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1)
                         .accessibilityLabel(Text("comments.post"))
                     }
                 }

@@ -28,7 +28,11 @@ struct ChatListView: View {
     @State private var showManageFolders = false
     @State private var removingFolder: ChatFolder?
     @State private var lockSheetFor: ConversationSummary?
+    /// Block / Delete Chat from a row's menu wait for a confirmation (as Block does inside the chat).
+    @State private var confirmBlock: ConversationSummary?
+    @State private var confirmDelete: ConversationSummary?
     @State private var toast: String?
+    @State private var toastTask: Task<Void, Never>?
     /// contacts' statuses, for the ring on their row's picture (website ChatScreen .avatar-status)
     @State private var rowStatuses: [StatusGroup] = []
     @State private var statusOpen: StatusOpen?
@@ -125,6 +129,20 @@ struct ChatListView: View {
                     }
                 }
             } message: { Text("folder.remove.note") }
+            .confirmationDialog(Text(String(format: NSLocalizedString("chat.block.confirm", comment: ""), confirmBlock?.title ?? "")),
+                                isPresented: Binding(get: { confirmBlock != nil }, set: { if !$0 { confirmBlock = nil } }),
+                                titleVisibility: .visible) {
+                Button("chats.block", role: .destructive) {
+                    if let c = confirmBlock { change(c) { try await APIClient.shared.block(token: token, userID: c.peer_id) } }
+                }
+            }
+            .confirmationDialog(Text("chats.delete.confirm"),
+                                isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
+                                titleVisibility: .visible) {
+                Button("chats.delete", role: .destructive) {
+                    if let c = confirmDelete { hide(c) }
+                }
+            }
             .overlay(alignment: .bottom) {
                 if let toast {
                     Text(toast).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
@@ -369,21 +387,37 @@ struct ChatListView: View {
         if blockedIDs.contains(c.peer_id) {
             Button { change(c) { try await APIClient.shared.unblock(token: token, userID: c.peer_id) } } label: { Label("chats.unblock", systemImage: "hand.raised.slash") }
         } else {
-            Button(role: .destructive) { change(c) { try await APIClient.shared.block(token: token, userID: c.peer_id) } } label: {
+            Button(role: .destructive) { confirmBlock = c } label: {
                 Label("chats.block", systemImage: "hand.raised")
             }
         }
-        Button(role: .destructive) {
-            hiddenAt[c.conversation_id] = Date().timeIntervalSince1970
-            UserDefaults.standard.set(hiddenAt, forKey: "tf.hiddenChats")
-            toast = NSLocalizedString("chats.removed", comment: "")
-            Task { try? await Task.sleep(nanoseconds: 1_800_000_000); toast = nil }
-        } label: { Label("chats.delete", systemImage: "trash") }
+        Button(role: .destructive) { confirmDelete = c } label: { Label("chats.delete", systemImage: "trash") }
+    }
+
+    /// Delete Chat: off this list until a newer message comes (this device only).
+    private func hide(_ c: ConversationSummary) {
+        hiddenAt[c.conversation_id] = Date().timeIntervalSince1970
+        UserDefaults.standard.set(hiddenAt, forKey: "tf.hiddenChats")
+        flash(NSLocalizedString("chats.removed", comment: ""))
+    }
+
+    private func flash(_ text: String) {
+        toastTask?.cancel()
+        toast = text
+        toastTask = Task {
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            if !Task.isCancelled { toast = nil }
+        }
     }
 
     private func change(_ c: ConversationSummary, _ work: @escaping () async throws -> Void) {
         Task {
-            try? await work()
+            // a choice that did not take says so (it used to fail without a word)
+            do { try await work() } catch APIError.refused(let why) {
+                flash(why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why)
+            } catch {
+                flash(NSLocalizedString("chat.action.failed", comment: ""))
+            }
             await loadPrefs()
             await loadLocks()
         }

@@ -1852,3 +1852,7 @@
 "mv.pip" = "Picture in Picture";
 "mv.react" = "Add reaction";
 "mv.saving" = "Saving…";
+
+"chats.delete.confirm" = "Delete this chat from your list? It comes back when a new message arrives.";
+"grp.m.remove.confirm" = "Remove %@ from the group?";
+"grp.m.ban.confirm" = "Ban %@ from the group? They can't join again unless unbanned.";

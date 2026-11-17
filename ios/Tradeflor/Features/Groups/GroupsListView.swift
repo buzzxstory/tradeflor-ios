@@ -456,10 +456,13 @@ struct GroupsListView: View {
             let cached = ListCache.groups(token: token)
             if !cached.isEmpty { groups = cached }
         }
-        loading = true
-        defer { loading = false }
+        // the spinner only shows with no groups on screen; flipping it on every quiet reload redrew the whole list
+        if groups.isEmpty { loading = true }
+        defer { if loading { loading = false } }
         do {
-            groups = try await APIClient.shared.groups(token: token)
+            // the same list again (a burst of messages elsewhere) redraws nothing
+            let fresh = try await APIClient.shared.groups(token: token)
+            if fresh != groups { groups = fresh }
             BadgeStore.shared.groups = groups.filter { $0.unread_count > 0 }.count
             #if DEBUG
             // CI only: TF_CI_OPEN_GROUP=1 opens the first group once, for a screenshot of a group chat

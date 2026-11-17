@@ -384,6 +384,7 @@ struct ContactInfoView: View {
             Button { Task { await togglePin() } } label: {
                 CIV3Row(icon: "pin", title: tr((prefs?.pinned ?? false) ? "ci.unpin" : "ci.pinchat"), chevron: false)
             }
+            .disabled(busy)
             CIV3Divider()
             Button { Task { await exportChat() } } label: {
                 CIV3Row(icon: "arrow.up.doc", title: tr("civ3.export"), chevron: false)
@@ -399,6 +400,7 @@ struct ContactInfoView: View {
             } label: {
                 CIV3Row(icon: "nosign", title: String(format: tr(blocked ? "ci.unblock.name" : "ci.block.name"), name), danger: true, chevron: false)
             }
+            .disabled(busy)
         }
     }
 
@@ -465,7 +467,14 @@ struct ContactInfoView: View {
     }
 
     private func togglePin() async {
-        try? await APIClient.shared.setPrefs(token: token, conversationID: chat.conversation_id, pinned: !(prefs?.pinned ?? false))
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            try await APIClient.shared.setPrefs(token: token, conversationID: chat.conversation_id, pinned: !(prefs?.pinned ?? false))
+        } catch {
+            flash(tr("chat.action.failed"))
+        }
         await loadPrefs()
     }
 
@@ -554,7 +563,14 @@ struct ContactInfoView: View {
     }
 
     private func unblock() async {
-        if (try? await APIClient.shared.unblock(token: token, userID: chat.peer_id)) != nil { blocked = false }
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        if (try? await APIClient.shared.unblock(token: token, userID: chat.peer_id)) != nil {
+            blocked = false
+        } else {
+            flash(tr("chat.action.failed"))
+        }
     }
 }
 
