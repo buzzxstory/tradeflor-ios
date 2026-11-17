@@ -150,7 +150,8 @@ struct SettingsView: View {
     private func group<Content: View>(_ key: String, @ViewBuilder _ rows: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             SSection(text: NSLocalizedString(key, comment: ""))
-            SCard { rows() }
+            let content = rows()
+            SCard { content }
         }
     }
 
