@@ -55,6 +55,7 @@ struct CreateGroupView: View {
             LinearGradient(colors: [Theme.dyn(0x03202B, 0xF6F9FC), Theme.dyn(0x021821, 0xF1F6F9), Theme.dyn(0x01141B, 0xEEF4F8)],
                            startPoint: .top, endPoint: .bottom)
             RadialGradient(colors: [Theme.dyn(0x06465A, 0xDFF2F5, 0.35, 0.6), .clear], center: .topLeading, startRadius: 0, endRadius: 420)
+            GroupDialogArt().allowsHitTesting(false)
         }
         .ignoresSafeArea()
     }
@@ -500,6 +501,17 @@ struct GroupInfoView: View {
             guard d["conversation_id"] == groupID, group?.isAdmin == true else { return }
             if let u = d["user_id"], !u.isEmpty { freshIDs.insert(u) }
             Task { requests = await APIClient.shared.grpJoinRequests(token: token, id: groupID) }
+        }
+        // and every 30 s while Group Info is open, in case a live event was missed (website 3c68bec)
+        .task(id: admin) {
+            guard admin else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                if Task.isCancelled { return }
+                let fresh = await APIClient.shared.grpJoinRequests(token: token, id: groupID)
+                for r in fresh where !requests.contains(where: { $0.user_id == r.user_id }) { freshIDs.insert(r.user_id) }
+                requests = fresh
+            }
         }
         .fullScreenCover(item: $cropping) { p in
             AvatarEditor(image: p.image) { jpeg in
@@ -1491,5 +1503,47 @@ struct GroupQRSheet: View {
         .background(Theme.soul.ignoresSafeArea())
         .presentationDetents([.medium, .large])
         .tfColorScheme()
+    }
+}
+
+
+/// The owner's dialog art (website 14-modals.css, fb9b6fc): a thin glowing cyan curve at the top right and the
+/// wallpaper's dotted wave at the bottom left, fading to the right.
+struct GroupDialogArt: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let w = size.width, h = size.height
+            // the curve, top right
+            var curve = Path()
+            curve.move(to: CGPoint(x: w * 0.52, y: -4))
+            curve.addQuadCurve(to: CGPoint(x: w + 6, y: h * 0.22), control: CGPoint(x: w * 0.86, y: h * 0.02))
+            ctx.stroke(curve, with: .color(Theme.hex(0x2AF0FF, 0.22)), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+            ctx.stroke(curve, with: .color(Theme.hex(0x2AF0FF, 0.75)), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+            // the dotted wave, bottom left
+            let base = h - 70
+            for row in 0..<4 {
+                var x: CGFloat = 8
+                while x < w * 0.62 {
+                    let t = x / (w * 0.62)
+                    let y = base + CGFloat(row) * 11 + sin(t * .pi * 2.2 + CGFloat(row) * 0.5) * 16
+                    let a = 0.5 * (1 - t) * (1 - Double(row) * 0.18)
+                    let r: CGFloat = 1.6 - CGFloat(row) * 0.25
+                    ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)), with: .color(Theme.hex(0x3FE3F0, a)))
+                    x += 9
+                }
+            }
+            var wave = Path()
+            wave.move(to: CGPoint(x: 0, y: base + 28))
+            var x: CGFloat = 0
+            while x <= w * 0.7 {
+                let t = x / (w * 0.7)
+                wave.addLine(to: CGPoint(x: x, y: base + 28 + sin(t * .pi * 2.2) * 18))
+                x += 4
+            }
+            ctx.stroke(wave, with: .linearGradient(Gradient(colors: [Theme.hex(0x3FE3F0, 0.55), Theme.hex(0x3FE3F0, 0)]),
+                                                    startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: w * 0.7, y: 0)),
+                       lineWidth: 1.2)
+        }
+        .accessibilityHidden(true)
     }
 }

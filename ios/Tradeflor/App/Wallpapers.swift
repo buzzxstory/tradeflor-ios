@@ -49,7 +49,8 @@ struct ChatDefaultWallpaper: View {
                 GeometryReader { geo in
                     ZStack {
                         Theme.hex(0x01141B)
-                        Image("ChatWallpaper").resizable().scaledToFill()
+                        // the pack's own file for the phone's shape: 1290x2796 on the large iPhones (Plus / Pro Max), 1170x2532 otherwise
+                        Image(UIScreen.main.nativeBounds.height >= 2700 ? "ChatWallpaperLarge" : "ChatWallpaper").resizable().scaledToFill()
                             .frame(width: geo.size.width, height: geo.size.height)
                             .clipped()
                             .offset(y: -68)

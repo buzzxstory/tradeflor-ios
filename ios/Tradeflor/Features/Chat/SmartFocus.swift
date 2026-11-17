@@ -89,6 +89,8 @@ struct SmartFocusSheet: View {
     let me: String
     let initial: FocusDoc
     var onSaved: (FocusDoc) -> Void
+    /// user id → "owner" / "admin" (website: owner, then admins, then everyone A–Z, with the role shown)
+    var roles: [String: String] = [:]
 
     @EnvironmentObject private var store: SessionStore
     @Environment(\.dismiss) private var dismiss
@@ -98,7 +100,8 @@ struct SmartFocusSheet: View {
     @State private var error: String?
     @FocusState private var searching: Bool
 
-    init(groupID: String, members: [GroupMember], me: String, initial: FocusDoc, onSaved: @escaping (FocusDoc) -> Void) {
+    init(groupID: String, members: [GroupMember], me: String, initial: FocusDoc, roles: [String: String] = [:], onSaved: @escaping (FocusDoc) -> Void) {
+        self.roles = roles
         self.groupID = groupID
         self.members = members
         self.me = me
@@ -109,7 +112,9 @@ struct SmartFocusSheet: View {
 
     private var others: [GroupMember] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        func rank(_ m: GroupMember) -> Int { roles[m.user_id] == "owner" ? 0 : (roles[m.user_id] == "admin" ? 1 : 2) }
         return members.filter { $0.user_id != me && (q.isEmpty || $0.title.lowercased().contains(q) || $0.username.lowercased().contains(q)) }
+            .sorted { rank($0) != rank($1) ? rank($0) < rank($1) : $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
     }
 
     var body: some View {
@@ -246,7 +251,15 @@ struct SmartFocusSheet: View {
                 Avatar(token: store.session?.token ?? "", userID: m.user_id, avatarID: nil, title: m.title, size: 34)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(m.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(SFLook.text).lineLimit(1)
-                    Text("@\(m.username)").font(.system(size: 12)).foregroundStyle(SFLook.muted).lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text("@\(m.username)").font(.system(size: 12)).foregroundStyle(SFLook.muted).lineLimit(1)
+                        if let r = roles[m.user_id] {
+                            Text(LocalizedStringKey("group.role." + r)).font(.system(size: 10, weight: .heavy))
+                                .foregroundStyle(r == "owner" ? Theme.hex(0xE8B931) : Theme.hex(0x2FF0F3))
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .overlay(Capsule().stroke((r == "owner" ? Theme.hex(0xE8B931) : Theme.hex(0x2FF0F3)).opacity(0.5), lineWidth: 1))
+                        }
+                    }
                 }
                 Spacer(minLength: 8)
                 tick(on)

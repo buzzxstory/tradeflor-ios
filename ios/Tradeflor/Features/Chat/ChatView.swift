@@ -548,7 +548,7 @@ struct ChatView: View {
         .fullScreenCover(item: $openDoc) { d in DocumentPreview(url: d.url).ignoresSafeArea() }
         .sheet(isPresented: $showFocus) {
             if let doc = focusDoc {
-                SmartFocusSheet(groupID: chat.conversation_id, members: members, me: me, initial: doc) { saved in
+                SmartFocusSheet(groupID: chat.conversation_id, members: members, me: me, initial: doc, roles: memberRoles) { saved in
                     focusDoc = saved
                     focusShowAll = false
                     Task { await loadFocusPages() }
