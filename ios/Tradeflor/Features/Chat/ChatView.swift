@@ -57,6 +57,8 @@ struct ChatView: View {
     @State private var showSignal = false
     @State private var commentsFor: Message?
     @State private var showEmoji = false
+    /// The message bar's height: the emoji panel sits just above it.
+    @State private var composerHeight: CGFloat = 60
     @State private var showLocationSheet = false
     @State private var showPhotoPicker = false
     @State private var showDocPicker = false
@@ -503,6 +505,11 @@ struct ChatView: View {
                 selectBar
             } else if canSend {
                 composer
+                    .background(GeometryReader { g in
+                        Color.clear
+                            .onAppear { composerHeight = g.size.height }
+                            .onChange(of: g.size.height) { composerHeight = $0 }
+                    })
             } else {
                 Text("group.readonly").font(.footnote).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity).padding(.vertical, 14).background(.bar)
@@ -638,17 +645,7 @@ struct ChatView: View {
         .sheet(item: $commentsFor) { m in
             CommentsSheet(token: token, groupID: chat.conversation_id, postID: m.id, me: me, isAdmin: isAdmin, names: memberNames)
         }
-        .sheet(isPresented: $showEmoji) {
-            EmojiPickerSheet(single: reactTarget != nil) { e in
-                if let t = reactTarget {
-                    reactTarget = nil
-                    showEmoji = false
-                    Task { await react(t, e) }
-                } else {
-                    draft += e
-                }
-            }
-        }
+        .overlay { emojiLayer }
         .sheet(isPresented: $showLocationSheet) {
             ShareLocationSheet { minutes in location.start(token: token, conversationID: chat.conversation_id, minutes: minutes) }
         }
@@ -946,6 +943,30 @@ struct ChatView: View {
         }
         items.append(ChatMenuItem("schedule.title", systemImage: "clock", tint: .schedule) { showSchedule = true })
         return items
+    }
+
+    /// The emoji picker (web EmojiPicker): above the message bar for typing, centred for a reaction; a tap outside closes.
+    @ViewBuilder private var emojiLayer: some View {
+        if showEmoji {
+            if let t = reactTarget {
+                EmojiFloating(single: true, onPick: { e in
+                    reactTarget = nil
+                    showEmoji = false
+                    Task { await react(t, e) }
+                }, onClose: { reactTarget = nil; showEmoji = false })
+            } else {
+                GeometryReader { geo in
+                    ZStack(alignment: .bottom) {
+                        Color.black.opacity(0.001).onTapGesture { showEmoji = false }
+                        EmojiPanel(bodyHeight: max(150, min(300, geo.size.height - composerHeight - 150)),
+                                   onPick: { e in draft += e }, onClose: { showEmoji = false })
+                            .padding(.horizontal, 8)
+                            .padding(.bottom, composerHeight + 6)
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
     }
 
     private var draftIsEmpty: Bool { draftEmpty }

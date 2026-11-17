@@ -260,10 +260,13 @@ struct MessageMenuHost: View {
         .ignoresSafeArea()
         .allowsHitTesting(presenter.isOpen)
         .accessibilityHidden(!presenter.isOpen)
-        .sheet(item: $presenter.picker) { p in
-            EmojiPickerSheet(single: true) { e in
-                presenter.picker = nil
-                p.onPick(e)
+        // "+" in the reaction bar: the picker centred over the screen (web .emoji-picker.floating)
+        .overlay {
+            if let p = presenter.picker {
+                EmojiFloating(single: true, onPick: { e in
+                    presenter.picker = nil
+                    p.onPick(e)
+                }, onClose: { presenter.picker = nil })
             }
         }
     }
