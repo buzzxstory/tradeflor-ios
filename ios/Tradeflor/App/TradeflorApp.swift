@@ -36,6 +36,7 @@ struct RootView: View {
     @ObservedObject private var badges = BadgeStore.shared
     @ObservedObject private var notifier = LocalNotifier.shared
     @ObservedObject private var links = DeepLinks.shared
+    @ObservedObject private var flash = FlashHub.shared
     @State private var needsSetup = false
     @State private var tab: String = {
         #if DEBUG
@@ -78,6 +79,12 @@ struct RootView: View {
         // Tradeflor links tapped inside the app open here instead of the browser
         .environment(\.openURL, OpenURLAction { url in DeepLinks.shared.handle(url) ? .handled : .systemAction })
         .sheet(item: $links.pending) { p in DeepLinkSheet(target: p.target).environmentObject(store) }
+        // someone scanned my connect code: Connection Request (Accept / Decline) wherever I am
+        .sheet(item: Binding(get: { flash.screens == 0 && links.pending == nil ? flash.request : nil },
+                             set: { if $0 == nil, let r = flash.request { flash.answered(r.id) } })) { r in
+            ConnectionRequestSheet(request: r) { chat in LocalNotifier.shared.tappedConversation = chat.conversation_id }
+                .environmentObject(store)
+        }
         .onChange(of: notifier.tappedConversation) { id in
             // a tapped notification: the right tab; the list there opens the chat
             if let id { tab = id.hasPrefix("grp_") ? "groups" : "chats" }
@@ -153,7 +160,7 @@ struct RootView: View {
         }
         .onChange(of: store.session?.token) { _ in syncLive() }
         .onChange(of: scenePhase) { phase in
-            if phase == .active { live.probe() }
+            if phase == .active { live.probe(); Task { await FlashHub.shared.askPending() } }
             // Locked chats lock again as soon as the app leaves the screen.
             if phase == .background, let token = store.session?.token {
                 Task { await APIClient.shared.relockChats(token: token) }
@@ -167,7 +174,9 @@ struct RootView: View {
             CallManager.shared.attach(live: live, token: s.token, userID: s.userID)
             LocalNotifier.shared.attach(live: live, token: s.token, userID: s.userID)
             DeliveryStats.shared.attach(live, me: s.userID)
+            FlashHub.shared.attach(live: live, token: s.token)
         } else {
+            FlashHub.shared.detach()
             CallManager.shared.detach()
             LocalNotifier.shared.detach()
             live.stop()

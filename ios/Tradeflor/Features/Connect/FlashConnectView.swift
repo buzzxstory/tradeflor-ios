@@ -9,7 +9,8 @@ struct FlashConnectView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var scanning = false
     @State private var target: FlashTarget?
-    @State private var pending: [PendingMutual] = []
+    @State private var showMutual = false
+    @ObservedObject private var hub = FlashHub.shared
 
     private var token: String { store.session?.token ?? "" }
 
@@ -44,9 +45,6 @@ struct FlashConnectView: View {
                         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.borderActive, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-                    ForEach(pending) { p in
-                        MutualDecisionRow(item: p) { Task { await loadPending() } }
-                    }
                 }
                 .padding(16)
             }
@@ -56,14 +54,32 @@ struct FlashConnectView: View {
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
             .navigationDestination(isPresented: Binding(get: { target != nil }, set: { if !$0 { target = nil } })) {
-                if let t = target { ScanResultView(target: t, onOpen: open) }
+                if let t = target { ScanResultView(target: t, onOpen: open, onDone: { dismiss() }) }
             }
+            .navigationDestination(isPresented: $showMutual) { MutualConnectView(onOpen: open) }
         }
-        .task { await loadPending() }
+        .onAppear {
+            hub.screenAppeared()
+            #if DEBUG
+            switch ProcessInfo.processInfo.environment["TF_CI_FLASH"] {
+            case "scan"?: scanning = true
+            case "mutual"?: showMutual = true
+            default: break
+            }
+            #endif
+        }
+        .onDisappear { hub.screenGone() }
+        // someone scanned my code: the Connection Request, here (a sheet can't open over this sheet from the root)
+        .sheet(item: Binding(get: { hub.screens > 0 ? hub.request : nil }, set: { if $0 == nil, let r = hub.request { hub.answered(r.id) } })) { r in
+            ConnectionRequestSheet(request: r, onOpen: open).environmentObject(store)
+        }
         .fullScreenCover(isPresented: $scanning) {
-            QRScannerView { text in
+            QRScannerView(onMutual: {
                 scanning = false
-                target = FlashTarget.parse(text) ?? .username("")
+                showMutual = true
+            }) { text in
+                scanning = false
+                target = FlashTarget.parse(text)
             }
         }
     }
@@ -72,8 +88,6 @@ struct FlashConnectView: View {
         dismiss()
         onOpen(c)
     }
-
-    private func loadPending() async { pending = (try? await APIClient.shared.ctPendingMutual(token: token)) ?? [] }
 
     private func tile(_ icon: String, _ title: String, _ sub: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -110,7 +124,9 @@ struct FlashConnectView: View {
 struct ScanResultView: View {
     let target: FlashTarget
     let onOpen: (ConversationSummary) -> Void
+    var onDone: (() -> Void)?
     @EnvironmentObject private var store: SessionStore
+    @Environment(\.dismiss) private var dismiss
     @State private var person: IdentityDetail?
     @State private var state = "loading" // loading | person | bad | sent | connected | group | meet
     @State private var meet: MeetupPeek?
@@ -119,6 +135,20 @@ struct ScanResultView: View {
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
+        if case .mutual(let tok) = target {
+            // Scan & Connect: confirm first (Connect / Cancel); never connect on scan
+            ScrollView { MutualGuestView(tok: tok, onOpen: onOpen, onDone: { (onDone ?? { dismiss() })() }) }
+                .background(Theme.soul.ignoresSafeArea())
+                .navigationTitle(Text("sc.connect.title"))
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbarBackground(Theme.soul, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+        } else {
+            other
+        }
+    }
+
+    private var other: some View {
         SettingsPage(title: NSLocalizedString("fc.scan", comment: "")) {
             switch state {
             case "loading":
@@ -186,11 +216,8 @@ struct ScanResultView: View {
             case .username(let u):
                 if u.isEmpty { state = "bad"; return }
                 person = try await APIClient.shared.ctLookup(token: token, username: u); state = "person"
-            case .mutual(let tok):
-                let peek = try await APIClient.shared.ctPeekMutual(token: token, tok: tok)
-                let st = try await APIClient.shared.ctClaimMutual(token: token, tok: tok)
-                person = peek.host
-                state = st.state == "accepted" ? "connected" : "sent"
+            case .mutual:
+                return // MutualGuestView
             case .meet(let tok):
                 meet = try await APIClient.shared.ctPeekMeetup(token: token, tok: tok)
                 state = "meet"
@@ -284,25 +311,29 @@ struct MyQRView: View {
     }
 }
 
-/// Mutual Connect host: a 60-second code for someone next to you; you confirm before you are connected.
+/// My Connect Code (website MutualConnect.tsx, 9256375): a 60-second, single-use code for someone next to you. It renews
+/// itself 1.5 s before it expires while this screen is open and the app is in front (never in the background); an older
+/// answer never replaces a newer code (each request has a number); "Try again" only when renewing failed. Someone scanning
+/// it only asks: the Connection Request (FlashHub) comes up and you Accept or Decline.
 struct MutualConnectView: View {
     let onOpen: (ConversationSummary) -> Void
     @EnvironmentObject private var store: SessionStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var session: MutualSession?
     @State private var deadline: Date?
-    @State private var status: MutualStatus?
     @State private var now = Date()
     @State private var busy = false
     @State private var error: String?
+    @State private var seq = 0
+    @State private var copied: String?
 
     private var token: String { store.session?.token ?? "" }
     private var left: Int { deadline.map { max(0, Int(ceil($0.timeIntervalSince(now)))) } ?? 0 }
     private var expired: Bool { deadline != nil && left == 0 }
+    private var link: String? { session?.token.flatMap { expired ? nil : "https://app.tradeflor.com/?mutual=\($0)" } }
     private let cyan = Theme.hex(0x35E6F2)
 
-    // Website MutualConnect.tsx / 61-mutual-connect.css: always dark, midnight navy and teal light, a white QR tile in four
-    // cyan corners, "Expires in 57s" on the server's clock, single use, Generate New Code (one request at a time).
     var body: some View {
         ZStack {
             LinearGradient(colors: [Theme.hex(0x082231), Theme.hex(0x061A27), Theme.hex(0x04121D)], startPoint: .top, endPoint: .bottom)
@@ -324,31 +355,18 @@ struct MutualConnectView: View {
                     VStack(spacing: 16) {
                         HStack(spacing: 10) {
                             Image(systemName: "qrcode.viewfinder").font(.system(size: 28)).foregroundStyle(cyan)
-                            (Text("Mutual ").foregroundColor(Theme.hex(0xF2F8FB)) + Text("Connect").foregroundColor(cyan))
-                                .font(.system(size: 30, weight: .heavy))
+                            (Text("mc.title.a").foregroundColor(Theme.hex(0xF2F8FB)) + Text("mc.title.b").foregroundColor(cyan))
+                                .font(.system(size: 28, weight: .heavy)).minimumScaleFactor(0.7).lineLimit(1)
                         }
                         .padding(.top, 18)
-                        Text("mc.lead").font(.system(size: 15)).foregroundStyle(Theme.hex(0xC4D5DF)).multilineTextAlignment(.center)
+                        Text("mc.lead2").font(.system(size: 15)).foregroundStyle(Theme.hex(0xC4D5DF)).multilineTextAlignment(.center)
                         stage.padding(.top, 8)
                         meta
                         if let error { Text(error).font(.system(size: 13)).foregroundStyle(Theme.hex(0xFF8A8A)).multilineTextAlignment(.center) }
-                        decision
                     }
                     .frame(maxWidth: .infinity)
                 }
-                Button { Task { await start() } } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 20, weight: .semibold))
-                            .rotationEffect(.degrees(busy ? 360 : 0)).animation(busy ? .linear(duration: 0.9).repeatForever(autoreverses: false) : .default, value: busy)
-                        Text(LocalizedStringKey(busy ? "mc.generating" : "mc.generate")).font(.system(size: 17, weight: .bold))
-                    }
-                    .foregroundStyle(Theme.hex(0x03222B))
-                    .frame(maxWidth: .infinity).frame(height: 58)
-                    .background(LinearGradient(colors: [Theme.hex(0x5FF2FA), Theme.hex(0x16C9DA)], startPoint: .top, endPoint: .bottom), in: Capsule())
-                    .shadow(color: cyan.opacity(0.35), radius: 14, y: 6)
-                }
-                .disabled(busy)
-                .padding(.bottom, 16)
+                bottom.padding(.bottom, 16)
             }
             .padding(.horizontal, 22)
         }
@@ -356,15 +374,20 @@ struct MutualConnectView: View {
         .navigationBarBackButtonHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .preferredColorScheme(.dark)
-        .task { await start() }
+        .task { await fresh() }
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 250_000_000)
                 now = Date()
-                if let s = session, status?.state != "accepted", Int(now.timeIntervalSince1970 * 4) % 8 == 0 {
-                    status = try? await APIClient.shared.ctMutualStatus(token: token, sessionID: s.id)
-                }
             }
+        }
+        // renew by itself 1.5 s before expiry, and at once when the app comes back with a code about to die; never in the background
+        .task(id: "\(session?.id ?? "")|\(scenePhase == .active)") {
+            guard scenePhase == .active, let d = deadline else { return }
+            let wait = d.timeIntervalSinceNow - 1.5
+            if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+            if Task.isCancelled || scenePhase != .active { return }
+            await fresh()
         }
     }
 
@@ -383,18 +406,16 @@ struct MutualConnectView: View {
             Circle().fill(RadialGradient(colors: [cyan.opacity(0.22), .clear], center: .center, startRadius: 0, endRadius: side * 0.9))
                 .frame(width: side * 1.6, height: side * 1.6)
             Group {
-                if let tok = session?.token, !expired {
-                    if let qr = TFQR.image("https://app.tradeflor.com/?mutual=\(tok)") {
-                        Image(uiImage: qr).interpolation(.none).resizable().padding(14)
-                            .overlay(Image("BrandFlower").resizable().scaledToFit().frame(width: side * 0.16)
-                                .padding(5).background(.white, in: RoundedRectangle(cornerRadius: 8)))
-                            .accessibilityLabel(Text("mc.qr"))
-                    }
+                if let link, let qr = TFQR.image(link) {
+                    Image(uiImage: qr).interpolation(.none).resizable().padding(14)
+                        .overlay(Image("BrandFlower").resizable().scaledToFit().frame(width: side * 0.16)
+                            .padding(5).background(.white, in: RoundedRectangle(cornerRadius: 8)))
+                        .accessibilityLabel(Text("mc.qr"))
                 } else if expired {
                     VStack(spacing: 6) {
                         Image(systemName: "clock").font(.system(size: 34)).foregroundStyle(Theme.hex(0x4A5A64))
-                        Text("mc.expired.title").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.hex(0x0B1F2A))
-                        Text("mc.expired.sub").font(.system(size: 12)).foregroundStyle(Theme.hex(0x4A5A64)).multilineTextAlignment(.center)
+                        Text(LocalizedStringKey(busy ? "mc.renewing" : "mc.expired.title")).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.hex(0x0B1F2A))
+                        Text(LocalizedStringKey(busy ? "mc.renewing.sub" : "mc.expired.sub2")).font(.system(size: 12)).foregroundStyle(Theme.hex(0x4A5A64)).multilineTextAlignment(.center)
                     }
                     .padding(16)
                 } else {
@@ -407,7 +428,6 @@ struct MutualConnectView: View {
             .frame(width: side, height: side)
             .background(.white, in: RoundedRectangle(cornerRadius: 22))
             .opacity(expired ? 0.92 : 1)
-            // the four cyan corners
             ForEach(0..<4, id: \.self) { k in
                 CornerMark().stroke(cyan, style: StrokeStyle(lineWidth: 4, lineCap: .round))
                     .frame(width: 34, height: 34)
@@ -419,8 +439,9 @@ struct MutualConnectView: View {
         .frame(height: side + 60)
     }
 
+    /// "Expires in 57s | Single use | Auto refresh"
     private var meta: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 10) {
             Group {
                 if session != nil && !expired {
                     (Text("mc.expires.in") + Text(" \(left)s").bold()).foregroundColor(left <= 10 ? Theme.hex(0xFFB35C) : Theme.hex(0xC4D5DF))
@@ -430,70 +451,100 @@ struct MutualConnectView: View {
                     Text("mc.expires.dash").foregroundColor(Theme.hex(0xC4D5DF))
                 }
             }
-            .font(.system(size: 15))
-            Rectangle().fill(Color.white.opacity(0.2)).frame(width: 1, height: 18)
-            Label("mc.single", systemImage: "checkmark.shield").font(.system(size: 15)).foregroundStyle(Theme.hex(0xC4D5DF))
+            sep
+            Label("mc.single", systemImage: "checkmark.shield").foregroundStyle(Theme.hex(0xC4D5DF))
+            sep
+            Label(LocalizedStringKey(busy ? "mc.refreshing" : "mc.auto"), systemImage: "arrow.triangle.2.circlepath")
+                .foregroundStyle(busy ? cyan : Theme.hex(0xC4D5DF))
         }
+        .font(.system(size: 13.5))
+        .lineLimit(1).minimumScaleFactor(0.75)
         .accessibilityElement(children: .combine)
     }
 
-    @ViewBuilder private var decision: some View {
-        if let st = status {
-            if st.state == "claimed", let peer = st.peer {
-                VStack(spacing: 10) {
-                    Text(String(format: NSLocalizedString("fc.wants", comment: ""), peer.title)).foregroundStyle(Theme.hex(0xF2F8FB))
-                    HStack {
-                        Button { Task { await decide(false) } } label: {
-                            Text("new.decline").padding(.horizontal, 18).frame(height: 42).foregroundStyle(Theme.hex(0xC4D5DF))
-                                .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
-                        }
-                        Button { Task { await decide(true) } } label: {
-                            Text("new.accept").bold().padding(.horizontal, 18).frame(height: 42).foregroundStyle(Theme.hex(0x03222B))
-                                .background(cyan, in: Capsule())
-                        }
+    private var sep: some View { Rectangle().fill(Color.white.opacity(0.2)).frame(width: 1, height: 16) }
+
+    @ViewBuilder private var bottom: some View {
+        VStack(spacing: 8) {
+            if error != nil {
+                // renewing failed: the one moment a button is needed
+                Button { Task { await fresh() } } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 20, weight: .semibold))
+                        Text(LocalizedStringKey(busy ? "mc.trying" : "mc.tryagain")).font(.system(size: 17, weight: .bold))
                     }
+                    .foregroundStyle(Theme.hex(0x03222B))
+                    .frame(maxWidth: .infinity).frame(height: 56)
+                    .background(LinearGradient(colors: [Theme.hex(0x5FF2FA), Theme.hex(0x16C9DA)], startPoint: .top, endPoint: .bottom), in: Capsule())
+                    .shadow(color: cyan.opacity(0.35), radius: 14, y: 6)
                 }
-            } else if st.state == "accepted" {
-                VStack(spacing: 10) {
-                    Text("fc.connected").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.hex(0x3FE0A0))
-                    if let peer = st.peer {
-                        Button { Task { if let c = await APIClient.shared.ctOpenChat(token: token, userID: peer.user_id) { onOpen(c) } } } label: {
-                            Text("ct.message").bold().foregroundStyle(Theme.hex(0x03222B)).padding(.horizontal, 22).frame(height: 42).background(cyan, in: Capsule())
-                        }
+                .disabled(busy)
+            } else {
+                HStack(spacing: 10) {
+                    if let link, let url = URL(string: link) {
+                        ShareLink(item: url, subject: Text("mc.share.title"), message: Text("mc.share.msg")) { shareLabel }
+                    } else {
+                        shareLabel.opacity(0.5)
                     }
+                    Button {
+                        guard let link else { return }
+                        UIPasteboard.general.string = link
+                        copied = NSLocalizedString("mc.copied", comment: "")
+                        Task {
+                            try? await Task.sleep(nanoseconds: 2_600_000_000)
+                            copied = nil
+                        }
+                    } label: {
+                        Label("mc.copy", systemImage: "doc.on.doc").font(.system(size: 15, weight: .bold)).lineLimit(1).minimumScaleFactor(0.8)
+                            .foregroundStyle(Theme.hex(0xF2F8FB))
+                            .frame(maxWidth: .infinity).frame(height: 52)
+                            .background(Theme.hex(0x041019, 0.7), in: Capsule())
+                            .overlay(Capsule().stroke(cyan.opacity(0.45), lineWidth: 1))
+                    }
+                    .disabled(link == nil)
+                    .accessibilityIdentifier("mc.copy")
                 }
-            } else if st.state == "declined" {
-                Text("fc.not.confirmed").foregroundStyle(Theme.hex(0xC4D5DF))
             }
+            Text(copied ?? " ").font(.system(size: 12.5)).foregroundStyle(cyan).multilineTextAlignment(.center)
         }
     }
 
-    /// A new code (one request at a time); the countdown runs against the server's clock.
-    private func start() async {
+    private var shareLabel: some View {
+        Label("mc.share", systemImage: "square.and.arrow.up").font(.system(size: 15, weight: .bold)).lineLimit(1).minimumScaleFactor(0.8)
+            .foregroundStyle(Theme.hex(0x03222B))
+            .frame(maxWidth: .infinity).frame(height: 52)
+            .background(LinearGradient(colors: [Theme.hex(0x5FF2FA), Theme.hex(0x16C9DA)], startPoint: .top, endPoint: .bottom), in: Capsule())
+            .shadow(color: cyan.opacity(0.3), radius: 10, y: 4)
+    }
+
+    /// A new code; one request at a time, and an older answer is dropped. The countdown runs on the server's clock.
+    private func fresh() async {
         guard !busy else { return }
+        seq += 1
+        let my = seq
         busy = true
         error = nil
         defer { busy = false }
         do {
             let s = try await APIClient.shared.ctStartMutual(token: token)
+            guard my == seq else { return }
+            guard s.token != nil else { error = NSLocalizedString("mc.err", comment: ""); return }
             let got = Date().timeIntervalSince1970
             let offset = s.server_now.map { Double($0) - got } ?? 0
             session = s
-            status = nil
             deadline = Date(timeIntervalSince1970: Double(s.expires_at) - offset)
             now = Date()
-        } catch APIError.rateLimited {
-            error = NSLocalizedString("mc.err.rate", comment: "")
-        } catch APIError.refused(let why) {
-            error = why.isEmpty ? NSLocalizedString("mc.err", comment: "") : why
         } catch {
-            self.error = NSLocalizedString("mc.err", comment: "")
+            // a code still on screen stays valid until its own expiry
+            guard my == seq else { return }
+            switch error as? APIError {
+            case .rateLimited?: self.error = NSLocalizedString("mc.err.rate", comment: "")
+            case .badCredentials?: self.error = NSLocalizedString("sc.err.signin", comment: "")
+            case .network?: self.error = NSLocalizedString("sc.err.offline", comment: "")
+            case .refused(let why)?: self.error = why.isEmpty || why.count >= 140 ? NSLocalizedString("mc.err.403", comment: "") : why
+            default: self.error = NSLocalizedString("mc.err", comment: "")
+            }
         }
-    }
-
-    private func decide(_ accept: Bool) async {
-        guard let s = session else { return }
-        status = try? await APIClient.shared.ctDecideMutual(token: token, sessionID: s.id, accept: accept)
     }
 }
 
@@ -506,33 +557,6 @@ private struct CornerMark: Shape {
         p.addQuadCurve(to: CGPoint(x: r.minX + 8, y: r.minY), control: CGPoint(x: r.minX, y: r.minY))
         p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
         return p
-    }
-}
-
-/// Someone scanned my Mutual Connect code and is waiting for my answer.
-struct MutualDecisionRow: View {
-    let item: PendingMutual
-    let onDone: () -> Void
-    @EnvironmentObject private var store: SessionStore
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Avatar(token: store.session?.token ?? "", userID: item.guest.user_id, avatarID: item.guest.avatar_id, title: item.guest.title, size: 40)
-            Text(String(format: NSLocalizedString("fc.scanned.wants", comment: ""), item.guest.title))
-                .font(.system(size: 13)).foregroundStyle(Theme.text)
-            Spacer()
-            Button { Task { await decide(false) } } label: { Image(systemName: "xmark").foregroundStyle(Theme.muted).frame(width: 34, height: 34) }
-            Button { Task { await decide(true) } } label: {
-                Image(systemName: "checkmark").foregroundStyle(Theme.onAccent).frame(width: 34, height: 34).background(Theme.accent, in: Circle())
-            }
-        }
-        .padding(12)
-        .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func decide(_ accept: Bool) async {
-        _ = try? await APIClient.shared.ctDecideMutual(token: store.session?.token ?? "", sessionID: item.session_id, accept: accept)
-        onDone()
     }
 }
 

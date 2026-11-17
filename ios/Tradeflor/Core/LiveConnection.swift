@@ -24,6 +24,9 @@ final class LiveConnection: ObservableObject {
     let opened = PassthroughSubject<Void, Never>()
     /// Someone asked to join a group I own or run: conversation_id, group, name, user_id.
     let joinRequests = PassthroughSubject<[String: String], Never>()
+    /// Scan & Connect (event type "flash"): the raw `data` (action claimed / accepted / declined / decided, session_id, guest, peer).
+    /// A notification only: whoever listens re-reads GET /connect/sessions/{id} or /connect/pending.
+    let flash = PassthroughSubject<[String: Any], Never>()
 
     private var token: String?
     private var task: URLSessionWebSocketTask?
@@ -151,6 +154,12 @@ final class LiveConnection: ObservableObject {
         if env.type == "join_request" {
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let d = obj["data"] as? [String: String] {
                 joinRequests.send(d)
+            }
+            return
+        }
+        if env.type == "flash" {
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let d = obj["data"] as? [String: Any] {
+                flash.send(d)
             }
             return
         }

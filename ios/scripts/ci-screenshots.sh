@@ -81,6 +81,10 @@ if [ -n "${TF_CI_USERNAME:-}" ] && [ -n "${TF_CI_PASSWORD:-}" ]; then
   SIMCTL_CHILD_TF_CI_TAB=groups SIMCTL_CHILD_TF_CI_OPEN_GROUP=1 SIMCTL_CHILD_TF_CI_MEMBER=1 launch en en_US && sleep 14 && shot 15-member-info.png || status=1
   SIMCTL_CHILD_TF_CI_TAB=groups SIMCTL_CHILD_TF_CI_OPEN_GROUP=1 SIMCTL_CHILD_TF_CI_GROUP_INFO=1 SIMCTL_CHILD_TF_CI_ADD_MEMBERS=buzzxstory launch en en_US && sleep 16 && shot 16-add-members.png || status=1
   SIMCTL_CHILD_TF_CI_TAB=groups SIMCTL_CHILD_TF_CI_OPEN_GROUP=1 SIMCTL_CHILD_TF_CI_GROUP_INFO=1 launch ar ar_SA && sleep 14 && shot 17-group-info-ar.png || status=1
+  # Scan & Connect: My Connect Code (a real 60 s code for the CI account) and the scanner (no camera in the simulator)
+  SIMCTL_CHILD_TF_CI_FLASH=mutual launch en en_US && sleep 10 && shot 18-my-connect-code.png || status=1
+  SIMCTL_CHILD_TF_CI_FLASH=scan launch en en_US && sleep 10 && shot 19-scan-connect.png || status=1
+  SIMCTL_CHILD_TF_CI_FLASH=mutual launch ar ar_SA && sleep 10 && shot 20-my-connect-code-ar.png || status=1
   SIMCTL_CHILD_TF_CI_DAY=1 launch en en_US && sleep 8 && shot 10-chats-day.png || status=1
   SIMCTL_CHILD_TF_CI_DAY=1 SIMCTL_CHILD_TF_CI_OPEN_CHAT=1 launch en en_US && sleep 10 && shot 11-chat-day.png || status=1
   # End the CI session on the server (POST /auth/logout) so test runs do not pile up under Linked devices.

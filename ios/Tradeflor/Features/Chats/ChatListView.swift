@@ -374,6 +374,8 @@ extension ChatListView {
     /// CI only (Debug): TF_CI_OPEN_CHAT=1 opens the newest chat once, so the workflow can screenshot the chat screen.
     fileprivate func ciOpenFirstChat() {
         #if DEBUG
+        // TF_CI_FLASH=scan|mutual opens Flash Connect on the scanner or My Connect Code
+        if !ciOpened, !(ProcessInfo.processInfo.environment["TF_CI_FLASH"] ?? "").isEmpty { ciOpened = true; showFlash = true; return }
         guard !ciOpened, ProcessInfo.processInfo.environment["TF_CI_OPEN_CHAT"] == "1", let first = chats.first else { return }
         ciOpened = true
         path = [first]
