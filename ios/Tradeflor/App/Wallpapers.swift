@@ -44,9 +44,17 @@ struct ChatDefaultWallpaper: View {
     var body: some View {
         Group {
             if scheme == .dark {
-                ZStack {
-                    Theme.hex(0x021219)
-                    Image("ChatWallpaper").resizable().scaledToFill()
+                // website: veil rgba(0,15,15,.6) over the pack's phone picture on #01141B, cover, centre-bottom, raised by the
+                // message bar's height (--ct-lift 68px) so the wave sits just above the bar
+                GeometryReader { geo in
+                    ZStack {
+                        Theme.hex(0x01141B)
+                        Image("ChatWallpaper").resizable().scaledToFill()
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
+                            .offset(y: -68)
+                        Color(.sRGB, red: 0, green: 15 / 255, blue: 15 / 255, opacity: 0.6)
+                    }
                 }
             } else {
                 Starfield()

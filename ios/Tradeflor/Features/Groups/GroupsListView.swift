@@ -55,14 +55,14 @@ struct GroupsListView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     header
-                    SearchPill(placeholder: "groups.search", text: $query).padding(.horizontal, 16)
+                    SearchPill(placeholder: "groups.search", text: $query, soul: true).padding(.horizontal, 16)
                     chips.padding(.top, 12).padding(.bottom, 8)
                     content
                     discover
                 }
             }
             .refreshable { await load() }
-            .background(Theme.panelGradient.ignoresSafeArea())
+            .background(Theme.soul.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: GroupSummary.self) { g in ChatView(chat: g.asConversation, canSend: g.can_send) }
             .fullScreenCover(item: $watchGroup) { st in
@@ -181,7 +181,7 @@ struct GroupsListView: View {
                             Spacer()
                         }
                         .padding(.horizontal, 15).frame(height: 70)
-                        .overlay(alignment: .top) { Rectangle().fill(Theme.rowRule).frame(height: 1) }
+                        .overlay(alignment: .top) { Rectangle().fill(Theme.soulRule).frame(height: 1) }
                     }
                     .buttonStyle(.plain)
                 }
@@ -242,7 +242,7 @@ struct GroupsListView: View {
         }
         .padding(.leading, 15).padding(.trailing, 14)
         .frame(height: 83)
-        .overlay(alignment: .top) { Rectangle().fill(Theme.rowRule).frame(height: 1) }
+        .overlay(alignment: .top) { Rectangle().fill(Theme.soulRule).frame(height: 1) }
         .contentShape(Rectangle())
     }
 

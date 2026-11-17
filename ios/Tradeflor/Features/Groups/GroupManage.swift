@@ -299,22 +299,30 @@ struct GroupInfoView: View {
     @State private var transferTo: GrpMember?
     @State private var problem: String?
     @State private var toast: String?
+    @State private var addingMembers = false
+    @State private var showQR = false
+    @State private var manageInvites = false
+    @State private var mediaCat: String?
 
     private var token: String { store.session?.token ?? "" }
     private var me: String { store.session?.userID ?? "" }
     private var admin: Bool { group?.isAdmin ?? false }
     private var owner: Bool { group?.isOwner ?? false }
+    /// Telegram's member view (website .gip-tg, aa1cb91): everyone but the owner; the owner keeps the management panel.
+    private var tg: Bool { !owner }
+    private var groupLink: String? { group?.handle.flatMap { $0.isEmpty ? nil : "https://app.tradeflor.com/g/\($0)" } }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if admin {
+                VStack(alignment: .leading, spacing: tg ? 0 : 12) {
+                    if owner {
                         Picker("", selection: $tab) {
                             Text("grp.tab.info").tag(0)
                             Text(String(format: NSLocalizedString("grp.tab.members", comment: ""), group?.member_count ?? members.count)).tag(1)
                         }
                         .pickerStyle(.segmented)
+                        .padding(.top, 12)
                     }
                     if let g = group {
                         if tab == 0 { infoTab(g) } else { membersTab(g) }
@@ -322,14 +330,19 @@ struct GroupInfoView: View {
                         ProgressView().tint(Theme.accent).frame(maxWidth: .infinity).padding(.top, 60)
                     }
                 }
-                .padding(16)
+                .padding(.horizontal, tg ? 0 : 14)
             }
-            .background(Theme.panelGradient.ignoresSafeArea())
-            .navigationTitle(Text("grp.info.title"))
+            .background(Theme.soul.ignoresSafeArea())
+            .navigationTitle(tg ? Text("") : Text("grp.info.title"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Theme.header, for: .navigationBar)
+            .toolbarBackground(Theme.soul, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)) }
+                        .accessibilityLabel(Text("chat.close"))
+                }
+            }
             .sheet(isPresented: $manage, onDismiss: { Task { await load() } }) {
                 if let g = group { CreateGroupView(onCreated: { _ in }, editing: g) }
             }
@@ -376,6 +389,10 @@ struct GroupInfoView: View {
         .sheet(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store) }
         .sheet(isPresented: $reporting) { ReportGroupSheet(groupID: groupID, groupName: group?.name ?? "").environmentObject(store) }
         .sheet(isPresented: $addingToFolder) { AddToFolderSheet(conversationID: groupID).environmentObject(store) }
+        .sheet(isPresented: $addingMembers, onDismiss: { Task { await load() } }) {
+            AddMembersSheet(groupID: groupID, groupName: group?.name ?? "", memberIDs: Set(members.map(\.user_id))).environmentObject(store)
+        }
+        .sheet(isPresented: $showQR) { GroupQRSheet(name: group?.name ?? "", link: groupLink ?? newLink ?? "") }
         .fullScreenCover(item: $cropping) { p in
             AvatarEditor(image: p.image) { jpeg in
                 Task { await run { try await APIClient.shared.grpUploadAvatar(token: token, id: groupID, jpeg: jpeg) } }
@@ -385,31 +402,100 @@ struct GroupInfoView: View {
 
     // MARK: Group Info tab
 
-    @ViewBuilder private func infoTab(_ g: GrpInfo) -> some View {
-        VStack(spacing: 8) {
-            Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id, size: 96)
+    /// A block of Group Info: the owner's view draws rounded cards (#041D26, radius 16); the member view draws flat full-width
+    /// blocks separated by the panel's own colour, like Telegram (website 65-group-info-cards.css).
+    @ViewBuilder private func block<C: View>(danger: Bool = false, @ViewBuilder _ content: () -> C) -> some View {
+        if tg {
+            VStack(alignment: .leading, spacing: 0) { content() }
+                .padding(.horizontal, 18).padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Theme.soulCard)
+        } else {
+            VStack(alignment: .leading, spacing: 0) { content() }
+                .padding(.horizontal, 16).padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(danger ? Theme.danger.opacity(0.04) : Theme.soulCard, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(danger ? Theme.hex(0xFF6E6E, 0.22) : Theme.soulCardBorder, lineWidth: 1))
+        }
+    }
+
+    private func hair() -> some View { Rectangle().fill(Theme.dyn(0x78BED2, 0xD3E1EA, 0.08, 1)).frame(height: 1) }
+
+    private func upperLabel(_ key: String) -> some View {
+        Text(NSLocalizedString(key, comment: "").uppercased()).font(.system(size: 11, weight: .bold)).tracking(0.9)
+            .foregroundStyle(Theme.dyn(0x6F93A3, 0x5F7686))
+    }
+
+    /// The owner's banner (website .gip-banner): a quiet market chart behind the picture.
+    private var banner: some View {
+        Canvas { ctx, size in
+            func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x / 350 * size.width, y: y / 150 * size.height) }
+            var line = Path()
+            let ys: [CGFloat] = [110, 100, 114, 92, 100, 74, 84, 54, 60, 26, 18]
+            for (i, y) in ys.enumerated() { let p = pt(10 + CGFloat(i) * 30, y); if i == 0 { line.move(to: p) } else { line.addLine(to: p) } }
+            ctx.stroke(line, with: .color(Theme.hex(0x22C7DA, 0.35)), lineWidth: 1.2)
+            let bars: [(CGFloat, CGFloat, CGFloat, UInt32)] = [(40, 96, 22, 0x14C27A), (100, 84, 26, 0xF0525B), (160, 70, 30, 0x14C27A),
+                                                                (220, 52, 28, 0x14C27A), (280, 36, 24, 0xF0525B), (320, 18, 30, 0xF0525B)]
+            for b in bars {
+                ctx.fill(Path(CGRect(origin: pt(b.0, b.1), size: CGSize(width: 5 / 350 * size.width, height: b.2 / 150 * size.height))),
+                         with: .color(Theme.hex(b.3, 0.55)))
+            }
+        }
+        .frame(height: 130)
+        .background(LinearGradient(colors: [Theme.hex(0x062A33), Theme.hex(0x01141B)], startPoint: .top, endPoint: .bottom))
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder private func identity(_ g: GrpInfo) -> some View {
+        VStack(spacing: 0) {
+            if !tg { banner.padding(.horizontal, -14) }
+            Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id, size: tg ? 96 : 108)
+                .overlay(Circle().stroke(tg ? Color.clear : Theme.hex(0xE8B931), lineWidth: 3))
+                .background(Circle().fill(Theme.soul).padding(tg ? 0 : -6))
+                .padding(.top, tg ? 26 : -52)
                 .onTapGesture { if let a = g.avatar_id, !a.isEmpty { viewingPicture = a } }
                 .accessibilityAddTraits(.isButton)
                 .accessibilityHint(Text("grp.picture.view"))
-            if owner {
-                HStack(spacing: 14) {
-                    PhotosPicker(selection: $avatarItem, matching: .images) {
-                        Text("grp.picture.change").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
-                    }
-                    if !(g.avatar_id ?? "").isEmpty {
-                        Button("grp.picture.remove") { Task { await run { try await APIClient.shared.grpRemoveAvatar(token: token, id: groupID) } } }
-                            .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.danger)
-                    }
-                }
-            }
             HStack(spacing: 5) {
-                Text(g.name).font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text).multilineTextAlignment(.center)
+                Text(g.name).font(.system(size: tg ? 19 : 21, weight: .bold)).foregroundStyle(Theme.text).multilineTextAlignment(.center)
                 if g.verified == true { Image(systemName: "checkmark.seal.fill").foregroundStyle(Theme.verified) }
             }
-            Text(String(format: NSLocalizedString("groups.members", comment: ""), g.member_count)).font(.system(size: 13)).foregroundStyle(Theme.faint)
+            .padding(.top, 14)
+            Text(String(format: NSLocalizedString("groups.members", comment: ""), g.member_count)).font(.system(size: 13))
+                .foregroundStyle(Theme.dyn(0x8FB0BC, 0x5F7686)).padding(.top, 4)
+            if owner {
+                HStack(spacing: 8) {
+                    if let a = g.avatar_id, !a.isEmpty {
+                        pill("grp.picture.view", Theme.hex(0x5FE6EE), Theme.hex(0x00CAD1)) { viewingPicture = a }
+                    }
+                    PhotosPicker(selection: $avatarItem, matching: .images) {
+                        pillLabel("grp.picture.change", Theme.hex(0x5FE6EE), Theme.hex(0x00CAD1))
+                    }
+                    if !(g.avatar_id ?? "").isEmpty {
+                        pill("grp.picture.remove", Theme.hex(0xFF9A9A), Theme.hex(0xFF7878)) {
+                            Task { await run { try await APIClient.shared.grpRemoveAvatar(token: token, id: groupID) } }
+                        }
+                    }
+                }
+                .padding(.top, 12)
+            }
         }
         .frame(maxWidth: .infinity)
+        .padding(.bottom, tg ? 4 : 14)
+    }
 
+    private func pillLabel(_ key: LocalizedStringKey, _ fg: Color, _ line: Color) -> some View {
+        Text(key).font(.system(size: 12, weight: .semibold)).foregroundStyle(fg)
+            .padding(.horizontal, 12).padding(.vertical, 5)
+            .background(line.opacity(0.06), in: Capsule()).overlay(Capsule().stroke(line.opacity(0.35), lineWidth: 1))
+    }
+
+    private func pill(_ key: LocalizedStringKey, _ fg: Color, _ line: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) { pillLabel(key, fg, line) }.buttonStyle(.plain)
+    }
+
+    @ViewBuilder private func tiles(_ g: GrpInfo) -> some View {
         HStack(spacing: 10) {
             actionButton(g.isMuted ? "bell" : "bell.slash", g.isMuted ? "grp.unmute.short" : "grp.mute.short") {
                 Task {
@@ -419,9 +505,10 @@ struct GroupInfoView: View {
                     }
                 }
             }
+            if tg { actionButton("rectangle.portrait.and.arrow.right", "gi.leave") { confirmLeave = true } }
             if owner { actionButton("slider.horizontal.3", "grp.manage") { manage = true } }
             Menu {
-                if admin { Button { tab = 1 } label: { Label("grp.add.members", systemImage: "person.badge.plus") } }
+                if admin || g.can_invite == true { Button { addingMembers = true } label: { Label("grp.add.members", systemImage: "person.badge.plus") } }
                 Button { addingToFolder = true } label: { Label("folder.addto", systemImage: "folder.badge.plus") }
                 if let h = g.handle, !h.isEmpty {
                     Button { copy("https://app.tradeflor.com/g/\(h)") } label: { Label("grp.copy.link", systemImage: "link") }
@@ -431,26 +518,144 @@ struct GroupInfoView: View {
             } label: {
                 actionLabel("ellipsis", "grp.more")
             }
+            .accessibilityIdentifier("gi.more")
+        }
+        .padding(.horizontal, tg ? 14 : 0)
+        .padding(.top, tg ? 10 : 0)
+    }
+
+    @ViewBuilder private func infoTab(_ g: GrpInfo) -> some View {
+        identity(g)
+        tiles(g)
+        if tg { memberBlocks(g) } else { ownerBlocks(g) }
+    }
+
+    // MARK: the member view (Telegram)
+
+    @ViewBuilder private func memberBlocks(_ g: GrpInfo) -> some View {
+        let handle = g.handle ?? ""
+        let desc = g.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !handle.isEmpty || !desc.isEmpty {
+            block {
+                if !handle.isEmpty {
+                    HStack(spacing: 10) {
+                        Button { copy("https://app.tradeflor.com/g/\(handle)") } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("app.tradeflor.com/g/\(handle)").font(.system(size: 15)).foregroundStyle(Theme.dyn(0x5FE6EE, 0x0097A5)).lineLimit(1)
+                                Text("gi.link.label").font(.system(size: 13)).foregroundStyle(Theme.dyn(0x7F9AA7, 0x5F7686))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        Button { showQR = true } label: {
+                            Image(systemName: "qrcode").font(.system(size: 19)).foregroundStyle(Theme.dyn(0x5FE6EE, 0x0097A5)).frame(width: 38, height: 38)
+                        }
+                        .accessibilityLabel(Text("gi.qr"))
+                    }
+                    .padding(.vertical, 12)
+                }
+                if !handle.isEmpty && !desc.isEmpty { hair() }
+                if !desc.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(desc).font(.system(size: 15)).foregroundStyle(Theme.text).lineSpacing(3).textSelection(.enabled)
+                        Text("gi.desc.label").font(.system(size: 13)).foregroundStyle(Theme.dyn(0x7F9AA7, 0x5F7686))
+                    }
+                    .padding(.vertical, 12)
+                }
+            }
+            .padding(.top, 10)
         }
 
-        // permanent link
-        TFSectionLabel(text: NSLocalizedString("grp.link", comment: ""))
-        TFCard {
-            VStack(alignment: .leading, spacing: 10) {
+        if let s = stats {
+            VStack(spacing: 0) {
+                let rows: [(String, String, Int, String?)] = [
+                    ("photo", "gi.n.photos", s.photos, "media"), ("video", "gi.n.videos", s.videos, "media"), ("doc", "gi.n.files", s.files, "files"),
+                    ("link", "gi.n.links", s.links, "links"), ("mic", "gi.n.voice", s.voice, "voice"), ("chart.bar", "gi.n.polls", s.polls, nil),
+                ]
+                ForEach(rows.filter { $0.2 > 0 }, id: \.1) { r in
+                    Button { if let c = r.3 { mediaCat = mediaCat == c ? nil : c } } label: {
+                        HStack(spacing: 18) {
+                            Image(systemName: r.0).font(.system(size: 17)).foregroundStyle(Theme.dyn(0x7F9AA7, 0x5F7686)).frame(width: 22)
+                            Text(String(format: NSLocalizedString(r.1, comment: ""), r.2)).font(.system(size: 15)).foregroundStyle(Theme.text)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 11)
+                        .background(r.3 != nil && mediaCat == r.3 ? Theme.card : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(r.3 == nil)
+                }
+                if s.photos + s.videos + s.files + s.links + s.voice + s.polls == 0 {
+                    Text("gi.nothing").font(.system(size: 13.5)).foregroundStyle(Theme.faint).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background(Theme.soulCard)
+            .padding(.top, 10)
+        }
+        if let c = mediaCat {
+            SharedMediaCard(token: token, conversationID: groupID, initialTab: c).id(c).padding(.horizontal, 14).padding(.top, 10)
+        }
+
+        let admins = members.filter { $0.role == "owner" || $0.role == "admin" }
+            .sorted { ($0.role == "owner" ? 0 : 1, $0.title) < ($1.role == "owner" ? 0 : 1, $1.title) }
+        if !admins.isEmpty {
+            block {
+                HStack(spacing: 18) {
+                    Image(systemName: "person.2").font(.system(size: 17)).foregroundStyle(Theme.dyn(0x7F9AA7, 0x5F7686))
+                    Text(NSLocalizedString("gi.administrators", comment: "").uppercased()).font(.system(size: 13, weight: .bold)).tracking(0.8)
+                        .foregroundStyle(Theme.text)
+                }
+                .padding(.top, 14).padding(.bottom, 8)
+                ForEach(admins) { a in
+                    Button { if a.user_id != me { profileFor = MemberProfileRef(userID: a.user_id, username: a.username) } } label: {
+                        HStack(spacing: 12) {
+                            Avatar(token: token, userID: a.user_id, avatarID: a.avatar_id, title: a.title, size: 44)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(a.title).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
+                                Text(a.user_id == me ? NSLocalizedString("gi.you", comment: "") : "@" + a.username)
+                                    .font(.system(size: 13)).foregroundStyle(Theme.dyn(0x7F9AA7, 0x5F7686)).lineLimit(1)
+                            }
+                            Spacer()
+                            Text(LocalizedStringKey(a.role == "owner" ? "gi.role.owner" : "gi.role.admin"))
+                                .font(.system(size: 12)).foregroundStyle(a.role == "owner" ? Theme.hex(0xC7A8FF) : Theme.hex(0x8FD9E0))
+                                .padding(.horizontal, 9).padding(.vertical, 2)
+                                .background(a.role == "owner" ? Theme.hex(0x966EFF, 0.16) : Theme.hex(0x00CAD1, 0.12), in: Capsule())
+                        }
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(a.user_id == me)
+                }
+                Spacer().frame(height: 6)
+            }
+            .padding(.top, 10)
+        }
+        Spacer().frame(height: 24)
+    }
+
+    // MARK: the owner's view (cards)
+
+    @ViewBuilder private func ownerBlocks(_ g: GrpInfo) -> some View {
+        // link
+        block {
+            VStack(alignment: .leading, spacing: 8) {
+                upperLabel("gi.link.label")
                 if let h = g.handle, !h.isEmpty {
                     HStack {
-                        Text("app.tradeflor.com/g/\(h)").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.accent).lineLimit(1)
+                        Text("app.tradeflor.com/g/\(h)").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent).lineLimit(1)
                         Spacer()
                         Button("grp.copy") { copy("https://app.tradeflor.com/g/\(h)") }.font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
                     }
                     if g.privacy != "public" {
                         Text("grp.link.private").font(.system(size: 12)).foregroundStyle(Theme.faint)
-                        if owner {
-                            Button("grp.make.public") { Task { await run { try await APIClient.shared.grpUpdate(token: token, id: groupID, privacy: "public") } } }
-                                .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
-                        }
+                        Button("grp.make.public") { Task { await run { try await APIClient.shared.grpUpdate(token: token, id: groupID, privacy: "public") } } }
+                            .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
                     }
-                } else if owner {
+                } else {
                     Text("grp.link.permanent").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
                     HStack(spacing: 0) {
                         Text("app.tradeflor.com/g/").foregroundStyle(Theme.faint)
@@ -470,17 +675,25 @@ struct GroupInfoView: View {
                         Task { await run { try await APIClient.shared.grpSetHandle(token: token, id: groupID, handle: h) } }
                     }
                     .font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.accent)
-                } else {
-                    Text("grp.link.none").font(.system(size: 13)).foregroundStyle(Theme.faint)
                 }
             }
-            .padding(14)
+            .padding(.vertical, 12)
         }
 
         // description
-        TFSectionLabel(text: NSLocalizedString("grp.desc", comment: ""))
-        TFCard {
-            VStack(alignment: .leading, spacing: 10) {
+        block {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    upperLabel("gi.desc.label")
+                    Spacer()
+                    if !editingDesc {
+                        Button(LocalizedStringKey(g.description.isEmpty ? "grp.add" : "grp.edit")) {
+                            descDraft = g.description
+                            editingDesc = true
+                        }
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                    }
+                }
                 if editingDesc {
                     TextField("", text: $descDraft, prompt: Text("grp.desc.ph").foregroundColor(Theme.faint), axis: .vertical)
                         .lineLimit(3...8).foregroundStyle(Theme.text)
@@ -496,75 +709,168 @@ struct GroupInfoView: View {
                     }
                     .font(.system(size: 14))
                 } else {
-                    HStack(alignment: .top) {
-                        Text(g.description.isEmpty ? NSLocalizedString("grp.desc.none", comment: "") : g.description)
-                            .font(.system(size: 14)).foregroundStyle(g.description.isEmpty ? Theme.faint : Theme.muted)
-                        Spacer()
-                        if owner {
-                            Button(LocalizedStringKey(g.description.isEmpty ? "grp.add" : "grp.edit")) {
-                                descDraft = g.description
-                                editingDesc = true
-                            }
-                            .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                    Text(g.description.isEmpty ? NSLocalizedString("grp.desc.none", comment: "") : g.description)
+                        .font(.system(size: 14.5)).lineSpacing(4).foregroundStyle(g.description.isEmpty ? Theme.faint : Theme.dyn(0xDFEEF4, 0x0F2533))
+                }
+            }
+            .padding(.vertical, 12)
+        }
+
+        // counts + shared media, right under the description
+        if let s = stats {
+            block {
+                let rows: [(String, String, Int?)] = [("photo", "grp.stat.photos", s.photos), ("video", "grp.stat.videos", s.videos),
+                                                      ("doc", "grp.stat.files", s.files), ("link", "grp.stat.links", s.links),
+                                                      ("chart.bar", "grp.stat.polls", s.polls), ("mic", "grp.stat.voice", s.voice),
+                                                      ("person.2", "grp.stat.members", g.member_count),
+                                                      ("star", "grp.stat.admins", members.isEmpty ? nil : members.filter { $0.role != "member" }.count)]
+                let shown = rows.compactMap { r in r.2.map { (r.0, r.1, $0) } }
+                ForEach(Array(shown.enumerated()), id: \.offset) { i, r in
+                    if i > 0 { hair() }
+                    gipRow(r.0, NSLocalizedString(r.1, comment: ""), trailing: "\(r.2)")
+                }
+            }
+        }
+        SharedMediaCard(token: token, conversationID: groupID)
+
+        inviteBlock(g)
+        management(g)
+
+        if g.join_approval ?? false {
+            block {
+                VStack(alignment: .leading, spacing: 0) {
+                    upperLabel(String(format: NSLocalizedString("grp.requests.n", comment: ""), requests.count)).padding(.vertical, 12)
+                    if requests.isEmpty {
+                        Text("grp.requests.none").font(.system(size: 13)).foregroundStyle(Theme.faint).padding(.bottom, 12)
+                    }
+                    ForEach(requests) { r in
+                        hair()
+                        HStack {
+                            Avatar(token: token, userID: r.user_id, avatarID: nil, title: r.display_name ?? r.username, size: 36)
+                            Text((r.display_name?.isEmpty == false ? r.display_name! : r.username)).foregroundStyle(Theme.text)
+                            Spacer()
+                            Button("grp.decline") { Task { await run { try await APIClient.shared.grpDecide(token: token, id: groupID, userID: r.user_id, approve: false) } } }
+                                .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.danger)
+                            Button("grp.approve") { Task { await run { try await APIClient.shared.grpDecide(token: token, id: groupID, userID: r.user_id, approve: true) } } }
+                                .font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
                         }
+                        .padding(.vertical, 8)
                     }
                 }
             }
-            .padding(14)
         }
 
-        // invite links
-        TFSectionLabel(text: NSLocalizedString("grp.invite.title", comment: ""))
-        TFCard {
-            VStack(alignment: .leading, spacing: 10) {
-                if admin || g.can_invite == true {
-                    HStack {
-                        Text("grp.invite.expires").font(.system(size: 13)).foregroundStyle(Theme.muted)
-                        Spacer()
-                        Picker("", selection: $inviteHours) {
-                            Text("grp.never").tag(0)
-                            Text("grp.1day").tag(24)
-                            Text("grp.7days").tag(168)
-                            Text("grp.30days").tag(720)
-                        }
-                        .tint(Theme.accent)
+        block {
+            Button { showAudit.toggle() } label: { gipRow("clock.arrow.circlepath", NSLocalizedString("grp.audit", comment: ""), chevron: true) }
+                .buttonStyle(.plain)
+            if showAudit {
+                if audit.isEmpty {
+                    hair()
+                    Text("grp.audit.none").font(.system(size: 13)).foregroundStyle(Theme.faint).padding(.vertical, 12)
+                }
+                ForEach(audit.prefix(50)) { a in
+                    hair()
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(auditLine(a)).font(.system(size: 13)).foregroundStyle(Theme.text)
+                        Text(serverDate(a.created_at).map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "")
+                            .font(.system(size: 11)).foregroundStyle(Theme.faint)
                     }
-                    HStack {
-                        Text("grp.invite.uses").font(.system(size: 13)).foregroundStyle(Theme.muted)
-                        Spacer()
-                        Picker("", selection: $inviteUses) {
-                            Text("grp.unlimited").tag(0)
-                            Text("grp.1person").tag(1)
-                            Text("grp.10people").tag(10)
-                            Text("grp.100people").tag(100)
-                        }
-                        .tint(Theme.accent)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+                }
+            }
+        }
+
+        block(danger: true) {
+            Button { confirmLeave = true } label: {
+                gipRow("rectangle.portrait.and.arrow.right", NSLocalizedString("grp.leave", comment: ""), tint: Theme.hex(0xFF8F8F), textTint: Theme.hex(0xFF8F8F))
+            }
+            .buttonStyle(.plain)
+            hair()
+            Button { confirmDelete = true } label: {
+                gipRow("trash", NSLocalizedString("grp.delete", comment: ""), tint: Theme.hex(0xFF8F8F), textTint: Theme.hex(0xFF8F8F))
+            }
+            .buttonStyle(.plain)
+        }
+        Spacer().frame(height: 12)
+    }
+
+    /// A row inside a card: cyan icon, label, an optional value or chevron (website .gip-row).
+    private func gipRow(_ icon: String, _ title: String, trailing: String? = nil, chevron: Bool = false,
+                        tint: Color = Theme.dyn(0x5FE6EE, 0x0097A5), textTint: Color = Theme.text) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon).font(.system(size: 16)).foregroundStyle(tint).frame(width: 24)
+            Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(textTint)
+            Spacer()
+            if let trailing { Text(trailing).font(.system(size: 14)).foregroundStyle(Theme.faint) }
+            if chevron { Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.faint) }
+        }
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+    }
+
+    /// Invite link, Telegram-simple (website GroupInviteSection.tsx): the fresh link with Copy / Share, then Create invite link,
+    /// Invite via QR and Manage invite links; expiry, limit, WhatsApp / Telegram, the active links and Reset fold under Manage.
+    @ViewBuilder private func inviteBlock(_ g: GrpInfo) -> some View {
+        block {
+            upperLabel("gi.inv.title").padding(.top, 12).padding(.bottom, 6)
+            if let newLink {
+                HStack(spacing: 8) {
+                    Text(newLink.replacingOccurrences(of: "https://", with: "")).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Button("grp.copy") { copy(newLink) }
+                        .font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.onAccent)
+                        .padding(.horizontal, 12).frame(height: 32).background(Theme.accent, in: Capsule())
+                    ShareLink(item: URL(string: newLink) ?? URL(string: "https://app.tradeflor.com")!,
+                              message: Text(shareText(g.name, newLink))) {
+                        Text("gi.share").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 12).frame(height: 32).overlay(Capsule().stroke(Theme.hex(0x78BED2, 0.22), lineWidth: 1))
                     }
-                    Button {
-                        Task {
-                            do {
-                                newLink = try await APIClient.shared.grpCreateInvite(token: token, id: groupID, hours: inviteHours, maxUses: inviteUses)
-                                invites = await APIClient.shared.grpInvites(token: token, id: groupID)
-                            } catch APIError.refused(let why) {
-                                problem = why
-                            } catch {
-                                problem = NSLocalizedString("chat.action.failed", comment: "")
+                }
+                .padding(.bottom, 10)
+            }
+            hair()
+            Button { Task { await createInvite(resetAll: false) } } label: {
+                gipRow("link.badge.plus", NSLocalizedString(newLink == nil ? "grp.invite.create" : "grp.invite.new", comment: ""),
+                       textTint: Theme.dyn(0x5FE6EE, 0x0097A5))
+            }
+            .buttonStyle(.plain)
+            hair()
+            Button { Task { if groupLink == nil && newLink == nil { await createInvite(resetAll: false) }; if groupLink != nil || newLink != nil { showQR = true } } } label: {
+                gipRow("qrcode", NSLocalizedString("gi.inv.qr", comment: ""), chevron: true)
+            }
+                .buttonStyle(.plain)
+            hair()
+            Button { withAnimation { manageInvites.toggle() } } label: {
+                gipRow("gearshape", invites.isEmpty ? NSLocalizedString("gi.inv.manage", comment: "")
+                                                    : String(format: NSLocalizedString("gi.inv.manage.n", comment: ""), invites.count),
+                       chevron: true)
+            }
+            .buttonStyle(.plain)
+            if manageInvites {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("gi.inv.note").font(.system(size: 12.5)).foregroundStyle(Theme.dyn(0x8FB0BC, 0x5F7686))
+                    HStack(spacing: 10) {
+                        optionColumn("grp.invite.expires") {
+                            Picker("", selection: $inviteHours) {
+                                Text("grp.never").tag(0); Text("grp.1day").tag(24); Text("grp.7days").tag(168); Text("grp.30days").tag(720)
                             }
                         }
-                    } label: {
-                        Label(LocalizedStringKey(invites.isEmpty ? "grp.invite.create" : "grp.invite.new"), systemImage: "link.badge.plus")
-                            .font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.accent)
+                        optionColumn("grp.invite.uses") {
+                            Picker("", selection: $inviteUses) {
+                                Text("grp.unlimited").tag(0); Text("grp.1person").tag(1); Text("grp.10people").tag(10); Text("grp.100people").tag(100)
+                            }
+                        }
                     }
-                    if let newLink {
-                        HStack {
-                            Text(newLink).font(.system(size: 12)).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                            Spacer()
-                            Button("grp.copy") { copy(newLink) }.font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
-                            ShareLink(item: newLink) { Image(systemName: "square.and.arrow.up").foregroundStyle(Theme.accent) }
+                    if let link = newLink ?? g.handle.flatMap({ $0.isEmpty ? nil : "https://app.tradeflor.com/g/\($0)" }) {
+                        HStack(spacing: 8) {
+                            shareButton("WhatsApp", "https://wa.me/?text=" + esc(shareText(g.name, link)))
+                            shareButton("Telegram", "https://t.me/share/url?url=" + esc(link) + "&text=" + esc(shareText(g.name, link)))
                         }
                     }
                     if !invites.isEmpty {
-                        Text("grp.invite.active").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.faint).padding(.top, 4)
+                        Text("grp.invite.active").font(.system(size: 12.5)).foregroundStyle(Theme.dyn(0x8FB0BC, 0x5F7686))
                         ForEach(invites) { inv in
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -578,116 +884,68 @@ struct GroupInfoView: View {
                                 Spacer()
                                 Button("grp.revoke") {
                                     Task {
+                                        newLink = nil
                                         await run { try await APIClient.shared.grpRevokeInvite(token: token, id: groupID, inviteID: inv.id) }
                                     }
                                 }
                                 .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.danger)
                             }
                         }
-                    }
-                } else {
-                    Text("grp.invite.only.admins").font(.system(size: 13)).foregroundStyle(Theme.faint)
-                }
-            }
-            .padding(14)
-        }
-
-        // admins
-        let adminNames = members.filter { $0.role != "member" }.map(\.title)
-        if !adminNames.isEmpty {
-            Button { if admin { tab = 1 } } label: {
-                TFCard { TFRow(icon: "star", title: NSLocalizedString("grp.admins", comment: ""), subtitle: adminNames.joined(separator: ", "), showChevron: admin) }
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 6)
-        }
-
-        if admin { management(g) }
-
-        if owner && (g.join_approval ?? false) {
-            TFSectionLabel(text: String(format: NSLocalizedString("grp.requests.n", comment: ""), requests.count))
-            TFCard {
-                if requests.isEmpty {
-                    Text("grp.requests.none").font(.system(size: 13)).foregroundStyle(Theme.faint).padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                ForEach(requests) { r in
-                    HStack {
-                        Avatar(token: token, userID: r.user_id, avatarID: nil, title: r.display_name ?? r.username, size: 36)
-                        Text((r.display_name?.isEmpty == false ? r.display_name! : r.username)).foregroundStyle(Theme.text)
-                        Spacer()
-                        Button("grp.decline") { Task { await run { try await APIClient.shared.grpDecide(token: token, id: groupID, userID: r.user_id, approve: false) } } }
+                        Button("gi.inv.reset") { Task { await createInvite(resetAll: true) } }
                             .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.danger)
-                        Button("grp.approve") { Task { await run { try await APIClient.shared.grpDecide(token: token, id: groupID, userID: r.user_id, approve: true) } } }
-                            .font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                }
-            }
-        }
-
-        if owner {
-            Button { showAudit.toggle() } label: {
-                TFCard { TFRow(icon: "clock.arrow.circlepath", title: NSLocalizedString("grp.audit", comment: ""), showChevron: true) }
-            }
-            .buttonStyle(.plain)
-            .padding(.top, 6)
-            if showAudit {
-                TFCard {
-                    if audit.isEmpty {
-                        Text("grp.audit.none").font(.system(size: 13)).foregroundStyle(Theme.faint).padding(14)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    ForEach(audit.prefix(50)) { a in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(auditLine(a)).font(.system(size: 13)).foregroundStyle(Theme.text)
-                            Text(serverDate(a.created_at).map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "")
-                                .font(.system(size: 11)).foregroundStyle(Theme.faint)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 14).padding(.vertical, 8)
+                            .padding(.horizontal, 12).frame(height: 32).overlay(Capsule().stroke(Theme.danger.opacity(0.4), lineWidth: 1))
                     }
                 }
+                .padding(.top, 4).padding(.bottom, 12)
             }
         }
-
-        SharedMediaCard(token: token, conversationID: groupID)
-        if let s = stats {
-            TFSectionLabel(text: NSLocalizedString("grp.stats", comment: ""))
-            TFCard {
-                statRow("photo", "grp.stat.photos", s.photos)
-                statRow("video", "grp.stat.videos", s.videos)
-                statRow("doc", "grp.stat.files", s.files)
-                statRow("link", "grp.stat.links", s.links)
-                statRow("chart.bar", "grp.stat.polls", s.polls)
-                statRow("mic", "grp.stat.voice", s.voice)
-                statRow("person.2", "grp.stat.members", g.member_count)
-                statRow("star", "grp.stat.admins", members.isEmpty ? nil : members.filter { $0.role != "member" }.count)
-            }
-        }
-
-        TFCard {
-            Button { confirmLeave = true } label: {
-                TFRow(icon: "rectangle.portrait.and.arrow.right", title: NSLocalizedString("grp.leave", comment: ""), tint: Theme.danger, showChevron: false)
-            }
-            .buttonStyle(.plain)
-            if owner {
-                Rectangle().fill(Theme.rowRule).frame(height: 1).padding(.leading, 50)
-                Button { confirmDelete = true } label: {
-                    TFRow(icon: "trash", title: NSLocalizedString("grp.delete", comment: ""), tint: Theme.danger, showChevron: false)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.top, 10)
     }
 
-    /// Group Management: the same switches and choices as the website.
+    private func optionColumn<C: View>(_ key: String, @ViewBuilder _ content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            upperLabel(key)
+            content()
+                .tint(Theme.accent)
+                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                .background(Theme.soul, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hex(0x78BED2, 0.22), lineWidth: 1))
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func shareButton(_ title: String, _ url: String) -> some View {
+        Button(title) { if let u = URL(string: url) { UIApplication.shared.open(u) } }
+            .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hex(0x78BED2, 0.22), lineWidth: 1))
+    }
+
+    private func shareText(_ name: String, _ url: String) -> String {
+        String(format: NSLocalizedString("gi.share.text", comment: ""), name, url)
+    }
+
+    private func esc(_ s: String) -> String {
+        s.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_.~"))) ?? s
+    }
+
+    private func createInvite(resetAll: Bool) async {
+        do {
+            if resetAll { for i in invites { try? await APIClient.shared.grpRevokeInvite(token: token, id: groupID, inviteID: i.id) } }
+            newLink = try await APIClient.shared.grpCreateInvite(token: token, id: groupID, hours: inviteHours, maxUses: inviteUses)
+            invites = await APIClient.shared.grpInvites(token: token, id: groupID)
+        } catch APIError.refused(let why) {
+            problem = why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why
+        } catch {
+            problem = NSLocalizedString("chat.action.failed", comment: "")
+        }
+    }
+
+    /// Group Management: the same switches and choices as the website; every drop-down one width (142), on the right.
     @ViewBuilder private func management(_ g: GrpInfo) -> some View {
         let perms = g.permissions ?? GrpPermissions(allow_chat: true, allow_media: true, allow_reactions: true, members_can_invite: false,
                                                     signal_permission: "owner_admins", chat_permission: "everyone")
-        TFSectionLabel(text: NSLocalizedString("grp.management", comment: ""))
-        TFCard {
+        block {
+            upperLabel("grp.management").padding(.top, 12).padding(.bottom, 2)
             toggleRow("grp.allow.chat", perms.allow_chat) { v in var p = perms; p.allow_chat = v; await setPerms(p) }
             toggleRow("grp.allow.media", perms.allow_media) { v in var p = perms; p.allow_media = v; await setPerms(p) }
             toggleRow("grp.allow.reactions", perms.allow_reactions) { v in var p = perms; p.allow_reactions = v; await setPerms(p) }
@@ -712,29 +970,32 @@ struct GroupInfoView: View {
                             options: [("everyone", "grp.everyone"), ("admins_only", "grp.admins.only"), ("restricted", "grp.restricted")]) { v in
                 var p = perms; p.chat_permission = v; await setPerms(p)
             }
-            Button { tab = 1 } label: { TFRow(icon: "person.2", title: NSLocalizedString("grp.manage.members", comment: "")) }
+            hair()
+            Button { tab = 1 } label: { gipRow("person.2", NSLocalizedString("grp.manage.members", comment: ""), chevron: true) }
                 .buttonStyle(.plain)
-            if owner {
-                Button { manage = true } label: { TFRow(icon: "gearshape", title: NSLocalizedString("grp.settings", comment: "")) }
-                    .buttonStyle(.plain)
-            }
+            hair()
+            Button { manage = true } label: { gipRow("gearshape", NSLocalizedString("grp.settings", comment: ""), chevron: true) }
+                .buttonStyle(.plain)
         }
     }
 
     // MARK: Members tab
 
     @ViewBuilder private func membersTab(_ g: GrpInfo) -> some View {
-        TFCard {
-            HStack {
-                Image(systemName: "person.badge.plus").foregroundStyle(Theme.accent)
-                TextField("", text: $addName, prompt: Text("grp.add.member").foregroundColor(Theme.faint))
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().foregroundStyle(Theme.text)
-                    .submitLabel(.done)
-                    .onSubmit { addMember() }
-                if !addName.isEmpty { Button("grp.add") { addMember() }.font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.accent) }
+        Button { addingMembers = true } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "person.badge.plus").font(.system(size: 18)).foregroundStyle(Theme.accent).frame(width: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("grp.add.members").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.accent)
+                    Text("ams.by").font(.system(size: 12)).foregroundStyle(Theme.faint)
+                }
+                Spacer()
             }
             .padding(14)
+            .background(Theme.soulCard, in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.soulCardBorder, lineWidth: 1))
         }
+        .buttonStyle(.plain)
         TFCard {
             ForEach(Array(members.enumerated()), id: \.element.id) { i, m in
                 memberRow(m)
@@ -833,45 +1094,51 @@ struct GroupInfoView: View {
             }
         }
         .tint(Theme.accent)
-        .padding(.horizontal, 14).padding(.vertical, 9)
+        .padding(.vertical, 9)
     }
 
     private func pickerRow(_ key: LocalizedStringKey, selection: Int, options: [(Int, String)], set: @escaping (Int) async -> Void) -> some View {
         HStack {
-            Text(key).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
-            Spacer()
+            Text(key).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
             Menu {
                 ForEach(0..<options.count, id: \.self) { i in
                     Button(LocalizedStringKey(options[i].1)) { Task { await set(options[i].0) } }
                 }
             } label: {
                 HStack(spacing: 4) {
-                    Text(LocalizedStringKey(options.first(where: { $0.0 == selection })?.1 ?? options[0].1))
+                    Text(LocalizedStringKey(options.first(where: { $0.0 == selection })?.1 ?? options[0].1)).lineLimit(1)
+                    Spacer(minLength: 2)
                     Image(systemName: "chevron.up.chevron.down").font(.system(size: 10))
                 }
-                .font(.system(size: 13)).foregroundStyle(Theme.accent)
+                .font(.system(size: 13)).foregroundStyle(Theme.text)
+                .padding(.horizontal, 8).frame(width: 142, height: 34)
+                .background(Theme.soul, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hex(0x78BED2, 0.22), lineWidth: 1))
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 11)
+        .padding(.vertical, 8)
     }
 
     private func stringPickerRow(_ key: LocalizedStringKey, selection: String, options: [(String, String)], set: @escaping (String) async -> Void) -> some View {
         HStack {
-            Text(key).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
-            Spacer()
+            Text(key).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
             Menu {
                 ForEach(0..<options.count, id: \.self) { i in
                     Button(LocalizedStringKey(options[i].1)) { Task { await set(options[i].0) } }
                 }
             } label: {
                 HStack(spacing: 4) {
-                    Text(LocalizedStringKey(options.first(where: { $0.0 == selection })?.1 ?? options[0].1))
+                    Text(LocalizedStringKey(options.first(where: { $0.0 == selection })?.1 ?? options[0].1)).lineLimit(1)
+                    Spacer(minLength: 2)
                     Image(systemName: "chevron.up.chevron.down").font(.system(size: 10))
                 }
-                .font(.system(size: 13)).foregroundStyle(Theme.accent)
+                .font(.system(size: 13)).foregroundStyle(Theme.text)
+                .padding(.horizontal, 8).frame(width: 142, height: 34)
+                .background(Theme.soul, in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hex(0x78BED2, 0.22), lineWidth: 1))
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 11)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder private func statRow(_ icon: String, _ key: String, _ value: Int?) -> some View {
@@ -943,11 +1210,20 @@ struct GroupInfoView: View {
     private func load() async {
         guard let g = try? await APIClient.shared.grpInfo(token: token, id: groupID) else { return }
         group = g
-        members = (try? await APIClient.shared.grpMembers(token: token, id: groupID)) ?? members
+        if g.isAdmin, let all = try? await APIClient.shared.grpMembers(token: token, id: groupID) {
+            members = all
+        } else {
+            // an ordinary member: the people who posted, plus the owner and admins (GET /groups/{id}/admins, server d772cba)
+            var out = (try? await APIClient.shared.list(GrpMember.self, "groups/\(groupID)/senders", token: token)) ?? []
+            for a in (try? await APIClient.shared.list(GrpMember.self, "groups/\(groupID)/admins", token: token)) ?? [] {
+                if let i = out.firstIndex(where: { $0.user_id == a.user_id }) { out[i] = a } else { out.append(a) }
+            }
+            members = out
+        }
         stats = await APIClient.shared.grpMediaStats(token: token, conversationID: groupID)
         if g.isAdmin || g.can_invite == true { invites = await APIClient.shared.grpInvites(token: token, id: groupID) }
         if g.isAdmin { bans = await APIClient.shared.grpBans(token: token, id: groupID) }
-        if g.isOwner {
+        if g.isOwner || g.isAdmin {
             requests = await APIClient.shared.grpJoinRequests(token: token, id: groupID)
             audit = await APIClient.shared.grpAudit(token: token, id: groupID)
         }
@@ -974,5 +1250,37 @@ struct GroupPictureViewer: View {
             .accessibilityLabel(Text("chat.close"))
         }
         .task { if let d = await APIClient.shared.groupAvatar(token: token, groupID: groupID, avatarID: avatarID) { image = UIImage(data: d) } }
+    }
+}
+
+
+/// The group's link as a QR code (website .gip-qr-card): name, code, the link, Copy link.
+struct GroupQRSheet: View {
+    let name: String
+    let link: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var copied = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text(name).font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.text).padding(.top, 28)
+            FlashConnectView.qrCard(link)
+            Text(link.replacingOccurrences(of: "https://", with: "")).font(.system(size: 13)).foregroundStyle(Theme.faint)
+                .environment(\.layoutDirection, .leftToRight)
+            Button {
+                UIPasteboard.general.string = link
+                copied = true
+            } label: {
+                Text(LocalizedStringKey(copied ? "grp.copied" : "grp.copy.link")).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.onAccent)
+                    .frame(maxWidth: .infinity, minHeight: 46).background(Theme.accent, in: Capsule())
+            }
+            .padding(.horizontal, 24)
+            Button("chat.close") { dismiss() }.foregroundStyle(Theme.accent)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .background(Theme.soul.ignoresSafeArea())
+        .presentationDetents([.medium, .large])
+        .tfColorScheme()
     }
 }

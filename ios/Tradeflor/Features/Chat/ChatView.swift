@@ -333,6 +333,7 @@ struct ChatView: View {
             }
         }
         .background(ChatThemeStyle.background(themeID).ignoresSafeArea())
+        .environment(\.tfChatThemed, !(themeID.isEmpty || themeID == "tradeflor"))
         .toolbar(.hidden, for: .navigationBar)
         .onReceive(live.typing) { t in
             guard t.conversation == chat.conversation_id, t.user != me else { return }
@@ -608,7 +609,7 @@ struct ChatView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Theme.header.ignoresSafeArea(edges: .bottom))
+        .background(barColor.ignoresSafeArea(edges: .bottom))
         .overlay(alignment: .top) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
     }
 
@@ -686,7 +687,7 @@ struct ChatView: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 60)
-        .background(Theme.header.ignoresSafeArea(edges: .top))
+        .background(barColor.ignoresSafeArea(edges: .top))
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
     }
 
@@ -799,7 +800,8 @@ struct ChatView: View {
                 }
                 .padding(.horizontal, 4)
                 .frame(minHeight: 48)
-                .background(Theme.inputGradient, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .background(themeID.isEmpty ? AnyShapeStyle(Theme.soulInput) : AnyShapeStyle(Theme.inputGradient),
+                            in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .stroke(composerFocused ? Theme.borderActive : Theme.hex(0x1C8CB2, 0.85), lineWidth: 1.5))
                 .shadow(color: Theme.hex(0x00BEDC, 0.12), radius: 6)
@@ -1095,6 +1097,7 @@ struct ChatView: View {
     private func loadPeople() async {
         var all: [String: GroupMemberFull] = [:]
         for p in (try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/senders", token: token)) ?? [] { all[p.user_id] = p }
+        for p in (try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/admins", token: token)) ?? [] { all[p.user_id] = p }
         for p in (try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/members", token: token)) ?? [] { all[p.user_id] = p }
         let list = Array(all.values)
         members = list.map { GroupMember(user_id: $0.user_id, username: $0.username, display_name: $0.display_name) }
@@ -1182,6 +1185,9 @@ struct ChatView: View {
         try? lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
         exportURL = url
     }
+
+    /// The header and message bar: the soul colour #01141B in the default chat (website --tf-chat-header-bg / footer-bg).
+    private var barColor: Color { (themeID.isEmpty || themeID == "tradeflor") ? Theme.soul : Theme.header }
 
     private func composerIcon(_ name: String) -> some View {
         Image(systemName: name).font(.system(size: 19)).foregroundStyle(Theme.muted).frame(width: 34, height: 40)

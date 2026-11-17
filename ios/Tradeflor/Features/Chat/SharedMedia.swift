@@ -6,7 +6,7 @@ struct SharedMediaCard: View {
     let token: String
     let conversationID: String
 
-    @State private var tab = "media"
+    @State private var tab: String
     @State private var items: [Message] = []
     @State private var loading = false
     @State private var reachedEnd = false
@@ -17,6 +17,13 @@ struct SharedMediaCard: View {
     @Environment(\.openURL) private var openURL
 
     private let pageSize = 60
+
+    /// initialTab: the category to open on (Group Info's counts open that media, website SharedMedia initialCategory).
+    init(token: String, conversationID: String, initialTab: String = "media") {
+        self.token = token
+        self.conversationID = conversationID
+        _tab = State(initialValue: initialTab)
+    }
 
     var body: some View {
         TFCard {

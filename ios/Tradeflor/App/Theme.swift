@@ -27,6 +27,15 @@ enum Theme {
     static let chip = dyn(0x011F2B, 0xE8F0F5)            // --bg-chip
     static let active = dyn(0x023446, 0xDFF2F5)          // --bg-active
 
+    // one colour soul (website --tf-unified-surface and friends, night mode; day keeps its own grounds)
+    static let soul = dyn(0x01141B, 0xF6F9FC)            // header, message bar, lists, poll/signal panels, Group Info
+    static let soulInput = dyn(0x05151D, 0xFFFFFF)       // --tf-input-bg
+    static let soulRule = dyn(0x103541, 0xD3E1EA)        // groups list separators
+    static let soulCard = dyn(0x041D26, 0xFFFFFF)        // Group Info cards
+    static let soulCardBorder = dyn(0x78BED2, 0xD3E1EA, 0.12, 1)
+    static let soulBubbleOut = hex(0x062A33)
+    static let soulBubbleIn = hex(0x041D26)
+
     // lines
     static let border = dyn(0x288CAF, 0x1E5A78, 0.22, 0.14)         // --border-c
     static let borderStrong = dyn(0x124C64, 0xD3E1EA)               // --border-strong-c
@@ -155,6 +164,8 @@ struct SquareIconButton: View {
 struct SearchPill: View {
     let placeholder: LocalizedStringKey
     @Binding var text: String
+    /// the one-colour-soul field (#01141B, its cyan outline marks it), as the website's Groups list
+    var soul = false
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").foregroundStyle(Theme.faint).font(.system(size: 16))
@@ -169,8 +180,8 @@ struct SearchPill: View {
         }
         .padding(.horizontal, 16)
         .frame(height: 43)
-        .background(Theme.inputGradient, in: Capsule())
-        .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1))
+        .background(soul ? AnyShapeStyle(Theme.soul) : AnyShapeStyle(Theme.inputGradient), in: Capsule())
+        .overlay(Capsule().stroke(soul ? Theme.hex(0x00C8D7, 0.22) : Theme.borderStrong, lineWidth: 1))
     }
 }
 
@@ -271,10 +282,34 @@ struct BubbleShape: Shape {
 
 extension View {
     /// The website's .bubble.mine / .bubble.theirs: teal gradient with a cyan hairline, or slate with a soft border.
-    func tfBubble(mine: Bool) -> some View {
-        self
-            .background(mine ? AnyShapeStyle(Theme.bubbleOut) : AnyShapeStyle(Theme.bubbleIn), in: BubbleShape(mine: mine))
-            .overlay(BubbleShape(mine: mine).stroke(mine ? Theme.hex(0x12D9E2, 0.36) : Theme.border, lineWidth: 1))
+    func tfBubble(mine: Bool) -> some View { modifier(TFBubbleLook(mine: mine)) }
+}
+
+/// One colour soul (website 46-chat-themes.css --tf-bubble-*): in the default night chat (no theme picked) sent bubbles are solid
+/// #062A33 with a cyan outline and received ones #041D26; day mode and chats with a theme keep the earlier look.
+struct TFBubbleLook: ViewModifier {
+    let mine: Bool
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.tfChatThemed) private var themed
+    func body(content: Content) -> some View {
+        if scheme == .dark && !themed {
+            content
+                .background(mine ? Theme.soulBubbleOut : Theme.soulBubbleIn, in: BubbleShape(mine: mine))
+                .overlay(BubbleShape(mine: mine).stroke(mine ? Theme.hex(0x00CAD1, 0.45) : Theme.hex(0x78BED2, 0.14), lineWidth: 1))
+        } else {
+            content
+                .background(mine ? AnyShapeStyle(Theme.bubbleOut) : AnyShapeStyle(Theme.bubbleIn), in: BubbleShape(mine: mine))
+                .overlay(BubbleShape(mine: mine).stroke(mine ? Theme.hex(0x12D9E2, 0.36) : Theme.border, lineWidth: 1))
+        }
+    }
+}
+
+private struct TFChatThemedKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    /// true inside a chat that has a user-picked theme (the soul colours then stay off).
+    var tfChatThemed: Bool {
+        get { self[TFChatThemedKey.self] }
+        set { self[TFChatThemedKey.self] = newValue }
     }
 }
 

@@ -302,6 +302,12 @@ final class APIClient {
     /// for the owner and admins (the server refuses /members to ordinary members).
     func groupMembers(token: String, groupID: String) async throws -> [GroupMember] {
         var out = (try? decodeList(GroupMember.self, try await getJSON("groups/\(groupID)/senders", token: token))) ?? []
+        // The owner and admins, for any member (Group Info > Administrators, server d772cba).
+        if let admins = try? decodeList(GroupMember.self, try await getJSON("groups/\(groupID)/admins", token: token)) {
+            for m in admins {
+                if let i = out.firstIndex(where: { $0.user_id == m.user_id }) { out[i] = m } else { out.append(m) }
+            }
+        }
         if let all = try? decodeList(GroupMember.self, try await getJSON("groups/\(groupID)/members", token: token)) {
             for m in all where !out.contains(where: { $0.user_id == m.user_id }) { out.append(m) }
         }

@@ -112,7 +112,7 @@ struct PollComposer: View {
                 if let error { Section { Text(error).foregroundStyle(Theme.danger) }.listRowBackground(Theme.surface) }
             }
             .scrollContentBackground(.hidden)
-            .background(Theme.ground.ignoresSafeArea())
+            .background(Theme.soul.ignoresSafeArea())
             .navigationTitle(Text("poll.new"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -249,7 +249,7 @@ struct SignalComposer: View {
                 if let error { Section { Text(error).foregroundStyle(Theme.danger) }.listRowBackground(Theme.surface) }
             }
             .scrollContentBackground(.hidden)
-            .background(Theme.ground.ignoresSafeArea())
+            .background(Theme.soul.ignoresSafeArea())
             .navigationTitle(Text("signal.new"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
