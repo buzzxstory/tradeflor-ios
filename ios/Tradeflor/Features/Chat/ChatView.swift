@@ -254,8 +254,8 @@ struct ChatView: View {
                                             if !p.failed {
                                                 Color.black.opacity(0.35)
                                                 ZStack {
-                                                    Circle().stroke(Color.white.opacity(0.25), lineWidth: 3)
-                                                    ProgressView().progressViewStyle(.circular).tint(.white).scaleEffect(1.5)
+                                                    // fills with a chunked upload's progress; turns otherwise (ResumableUpload.swift)
+                                                    UploadRing(key: p.id)
                                                     Button {
                                                         cancelledUploads.insert(p.id)
                                                         uploads[p.id]?.cancel()
@@ -270,10 +270,38 @@ struct ChatView: View {
                                                 .frame(width: 52, height: 52)
                                             }
                                         }
+                                        .overlay(alignment: .topLeading) {
+                                            // "Uploading video · 42%", "12 MB / 30 MB", "1.2 MB/s · About 15 s left" (4 MB or more)
+                                            if !p.failed {
+                                                UploadStatusLines(key: p.id, what: p.video != nil ? "video" : "photo", boxed: true)
+                                                    .allowsHitTesting(false)
+                                            }
+                                        }
                                     }
-                                } else if p.video != nil {
-                                    Bubble(text: "🎬 " + NSLocalizedString("chat.video", comment: ""), mine: true, date: p.date,
-                                           state: p.failed ? .failed : .sending, faded: false)
+                                } else if p.video != nil || !p.docName.isEmpty {
+                                    // a video without a cover, or a document: the bubble, then the upload's lines and the X
+                                    VStack(alignment: .trailing, spacing: 4) {
+                                        Bubble(text: p.docName.isEmpty ? "🎬 " + NSLocalizedString("chat.video", comment: "") : "📎 " + p.docName,
+                                               mine: true, date: p.date, state: p.failed ? .failed : .sending, faded: false)
+                                        if !p.failed {
+                                            HStack(alignment: .center, spacing: 8) {
+                                                UploadStatusLines(key: p.id, what: p.docName.isEmpty ? "video" : "file", onDark: false)
+                                                if uploads[p.id] != nil || (p.video?.isEmpty == true && p.file == nil) {
+                                                    Button {
+                                                        cancelledUploads.insert(p.id)
+                                                        uploads[p.id]?.cancel()
+                                                        pending.removeAll { $0.id == p.id }
+                                                    } label: {
+                                                        Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.text)
+                                                            .frame(width: 26, height: 26).background(Theme.text.opacity(0.12), in: Circle())
+                                                    }
+                                                    .accessibilityLabel(Text("chat.upload.cancel"))
+                                                }
+                                            }
+                                            .padding(.trailing, 6)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
                                 } else if let ms = p.durationMs {
                                     Bubble(text: "🎤 " + VoiceBubble.length(Int64(ms)), mine: true, date: p.date,
                                            state: p.failed ? .failed : .sending, faded: false)
@@ -296,7 +324,10 @@ struct ChatView: View {
                             .contextMenu {
                                 if p.failed {
                                     Button { Task { await deliver(p) } } label: { Label("chat.retry", systemImage: "arrow.clockwise") }
-                                    Button(role: .destructive) { pending.removeAll { $0.id == p.id } } label: { Label("chat.delete", systemImage: "trash") }
+                                    Button(role: .destructive) {
+                                        pending.removeAll { $0.id == p.id }
+                                        if let f = p.file { try? FileManager.default.removeItem(at: f) } // this device's copy of a large file
+                                    } label: { Label("chat.delete", systemImage: "trash") }
                                 }
                             }
                         }
@@ -1281,6 +1312,21 @@ struct ChatView: View {
     private func sendDocument(_ url: URL) async {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
+        // 4 MB or more: copied to this device's upload folder (never read into memory) and sent in chunks as a pending row
+        // with progress, resumed after a drop and by Retry (same key)
+        let size = ResumableUploader.fileSize(url)
+        if size >= ResumableUploader.minBytes {
+            if size > 25_000_000 { flash("attach.too.big"); return }
+            let key = UUID().uuidString.lowercased()
+            guard let kept = ResumableUploader.keepCopy(of: url, key: key) else { flash("chat.action.failed"); return }
+            var p = PendingMessage(id: key, body: "", date: Date())
+            p.file = kept
+            p.docName = url.lastPathComponent
+            p.docMime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+            pending.append(p)
+            await deliver(p)
+            return
+        }
         guard let data = try? Data(contentsOf: url) else { flash("chat.action.failed"); return }
         if data.count > 25_000_000 { flash("attach.too.big"); return }
         let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
@@ -1583,7 +1629,14 @@ struct ChatView: View {
             problem = NSLocalizedString("chat.video.toolarge", comment: "")
             return
         }
-        if let i = pending.firstIndex(where: { $0.id == key }) { pending[i].video = out.data }
+        guard let i = pending.firstIndex(where: { $0.id == key }) else { return } // cancelled (the X) while it was prepared
+        // written once to a file kept on this device: sent in chunks from it when 4 MB or more (resumed after a drop, and by
+        // Retry or the outbox after a restart, same key); kept in memory only if the file cannot be written
+        if let kept = ResumableUploader.keep(out.data, key: key, ext: "mp4") {
+            pending[i].file = kept
+        } else {
+            pending[i].video = out.data
+        }
         if let p = pending.first(where: { $0.id == key }) { await deliver(p) }
     }
 
@@ -1600,23 +1653,34 @@ struct ChatView: View {
 
     /// Same idempotency key on every retry, so a message that did reach the server is never stored twice.
     private func deliver(_ p: PendingMessage) async {
-        if let v = p.video, v.isEmpty { return } // still being re-encoded, or the re-encode failed
+        if let v = p.video, v.isEmpty, p.file == nil { return } // still being re-encoded, or the re-encode failed
+        if uploads[p.id] != nil { return } // already going (a second tap, or the outbox and a retry at once)
         if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = false }
         do {
             let m: Message
             if let audio = p.audio, let ms = p.durationMs {
                 m = try await APIClient.shared.sendVoice(token: token, conversationID: chat.conversation_id, audio: audio,
                                                          durationMs: ms, waveform: p.waveform, key: p.id)
-            } else if let video = p.video, !video.isEmpty {
+            } else if p.video != nil || !p.docName.isEmpty {
+                // a video or a document: 4 MB or more in chunks from its file (progress, resumed after a drop and by Retry with
+                // the same key; an older server: the one request); smaller in one request, as before
                 let conv = chat.conversation_id, tok = token
-                let t = Task { try await APIClient.shared.sendImage(token: tok, conversationID: conv, jpeg: video,
-                                                                    caption: p.body, key: p.id, fileName: "video.mp4", mime: "video/mp4", poster: p.poster) }
+                let isVideo = p.video != nil
+                let data = p.video.flatMap { $0.isEmpty ? nil : $0 }
+                let t = Task { try await ResumableUploader.shared.send(token: tok, conversationID: conv, file: p.file, data: data,
+                                                                       fileName: isVideo ? "video.mp4" : p.docName,
+                                                                       mime: isVideo ? "video/mp4" : p.docMime,
+                                                                       caption: p.body, key: p.id, replyTo: p.replyTo,
+                                                                       poster: isVideo ? p.poster : nil) }
                 uploads[p.id] = t
                 defer { uploads[p.id] = nil }
                 m = try await t.value
             } else if let jpeg = p.jpeg {
+                // a photo is one request unless it is 4 MB or more (an HD photo): then in chunks too
                 let conv = chat.conversation_id, tok = token
-                let t = Task { try await APIClient.shared.sendImage(token: tok, conversationID: conv, jpeg: jpeg, caption: p.body, key: p.id) }
+                let t = Task { try await ResumableUploader.shared.send(token: tok, conversationID: conv, file: nil, data: jpeg,
+                                                                       fileName: "photo.jpg", mime: "image/jpeg",
+                                                                       caption: p.body, key: p.id) }
                 uploads[p.id] = t
                 defer { uploads[p.id] = nil }
                 m = try await t.value
@@ -1626,10 +1690,15 @@ struct ChatView: View {
             }
             merge([m])
             pending.removeAll { $0.id == p.id }
+            if let f = p.file { try? FileManager.default.removeItem(at: f) } // sent: this device's copy is no longer needed
         } catch APIError.badCredentials {
             store.sessionExpired()
         } catch {
-            if cancelledUploads.contains(p.id) { cancelledUploads.remove(p.id); return } // X: dropped on purpose
+            if cancelledUploads.contains(p.id) { // X: dropped on purpose (the server was told to drop its chunks)
+                cancelledUploads.remove(p.id)
+                if let f = p.file { try? FileManager.default.removeItem(at: f) }
+                return
+            }
             if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = true }
             if case let .refused(why)? = error as? APIError, !why.isEmpty { problem = why }
         }
@@ -1678,6 +1747,13 @@ struct PendingMessage: Identifiable, Equatable {
     var failed = false
     /// A video's cover picture (one small JPEG frame), sent with it (website e0f0b7a).
     var poster: Data? = nil
+    /// A video or document kept as a file on this device (ResumableUploader.folder): sent in chunks from it when 4 MB or
+    /// more, resumed after a drop; kept by the outbox, so a restart resumes it with the same key. Removed once sent.
+    /// (A video with a file has `video` set to empty Data: "a video".)
+    var file: URL? = nil
+    /// A document's own name and type (empty for every other kind).
+    var docName = ""
+    var docMime = ""
 }
 
 struct ViewedPhoto: Identifiable {

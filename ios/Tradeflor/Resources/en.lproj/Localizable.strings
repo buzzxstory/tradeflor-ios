@@ -1661,3 +1661,14 @@
 "cv3.remove" = "Remove from contacts";
 "cv3.remove.confirm" = "Remove %@?";
 "cv3.remove.msg" = "They are removed from your contacts only. Your chat stays, and they are not told.";
+
+/* resumable uploads (server 26e2154) */
+"up.uploading.video" = "Uploading video · %d%%";
+"up.uploading.photo" = "Uploading photo · %d%%";
+"up.uploading.file" = "Uploading file · %d%%";
+"up.bytes" = "%@ / %@";
+"up.speed" = "%@/s";
+"up.left.seconds" = "About %d s left";
+"up.left.minutes" = "About %d min left";
+"up.retrying" = "Connection lost · resuming…";
+"up.finishing" = "Finishing…";

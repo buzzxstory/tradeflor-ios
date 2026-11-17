@@ -1661,3 +1661,14 @@
 "cv3.remove" = "إزالة من جهات الاتصال";
 "cv3.remove.confirm" = "إزالة %@؟";
 "cv3.remove.msg" = "تتم إزالته من جهات اتصالك فقط. تبقى محادثتكما، ولن يتم إعلامه.";
+
+/* resumable uploads (server 26e2154) */
+"up.uploading.video" = "جارٍ رفع الفيديو · %d%%";
+"up.uploading.photo" = "جارٍ رفع الصورة · %d%%";
+"up.uploading.file" = "جارٍ رفع الملف · %d%%";
+"up.bytes" = "%@ / %@";
+"up.speed" = "%@/ث";
+"up.left.seconds" = "متبقٍ نحو %d ث";
+"up.left.minutes" = "متبقٍ نحو %d د";
+"up.retrying" = "انقطع الاتصال · جارٍ الاستئناف…";
+"up.finishing" = "جارٍ الإنهاء…";

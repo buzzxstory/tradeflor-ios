@@ -2,7 +2,9 @@ import UIKit
 
 /// Messages not yet accepted by the server, kept on this device per account and chat (website shared/lib/outbox.ts): they
 /// survive leaving the chat or restarting the app, and are sent again with the same idempotency key, so a message that did
-/// reach the server is never stored twice. Videos are not kept (they are re-encoded from the picked file).
+/// reach the server is never stored twice. A video or large document kept as a file (ResumableUploader.folder) is kept too, by
+/// its file name, so after a restart its chunked upload resumes from the server's offset (same key); a video still being
+/// re-encoded is not kept.
 enum OutboxStore {
     private struct Entry: Codable {
         let id: String
@@ -13,6 +15,12 @@ enum OutboxStore {
         var durationMs: Int?
         var waveform: [Double]
         var replyTo: String
+        // a video or document kept as a file (optional: entries saved before these fields still load)
+        var fileName: String?
+        var isVideo: Bool?
+        var docName: String?
+        var docMime: String?
+        var poster: Data?
     }
 
     private static func file(_ account: String, _ conversation: String) -> URL? {
@@ -25,9 +33,11 @@ enum OutboxStore {
 
     static func save(account: String, conversation: String, _ pending: [PendingMessage]) {
         guard let url = file(account, conversation) else { return }
-        let entries = pending.filter { $0.video == nil }.map {
+        let entries = pending.filter { $0.video == nil || $0.file != nil }.map {
             Entry(id: $0.id, body: $0.body, date: $0.date, jpeg: $0.jpeg, audio: $0.audio, durationMs: $0.durationMs,
-                  waveform: $0.waveform, replyTo: $0.replyTo)
+                  waveform: $0.waveform, replyTo: $0.replyTo, fileName: $0.file?.lastPathComponent,
+                  isVideo: $0.file != nil ? $0.video != nil : nil, docName: $0.docName.isEmpty ? nil : $0.docName,
+                  docMime: $0.docMime.isEmpty ? nil : $0.docMime, poster: $0.poster)
         }
         if entries.isEmpty { try? FileManager.default.removeItem(at: url); return }
         if let data = try? JSONEncoder().encode(entries) {
@@ -38,8 +48,19 @@ enum OutboxStore {
     static func load(account: String, conversation: String) -> [PendingMessage] {
         guard let url = file(account, conversation), let data = try? Data(contentsOf: url),
               let entries = try? JSONDecoder().decode([Entry].self, from: data) else { return [] }
-        return entries.map { e in
+        return entries.compactMap { (e: Entry) -> PendingMessage? in
             var p = PendingMessage(id: e.id, body: e.body, date: e.date)
+            if let name = e.fileName {
+                // the file must still be there (it is removed once sent); without it the entry cannot be sent
+                let url = ResumableUploader.folder.appendingPathComponent(name)
+                guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+                p.file = url
+                if e.isVideo == true { p.video = Data() }
+                p.docName = e.docName ?? ""
+                p.docMime = e.docMime ?? ""
+                p.poster = e.poster
+                if let poster = e.poster { p.image = UIImage(data: poster) }
+            }
             if let j = e.jpeg { p.jpeg = j; p.image = UIImage(data: j) }
             p.audio = e.audio
             p.durationMs = e.durationMs
