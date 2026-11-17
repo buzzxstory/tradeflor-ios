@@ -261,7 +261,7 @@ struct MessageMenuHost: View {
         .allowsHitTesting(presenter.isOpen)
         .accessibilityHidden(!presenter.isOpen)
         .sheet(item: $presenter.picker) { p in
-            EmojiPickerSheet { e in
+            EmojiPickerSheet(single: true) { e in
                 presenter.picker = nil
                 p.onPick(e)
             }
@@ -506,7 +506,7 @@ struct MessageMenuTrigger<Fallback: View>: ViewModifier {
         if let presenter {
             content
                 .background(MenuProbeView(probe: probe))
-                .gesture(LongPressGesture(minimumDuration: 0.35, maximumDistance: 10)
+                .highPriorityGesture(LongPressGesture(minimumDuration: 0.35, maximumDistance: 10)
                     .onEnded { _ in openMenu(presenter) }, including: enabled ? .all : .subviews)
                 .accessibilityAction(named: Text("chat.more")) { openMenu(presenter) }
         } else {

@@ -1804,3 +1804,7 @@
 "call3.ended.canceled" = "Call canceled";
 "call3.ended.lost" = "Connection lost";
 "call3.ended.noconnect" = "Couldn't connect the call";
+
+"chat.showless" = "Show less";
+
+"emoji.recent" = "Recent";

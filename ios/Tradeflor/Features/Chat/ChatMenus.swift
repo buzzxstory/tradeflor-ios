@@ -23,10 +23,8 @@ struct ChatMenuItem: Identifiable {
             case .photo: return [Theme.hex(0x3CF0EE), Theme.hex(0x08B6C0)]      // web .photo
             case .document: return [Theme.hex(0x8FB3FF), Theme.hex(0x4F7CF0)]   // web .file
             case .location: return [Theme.hex(0x5FF0A8), Theme.hex(0x19B56C)]   // web .loc
-            case .note: return [Theme.hex(0xFF9DB0), Theme.hex(0xE5486A)]
-            case .poll: return [Theme.hex(0xFFD86B), Theme.hex(0xE0A514)]
-            case .signal: return [Theme.hex(0xC3B2FF), Theme.hex(0x8A6CF0)]
-            case .schedule: return [Theme.hex(0xFFC27A), Theme.hex(0xF08C2E)]
+            // the app-only entries share one quiet teal tile: no colours the web menu does not have
+            case .note, .poll, .signal, .schedule: return [Theme.hex(0x7FE3E8), Theme.hex(0x2A9DA8)]
             case .plain: return [Theme.hex(0x9FB3BF), Theme.hex(0x5F7686)]
             }
         }

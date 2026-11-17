@@ -1804,3 +1804,7 @@
 "call3.ended.canceled" = "أُلغيت المكالمة";
 "call3.ended.lost" = "انقطع الاتصال";
 "call3.ended.noconnect" = "تعذّر توصيل المكالمة";
+
+"chat.showless" = "عرض أقل";
+
+"emoji.recent" = "الأخيرة";

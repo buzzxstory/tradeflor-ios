@@ -639,7 +639,7 @@ struct ChatView: View {
             CommentsSheet(token: token, groupID: chat.conversation_id, postID: m.id, me: me, isAdmin: isAdmin, names: memberNames)
         }
         .sheet(isPresented: $showEmoji) {
-            EmojiPickerSheet { e in
+            EmojiPickerSheet(single: reactTarget != nil) { e in
                 if let t = reactTarget {
                     reactTarget = nil
                     showEmoji = false
@@ -2221,10 +2221,18 @@ struct Bubble: View {
             more.foregroundColor = Theme.accent
             more.font = .system(size: 15, weight: .semibold)
             shown += more
+        } else if !faded, ReadMore.cut(text) != nil {
+            // opened: "Show less" folds it back (on its own line, so it sits at the reading start in either direction)
+            var less = AttributedString("\n" + NSLocalizedString("chat.showless", comment: ""))
+            less.link = URL(string: "tfreadmore://close")
+            less.foregroundColor = Theme.accent
+            less.font = .system(size: 15, weight: .semibold)
+            shown += less
         }
+        let longText = !faded && ReadMore.cut(text) != nil
         return VStack(alignment: .leading, spacing: 4) {
             if let head { head }
-            if cut != nil || arabic {
+            if longText || arabic {
                 // a cut message ("… Read more") or right-to-left text: the time sits on its own line under the text, so the
                 // two never overlap (mixed directions move an inline spacer)
                 VStack(alignment: .trailing, spacing: 2) {
@@ -2241,8 +2249,13 @@ struct Bubble: View {
                         .environment(\.layoutDirection, arabic ? .rightToLeft : .leftToRight)
                         .environment(\.openURL, OpenURLAction { url in
                             if url.scheme == "tfreadmore" {
-                                ReadMore.opened.insert(text.hashValue)
-                                withAnimation(.easeOut(duration: 0.15)) { expanded = true }
+                                if url.host == "close" {
+                                    ReadMore.opened.remove(text.hashValue)
+                                    withAnimation(.easeOut(duration: 0.15)) { expanded = false }
+                                } else {
+                                    ReadMore.opened.insert(text.hashValue)
+                                    withAnimation(.easeOut(duration: 0.15)) { expanded = true }
+                                }
                                 return .handled
                             }
                             parentOpen(url)
@@ -2263,8 +2276,13 @@ struct Bubble: View {
                     .multilineTextAlignment(arabic ? .trailing : .leading)
                     .environment(\.openURL, OpenURLAction { url in
                         if url.scheme == "tfreadmore" {
-                            ReadMore.opened.insert(text.hashValue)
-                            withAnimation(.easeOut(duration: 0.15)) { expanded = true }
+                            if url.host == "close" {
+                                ReadMore.opened.remove(text.hashValue)
+                                withAnimation(.easeOut(duration: 0.15)) { expanded = false }
+                            } else {
+                                ReadMore.opened.insert(text.hashValue)
+                                withAnimation(.easeOut(duration: 0.15)) { expanded = true }
+                            }
                             return .handled
                         }
                         parentOpen(url)
@@ -2328,8 +2346,21 @@ enum TextLook {
         return out
     }
 
+    /// Right-to-left message? Counts the strong letters (Arabic, Persian, Urdu, Hebrew vs Latin and others): the side with
+    /// more letters sets the bubble's direction and alignment. Digits, prices, symbols and emoji are neutral, so a
+    /// trading post that starts with "XAUUSD" or "1.0845" but is written in Arabic still reads right to left, and an
+    /// English message with one Arabic word stays left to right. Each line keeps its own natural direction inside.
     static func isArabic(_ text: String) -> Bool {
-        text.unicodeScalars.contains { (0x0600...0x06FF).contains($0.value) }
+        var rtl = 0, ltr = 0
+        for s in text.unicodeScalars {
+            let v = s.value
+            if (0x0590...0x08FF).contains(v) || (0xFB1D...0xFDFF).contains(v) || (0xFE70...0xFEFF).contains(v) {
+                if s.properties.isAlphabetic { rtl += 1 }
+            } else if s.properties.isAlphabetic {
+                ltr += 1
+            }
+        }
+        return rtl > 0 && rtl >= ltr
     }
 
     /// 1-3 emoji and nothing else: how many; otherwise 0.

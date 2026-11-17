@@ -56,22 +56,29 @@ struct RootView: View {
                 // the web's phone dock (MobileTabBar) instead of the system tab bar
                 TabView(selection: $tab) {
                     ChatListView()
+                        .modifier(DockSpace())
                         .toolbar(.hidden, for: .tabBar)
                         .tag("chats")
                     GroupsListView()
+                        .modifier(DockSpace())
                         .toolbar(.hidden, for: .tabBar)
                         .tag("groups")
                     TradeFlorView()
+                        .modifier(DockSpace())
                         .toolbar(.hidden, for: .tabBar)
                         .tag("tradeflor")
                     CalendarView()
+                        .modifier(DockSpace())
                         .toolbar(.hidden, for: .tabBar)
                         .tag("calendar")
                     SettingsView()
+                        .modifier(DockSpace())
                         .toolbar(.hidden, for: .tabBar)
                         .tag("settings")
                 }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
+                // the dock floats over the tabs; each tab keeps room for it (DockSpace), so no row or "Load more" hides
+                // under it (a safe-area inset on a TabView does not reach its pages' scroll views)
+                .overlay(alignment: .bottom) {
                     if !chrome.hidden {
                         MobileTabBar(tab: $tab, chatsBadge: badges.chats, groupsBadge: badges.groups)
                             .transition(.move(edge: .bottom).combined(with: .opacity))

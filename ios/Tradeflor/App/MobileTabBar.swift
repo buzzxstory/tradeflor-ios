@@ -112,3 +112,18 @@ struct MobileTabBar: View {
         .accessibilityAddTraits(on ? [.isSelected] : [])
     }
 }
+
+
+/// Room at the bottom of a tab for the floating dock: its real height (52 pt items + 6 pt padding each side + 4 pt
+/// above and below) plus the TradeFlor orb's lift, above the home indicator's safe area. None in a conversation or
+/// with the keyboard up (the dock steps aside then).
+struct DockSpace: ViewModifier {
+    @ObservedObject private var chrome = TabChrome.shared
+    static let height: CGFloat = 52 + 12 + 8 + 6
+
+    func body(content: Content) -> some View {
+        content.safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: chrome.hidden ? 0 : Self.height).allowsHitTesting(false)
+        }
+    }
+}

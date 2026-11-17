@@ -995,10 +995,15 @@ struct LinkPreviewCard: View {
 
 // MARK: emoji picker (shared/components/EmojiPicker.tsx categories)
 
+/// The one emoji picker of the app (composer, reactions, status replies): the website's EmojiPicker.tsx categories with
+/// Trading first, a Recent row, icon tabs that jump to their section, and one compact panel (no empty half screen).
+/// `single`: a reaction takes one emoji, so a quick second tap is ignored instead of landing in the message box.
 struct EmojiPickerSheet: View {
+    var single = false
     let onPick: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
     @State private var tab = 0
+    @State private var picked = false
+    @State private var recent: [String] = EmojiRecents.load()
 
     static let sets: [(String, String)] = [
         ("emoji.trading", "📈📉💹💰💵💶💷💴🪙💎🏦🏛️📊🧾⚖️🚀🔥✅❌⚠️🎯🔔🕒🐂🐻"),
@@ -1011,29 +1016,102 @@ struct EmojiPickerSheet: View {
         ("emoji.symbols", "❤️🧡💛💚💙💜🖤🤍🤎💔❣️💕💞💓💗💖💘💝💯✔️☑️➕➖✖️➗♾️‼️⁉️❓❗🔴🟠🟡🟢🔵🟣⚫⚪"),
         ("emoji.flags", "🇺🇸🇪🇺🇬🇧🇯🇵🇨🇳🇨🇭🇨🇦🇦🇺🇳🇿🇩🇪🇫🇷🇮🇹🇪🇸🇸🇦🇦🇪🇱🇧🇪🇬🇹🇷🇮🇳🇧🇷"),
     ]
+    static let icons = ["chart.line.uptrend.xyaxis", "face.smiling", "pawprint", "fork.knife", "soccerball", "car",
+                        "lightbulb", "heart", "flag"]
+    /// One list per category, split into whole emoji (flags and ZWJ sequences stay one character).
+    static let lists: [[String]] = sets.map { $0.1.map { String($0) } }
+
+    /// The tabs: Recent (when there is one) and the categories; ids are section ids in the grid.
+    private var sections: [(id: Int, key: String, icon: String, items: [String])] {
+        var out: [(Int, String, String, [String])] = []
+        if !recent.isEmpty { out.append((-1, "emoji.recent", "clock", recent)) }
+        for k in Self.sets.indices { out.append((k, Self.sets[k].0, Self.icons[k], Self.lists[k])) }
+        return out
+    }
+
+    private var tq: Color { Theme.hex(0x08D9D9) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(Self.sets.indices, id: \.self) { i in
-                        FilterChip(title: NSLocalizedString(Self.sets[i].0, comment: ""), selected: tab == i) { tab = i }
+        ScrollViewReader { proxy in
+            VStack(spacing: 0) {
+                Capsule().fill(Theme.hex(0xFFFFFF, 0.22)).frame(width: 36, height: 4).padding(.top, 8)
+                // category tabs: icons, the open one in turquoise with a line under it
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 2) {
+                        ForEach(sections, id: \.id) { sec in
+                            Button {
+                                tab = sec.id
+                                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(sec.id, anchor: .top) }
+                            } label: {
+                                VStack(spacing: 5) {
+                                    Image(systemName: sec.icon).font(.system(size: 17, weight: .medium))
+                                        .foregroundStyle(tab == sec.id ? tq : Theme.hex(0x9FB8C4))
+                                        .frame(width: 40, height: 28)
+                                    Capsule().fill(tab == sec.id ? tq : .clear).frame(width: 22, height: 2.5)
+                                }
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(Text(LocalizedStringKey(sec.key)))
+                            .accessibilityAddTraits(tab == sec.id ? [.isSelected] : [])
+                        }
                     }
+                    .padding(.horizontal, 8)
                 }
-                .padding(10)
-            }
-            ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 8), spacing: 8) {
-                    ForEach(Array(Self.sets[tab].1.map { String($0) }.enumerated()), id: \.offset) { _, e in
-                        Button { onPick(e) } label: { Text(e).font(.system(size: 30)) }.buttonStyle(.plain)
+                .padding(.top, 4)
+                Rectangle().fill(Theme.hex(0x28616C, 0.6)).frame(height: 1)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 6, pinnedViews: []) {
+                        ForEach(sections, id: \.id) { sec in
+                            Text(LocalizedStringKey(sec.key)).font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(Theme.hex(0x9FB8C4)).textCase(.uppercase)
+                                .padding(.horizontal, 14).padding(.top, 10)
+                                .id(sec.id)
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 8), spacing: 2) {
+                                ForEach(Array(sec.items.enumerated()), id: \.offset) { _, e in
+                                    Button { pick(e) } label: {
+                                        Text(e).font(.system(size: 30)).frame(maxWidth: .infinity, minHeight: 44)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal, 6)
+                            .onAppear { tab = sec.id }
+                        }
                     }
+                    .padding(.bottom, 12)
                 }
-                .padding(10)
             }
         }
-        .background(Theme.panel.ignoresSafeArea())
-        .presentationDetents([.medium, .large])
-        .tfColorScheme()
+        .background(
+            LinearGradient(colors: [Theme.hex(0x062630), Theme.hex(0x02121A)], startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
+        )
+        .presentationDetents([.height(340), .large])
+        .presentationDragIndicator(.hidden)
+        .preferredColorScheme(.dark)
+        .onAppear { tab = recent.isEmpty ? 0 : -1 }
+    }
+
+    private func pick(_ e: String) {
+        if single {
+            guard !picked else { return }
+            picked = true
+        }
+        EmojiRecents.add(e)
+        onPick(e)
+    }
+}
+
+/// The emoji used last on this phone (up to 24, newest first): the picker's Recent row.
+enum EmojiRecents {
+    private static let key = "tf.emoji.recent"
+    static func load() -> [String] { (UserDefaults.standard.stringArray(forKey: key) ?? []) }
+    static func add(_ e: String) {
+        var l = load().filter { $0 != e }
+        l.insert(e, at: 0)
+        UserDefaults.standard.set(Array(l.prefix(24)), forKey: key)
     }
 }
 
