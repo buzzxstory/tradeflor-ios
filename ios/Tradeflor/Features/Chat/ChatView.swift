@@ -74,6 +74,8 @@ struct ChatView: View {
     @State private var uploads: [String: Task<Message, Error>] = [:]
     @State private var cancelledUploads: Set<String> = []
     @State private var typingUser: String?
+    /// Refreshed each minute, so "today" becomes "yesterday" at midnight.
+    @State private var presenceNow = Date()
     @State private var unreadMarkID: String?
     @State private var unreadMarkCount = 0
     @State private var unreadMarkSet = false
@@ -416,6 +418,14 @@ struct ChatView: View {
         .background(ChatThemeStyle.background(themeID).ignoresSafeArea())
         .environment(\.tfChatThemed, !(themeID.isEmpty || themeID == "tradeflor"))
         .toolbar(.hidden, for: .navigationBar)
+        .task(id: chat.peer_id) {
+            guard !isGroup, !chat.peer_id.isEmpty else { return }
+            if let p = await APIClient.shared.presence(token: token, userID: chat.peer_id) { live.applyPresence(p, userID: chat.peer_id) }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                presenceNow = Date()
+            }
+        }
         .onReceive(live.typing) { t in
             guard t.conversation == chat.conversation_id, t.user != me else { return }
             peerTypingUntil = Date().addingTimeInterval(5)
@@ -726,15 +736,11 @@ struct ChatView: View {
                 HStack(spacing: 10) {
                     Avatar(token: token, userID: chat.peer_id, avatarID: chat.peer_avatar_id, title: chat.title,
                            groupID: isGroup ? chat.conversation_id : nil, size: 40,
-                           online: isGroup ? nil : live.online.contains(chat.peer_id))
+                           online: nil) // no dot on the header picture (website d4d2e77)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(chat.title).font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
                         HStack(spacing: 4) {
-                            if !isGroup {
-                                Circle().fill(live.online.contains(chat.peer_id) ? Theme.online : Theme.faint.opacity(0.6)).frame(width: 6, height: 6)
-                            }
-                            Text(subtitle ?? (isGroup ? String(format: NSLocalizedString("groups.members", comment: ""), memberCount)
-                                                       : NSLocalizedString("chat.offline", comment: "")))
+                            Text(subtitle ?? (isGroup ? String(format: NSLocalizedString("groups.members", comment: ""), memberCount) : ""))
                                 .font(.system(size: 13)).foregroundStyle(peerTypingUntil != nil ? Theme.accent : Theme.faint).lineLimit(1)
                         }
                     }
@@ -1502,8 +1508,9 @@ struct ChatView: View {
             }
             return NSLocalizedString("chat.typing", comment: "")
         }
-        if live.online.contains(chat.peer_id) { return NSLocalizedString("chat.online", comment: "") }
-        return nil
+        if isGroup { return nil }
+        // "online", "last seen today at 4:23 AM" … or nothing; never "Offline" (website lastSeen.ts)
+        return live.presenceLine(chat.peer_id, now: presenceNow)
     }
 
     private func sendVoice() async {

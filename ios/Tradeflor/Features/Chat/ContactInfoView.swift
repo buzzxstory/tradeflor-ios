@@ -163,8 +163,10 @@ struct ContactInfoView: View {
                 UIPasteboard.general.string = "@" + username
                 flash(NSLocalizedString("ci.copied.username", comment: ""))
             } label: { Text("@" + username).font(.system(size: 14)).foregroundStyle(Theme.accent) }
-            Text(LocalizedStringKey(blocked ? "ci.blocked" : (live.online.contains(chat.peer_id) ? "ci.online" : "ci.lastseen")))
-                .font(.system(size: 13)).foregroundStyle(live.online.contains(chat.peer_id) && !blocked ? Theme.online : Theme.faint)
+            // the same line as the chat header ("Blocked" if blocked); nothing when hidden (website d4d2e77)
+            if let line = blocked ? NSLocalizedString("ci.blocked", comment: "") : live.presenceLine(chat.peer_id) {
+                Text(line).font(.system(size: 13)).foregroundStyle(live.online.contains(chat.peer_id) && !blocked ? Theme.online : Theme.faint)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 6)

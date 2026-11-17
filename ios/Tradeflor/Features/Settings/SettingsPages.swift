@@ -655,10 +655,20 @@ struct PrivacyPage: View {
     @State private var note: String?
     @State private var problem: String?
     @State private var pinSaved = BiometricPIN.isSaved
+    @State private var presence: PresencePrivacy?
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
         SettingsPage(title: NSLocalizedString("settings.privacy", comment: "")) {
+            // Who can see my personal info: Last seen and online (website LastSeenPrivacy.tsx, server d4d2e77)
+            TFSectionLabel(text: NSLocalizedString("ls.section", comment: ""))
+            TFCard {
+                NavigationLink { LastSeenPrivacyView() } label: {
+                    TFRow(icon: "eye", title: NSLocalizedString("ls.row", comment: ""), subtitle: LastSeenPrivacyView.summary(presence))
+                }
+                .buttonStyle(.plain)
+            }
+            .task { presence = try? await APIClient.shared.presencePrivacy(token: token) }
             TFCard {
                 TFToggleRow(icon: "checkmark.message", title: NSLocalizedString("set.p.receipts", comment: ""), subtitle: NSLocalizedString("set.p.receipts.sub", comment: ""),
                             isOn: sw.binding("privacy.read_receipts", token: token))

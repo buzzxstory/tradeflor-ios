@@ -1483,3 +1483,20 @@
 "gx.m.admins" = "Admins";
 "gx.m.members" = "Members · %d";
 "gx.edit.sub" = "Update your group details";
+
+/* last seen and online (server d4d2e77) */
+"ls.online" = "online";
+"ls.today" = "last seen today at %@";
+"ls.yesterday" = "last seen yesterday at %@";
+"ls.on" = "last seen %@ at %@";
+"ls.section" = "Who can see my personal info";
+"ls.row" = "Last seen and online";
+"ls.who.lastseen" = "Who can see my last seen";
+"ls.who.online" = "Who can see when I'm online";
+"ls.everyone" = "Everyone";
+"ls.contacts" = "My contacts";
+"ls.nobody" = "Nobody";
+"ls.same" = "Same as last seen";
+"ls.note" = "If you don't share your last seen and online, you won't be able to see other people's last seen and online.";
+"ls.failed" = "Could not load this setting.";
+"ls.save.failed" = "Could not save. Your previous choice is back.";

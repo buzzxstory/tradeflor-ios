@@ -41,9 +41,10 @@ struct MemberProfileSheet: View {
                         Text(name).font(.system(size: 24, weight: .heavy)).foregroundStyle(Theme.text).padding(.top, 6)
                         Text("@" + member.username).font(.system(size: 15)).foregroundStyle(Theme.muted)
                         HStack(spacing: 5) {
-                            Circle().fill(live.online.contains(member.userID) ? Theme.online : Theme.faint).frame(width: 7, height: 7)
-                            Text(LocalizedStringKey(live.online.contains(member.userID) ? "chat.online" : "ci.lastseen.recently"))
-                                .font(.system(size: 13)).foregroundStyle(Theme.faint)
+                            if let line = live.presenceLine(member.userID) {
+                                Circle().fill(live.online.contains(member.userID) ? Theme.online : Theme.faint).frame(width: 7, height: 7)
+                                Text(line).font(.system(size: 13)).foregroundStyle(Theme.faint)
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity)

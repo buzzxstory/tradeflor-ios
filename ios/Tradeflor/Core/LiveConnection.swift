@@ -20,6 +20,11 @@ final class LiveConnection: ObservableObject {
     let typing = PassthroughSubject<(conversation: String, user: String), Never>()
     /// Who of the people I share a chat with is online now.
     @Published private(set) var online: Set<String> = []
+    /// When people were last seen (unix seconds), and who hides it from me (server d4d2e77): "last seen …" or nothing.
+    @Published private(set) var lastSeen: [String: Int64] = [:]
+    @Published private(set) var hiddenPresence: Set<String> = []
+    /// The app is in front: only then am I "online" to others (sent on every change and after every connect).
+    private(set) var appActive = true
     /// Fires every time the socket (re)opens, so calls can send call.sync.
     let opened = PassthroughSubject<Void, Never>()
     /// Someone asked to join a group I own or run: conversation_id, group, name, user_id.
@@ -39,6 +44,25 @@ final class LiveConnection: ObservableObject {
         stop()
         self.token = token
         loop = Task { [weak self] in await self?.run() }
+    }
+
+    /// The app came to the front (true) or left it (false).
+    func setActive(_ active: Bool) {
+        guard active != appActive else { return }
+        appActive = active
+        if connected { sendRaw(["type": "active", "data": ["active": active]]) }
+    }
+
+    /// One person's presence read over HTTP (opening a private chat): the same fields as the live event.
+    func applyPresence(_ p: PresenceInfo, userID: String) {
+        if p.online == true { online.insert(userID) } else { online.remove(userID) }
+        if let t = p.last_seen, t > 0 { lastSeen[userID] = t }
+        if p.hidden == true { hiddenPresence.insert(userID); lastSeen[userID] = nil } else { hiddenPresence.remove(userID) }
+    }
+
+    /// The line under a person's name: "online", "last seen …", or nil.
+    func presenceLine(_ userID: String, now: Date = Date()) -> String? {
+        LastSeen.line(online: online.contains(userID), lastSeen: lastSeen[userID], hidden: hiddenPresence.contains(userID), now: now)
     }
 
     func stop() {
@@ -70,7 +94,12 @@ final class LiveConnection: ObservableObject {
         while !Task.isCancelled {
             guard let token else { return }
             do {
-                let url = try await APIClient.shared.liveURL(token: token)
+                var url = try await APIClient.shared.liveURL(token: token)
+                if !appActive, var c = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+                    // not in front right now: connect without counting as online
+                    c.queryItems = (c.queryItems ?? []) + [URLQueryItem(name: "active", value: "0")]
+                    if let u = c.url { url = u }
+                }
                 let ws = APIClient.shared.webSocket(url)
                 task = ws
                 ws.resume()
@@ -98,6 +127,7 @@ final class LiveConnection: ObservableObject {
             if !connected {
                 connected = true
                 opened.send(())
+                sendRaw(["type": "active", "data": ["active": appActive]])
                 sendRaw(["type": "presence"]) // ask for the online snapshot
                 attempt = 0
             }
@@ -145,9 +175,16 @@ final class LiveConnection: ObservableObject {
             case "presence":
                 if let u = d["user_id"] as? String {
                     if (d["online"] as? Bool) == true { online.insert(u) } else { online.remove(u) }
+                    if let t = (d["last_seen"] as? NSNumber)?.int64Value, t > 0 { lastSeen[u] = t }
+                    if (d["hidden"] as? Bool) == true { hiddenPresence.insert(u); lastSeen[u] = nil } else { hiddenPresence.remove(u) }
                 }
             default:
+                // the snapshot replaces what I knew
                 online = Set((d["online"] as? [String]) ?? [])
+                var seen: [String: Int64] = [:]
+                for (k, v) in (d["last_seen"] as? [String: Any]) ?? [:] { if let t = (v as? NSNumber)?.int64Value, t > 0 { seen[k] = t } }
+                lastSeen = seen
+                hiddenPresence = Set((d["hidden"] as? [String]) ?? [])
             }
             return
         }

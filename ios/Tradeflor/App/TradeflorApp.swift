@@ -160,6 +160,8 @@ struct RootView: View {
         }
         .onChange(of: store.session?.token) { _ in syncLive() }
         .onChange(of: scenePhase) { phase in
+            // online = the app is in front (server d4d2e77)
+            live.setActive(phase == .active)
             if phase == .active { live.probe(); Task { await FlashHub.shared.askPending() } }
             // Locked chats lock again as soon as the app leaves the screen.
             if phase == .background, let token = store.session?.token {
