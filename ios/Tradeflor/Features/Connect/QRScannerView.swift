@@ -1,6 +1,21 @@
 import SwiftUI
 import AVFoundation
 import CoreImage
+import os
+
+/// How fast the scanner is on a real phone (web ea10bd9 asks for tap → screen, tap → first frame, tap → first decode):
+/// written to the device log under "ScanTiming" (Console.app, or `log stream --predicate 'category == "ScanTiming"'`).
+enum ScanTiming {
+    private static var tapAt: Date?
+    private static let log = Logger(subsystem: "com.tradeflor.ios", category: "ScanTiming")
+    static func tapped() { tapAt = Date() }
+    static func mark(_ what: String) {
+        guard let t = tapAt else { return }
+        let ms = Int(Date().timeIntervalSince(t) * 1000)
+        log.notice("\(what, privacy: .public): \(ms) ms")
+    }
+    static func done() { tapAt = nil }
+}
 
 // The camera behind the Scan QR tab (ScanConnectScreen). Rear camera first, any camera of the phone can be picked (the
 // choice is remembered), the next one is one tap away; the camera stops on My Code, on close, in the background and as
@@ -121,13 +136,22 @@ final class QRCamera: NSObject, ObservableObject, AVCaptureMetadataOutputObjects
             guard ok else { DispatchQueue.main.async { self.state = .busy }; return }
             if !self.session.isRunning { self.session.startRunning() }
             let running = self.session.isRunning
-            DispatchQueue.main.async { self.state = running ? .live : .error }
+            DispatchQueue.main.async {
+                self.state = running ? .live : .error
+                if running { ScanTiming.mark("tap to first frame (camera running)") }
+            }
         }
     }
 
+    /// Stops and lets the camera go (inputs removed), so the green dot goes off and reopening starts clean.
     func stop() {
         torch = false
-        queue.async { if self.session.isRunning { self.session.stopRunning() } }
+        queue.async {
+            if self.session.isRunning { self.session.stopRunning() }
+            self.session.beginConfiguration()
+            self.session.inputs.forEach { self.session.removeInput($0) }
+            self.session.commitConfiguration()
+        }
     }
 
     /// The app left the screen: the camera goes off, and comes back only when asked.
@@ -167,7 +191,8 @@ final class QRCamera: NSObject, ObservableObject, AVCaptureMetadataOutputObjects
 
     func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
         guard !delivered, let code = (metadataObjects.first as? AVMetadataMachineReadableCodeObject)?.stringValue else { return }
-        delivered = true
+        delivered = true // one decode per code: later callbacks are ignored while this one is handled
+        ScanTiming.mark("tap to first decode")
         onCode?(code)
     }
 }

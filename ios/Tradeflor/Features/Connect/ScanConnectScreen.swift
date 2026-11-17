@@ -93,6 +93,7 @@ struct ScanConnectScreen: View {
         .background(ScanLook.background)
         .preferredColorScheme(.dark)
         .onAppear {
+            ScanTiming.mark("tap to scanner screen")
             hub.present(presenterID)
             camera.onCode = { code in
                 if FlashTarget.parse(code) != nil {
@@ -109,6 +110,7 @@ struct ScanConnectScreen: View {
             #endif
         }
         .onDisappear {
+            ScanTiming.done()
             camera.stop()
             hub.unpresent(presenterID)
         }

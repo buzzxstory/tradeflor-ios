@@ -24,7 +24,7 @@ struct FlashConnectView: View {
                     }
                     Text("fc.lead").font(.system(size: 13)).foregroundStyle(Theme.faint)
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                        Button { cover = .scan } label: { tile("qrcode.viewfinder", "fc.scan", "fc.scan.sub") }
+                        Button { ScanTiming.tapped(); cover = .scan } label: { tile("qrcode.viewfinder", "fc.scan", "fc.scan.sub") }
                         NavigationLink { MyQRView() } label: { tile("qrcode", "fc.myqr", "fc.myqr.sub") }
                         NavigationLink { GroupQRView() } label: { tile("person.3", "fc.groupqr", "fc.groupqr.sub") }
                         NavigationLink { EventConnectView(onOpen: open) } label: { tile("calendar.badge.plus", "fc.event", "fc.event.sub") }

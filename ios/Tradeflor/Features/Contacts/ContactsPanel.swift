@@ -37,6 +37,9 @@ struct ContactsPanel: View {
     @State private var loaded = false
     @State private var confirm: Confirm?
     @State private var showScanner = false
+    /// Chats opened from here stay above Contacts: Back from the chat returns to Contacts (search and scroll kept),
+    /// Back from Contacts goes where it was opened from (web ea10bd9).
+    @State private var chatPath: [ConversationSummary] = []
     @State private var scanTarget: FlashTarget?
     @State private var opening = false
     @FocusState private var fieldFocused: Bool
@@ -68,12 +71,12 @@ struct ContactsPanel: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $chatPath) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     header
                     searchField
-                    if query.isEmpty { tiles }
+                    if query.isEmpty { scanRow }
                     foundSection
                     if let problem { problemLine(problem) }
                     if !incoming.isEmpty && query.isEmpty { requestsSection }
@@ -87,12 +90,13 @@ struct ContactsPanel: View {
             .background(CV3.background)
             .toolbar(.hidden, for: .navigationBar)
             .overlay { if opening { ProgressView().tint(Theme.accent) } }
+            .navigationDestination(for: ConversationSummary.self) { c in ChatView(chat: c) }
             .navigationDestination(isPresented: Binding(get: { scanTarget != nil }, set: { if !$0 { scanTarget = nil } })) {
                 if let t = scanTarget {
                     // Mutual Connect, an event or a group invitation keep their own flows (FlashConnectView.swift)
                     ScanResultView(target: t, onOpen: { c in
-                        dismiss()
-                        onOpen(c)
+                        scanTarget = nil
+                        openHere(c)
                     }, onDone: { scanTarget = nil })
                 }
             }
@@ -111,7 +115,7 @@ struct ContactsPanel: View {
             .fullScreenCover(isPresented: $showScanner) {
                 ScanConnectScreen(initial: .scan, onOpen: { c in
                     showScanner = false
-                    LocalNotifier.shared.tappedConversation = c.conversation_id
+                    openHere(c)
                 }) { text in
                     showScanner = false
                     Task { await handleScanned(text) }
@@ -143,7 +147,7 @@ struct ContactsPanel: View {
                 Text("cv3.subtitle").font(.system(size: 15)).foregroundStyle(CV3.sub).multilineTextAlignment(.center).padding(.top, 4)
             }
             .frame(maxWidth: .infinity)
-            roundButton("qrcode.viewfinder", ghost: false, label: "fc.scan") { showScanner = true }
+            roundButton("qrcode.viewfinder", ghost: false, label: "fc.scan") { ScanTiming.tapped(); showScanner = true }
         }
     }
 
@@ -200,10 +204,37 @@ struct ContactsPanel: View {
 
     private var tiles: some View {
         HStack(spacing: 10) {
-            tile("qrcode.viewfinder", "fc.scan", "cv3.tile.scan.sub") { showScanner = true }
+            tile("qrcode.viewfinder", "fc.scan", "cv3.tile.scan.sub") { ScanTiming.tapped(); showScanner = true }
             tile("person.badge.plus", "cv3.tile.pin", "cv3.tile.pin.sub") { focusFor("pin") }
             tile("at", "cv3.tile.username", "cv3.tile.username.sub") { focusFor("username") }
         }
+    }
+
+    /// One "Scan QR" row under the field (web ea10bd9: the PIN / Username tiles are gone, the one field does both).
+    private var scanRow: some View {
+        Button { ScanTiming.tapped(); showScanner = true } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "qrcode.viewfinder").font(.system(size: 20, weight: .semibold)).foregroundStyle(CV3.cyan)
+                    .frame(width: 40, height: 40).background(CV3.tile, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("fc.scan").font(.system(size: 15.5, weight: .semibold)).foregroundStyle(CV3.title)
+                    Text("cv3.tile.scan.sub").font(.system(size: 12.5)).foregroundStyle(CV3.muted)
+                }
+                Spacer()
+                Image(systemName: "chevron.forward").font(.system(size: 13, weight: .semibold)).foregroundStyle(CV3.muted)
+            }
+            .padding(.horizontal, 12).frame(minHeight: 60)
+            .background(CV3.tile, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(CV3.tileBorder, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("contacts.scan")
+    }
+
+    /// The chat opens inside Contacts (Back = Contacts); the chat list is refreshed for when Contacts closes.
+    private func openHere(_ c: ConversationSummary) {
+        if chatPath.last?.conversation_id != c.conversation_id { chatPath.append(c) }
     }
 
     private func tile(_ icon: String, _ title: LocalizedStringKey, _ sub: LocalizedStringKey, action: @escaping () -> Void) -> some View {
@@ -483,9 +514,8 @@ struct ContactsPanel: View {
         let retry: () -> Void = { Task { await addAndChat(c) } }
         switch out {
         case .opened(let s):
-            adding = "opening"
-            dismiss()
-            onOpen(s)
+            adding = ""
+            openHere(s)
         case .savedNoChat:
             adding = ""
             await load()
@@ -552,8 +582,7 @@ struct ContactsPanel: View {
         opening = true
         defer { opening = false }
         if let s = await APIClient.shared.ctOpenChat(token: token, userID: userID) {
-            dismiss()
-            onOpen(s)
+            openHere(s)
         } else {
             problem = Problem(text: NSLocalizedString("ci.failed", comment: ""))
         }
