@@ -27,13 +27,14 @@ final class SessionStore: ObservableObject {
             await APIClient.shared.logout(token: token)
         }
         Keychain.delete()
-        ListCache.clear() // this account's lists leave the phone with it
+        ListCache.clear(); ChatMemo.clear() // this account's lists leave the phone with it
         session = nil
     }
 
     /// The token was revoked elsewhere (e.g. "log out all devices" on the website).
     func sessionExpired() {
         Keychain.delete()
+        ChatMemo.clear()
         session = nil
     }
 }

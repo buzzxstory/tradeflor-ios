@@ -90,6 +90,8 @@ struct ChatView: View {
     @State private var openedAtEnd = false
     /// I scrolled up to read: nothing pulls me back to the end by itself.
     @State private var userScrolledUp = false
+    /// When the chat settled at its end: older pages load by themselves only after this (no jump while opening).
+    @State private var openedAtTime = Date.distantFuture
     /// Text and voice waiting to leave, in writing order (one at a time per conversation).
     @State private var sendQueue: [String] = []
     @State private var queueRunning = false
@@ -190,7 +192,12 @@ struct ChatView: View {
                                 if loadingOlder { ProgressView() } else { Text("chat.older").font(.footnote) }
                             }
                             .padding(.vertical, 8)
-                            .onAppear { if openedAtEnd && !loadingOlder { userScrolledUp = true; Task { await loadOlder(proxy) } } }
+                            .onAppear {
+                                guard openedAtEnd, !loadingOlder, !bottomVisible,
+                                      Date().timeIntervalSince(openedAtTime) > 1.5 else { return }
+                                userScrolledUp = true
+                                Task { await loadOlder(proxy) }
+                            }
                         }
                         let rows = shown
                         let lookIDs = lookAlike
@@ -470,6 +477,7 @@ struct ChatView: View {
                     if !openedAtEnd && !messages.isEmpty {
                         // the chat opens at its end (or at the unread line): again once pictures have taken their room
                         openedAtEnd = true
+                        openedAtTime = Date()
                         let hasMark = unreadMarkID != nil && unreadMarkCount > 0
                         if hasMark { proxy.scrollTo("unread-mark", anchor: .top) } else { proxy.scrollTo("bottom", anchor: .bottom) }
                         if !hasMark {
@@ -691,7 +699,11 @@ struct ChatView: View {
             await loadMeta()
             themeID = await ChatThemeStore.load(token: token, conversationID: chat.conversation_id)
         }
-        .task { await loadNewest() }
+        .task {
+            // the messages this chat showed last time (this app session, memory only): on screen at once, as in WhatsApp
+            if messages.isEmpty, let seen = ChatMemo.get(chat.conversation_id), !seen.isEmpty { merge(seen) }
+            await loadNewest()
+        }
         // after a dropped connection or a return to the app: catch up so nothing sent meanwhile is missing
         .onReceive(live.opened) { _ in Task { await loadNewest(quiet: true) } }
         .onChange(of: scenePhase) { p in if p == .active { Task { await loadNewest(quiet: true) } } }
@@ -777,6 +789,7 @@ struct ChatView: View {
             LocalNotifier.shared.clear(conversation: chat.conversation_id)
         }
         .onDisappear {
+            if !locked && !messages.isEmpty { ChatMemo.put(chat.conversation_id, Array(messages.suffix(80))) }
             TabChrome.shared.conversationClosed()
             if LocalNotifier.shared.openConversation == chat.conversation_id { LocalNotifier.shared.openConversation = nil }
             VoicePlayer.shared.stop()
@@ -1547,6 +1560,9 @@ struct ChatView: View {
         } catch APIError.badCredentials {
             store.sessionExpired()
         } catch APIError.locked {
+            // a locked chat never shows what this phone remembered
+            ChatMemo.drop(chat.conversation_id)
+            messages = []
             locked = true
             if !showUnlock && BiometricPIN.isSaved { showUnlock = true } // Face ID straight away
         } catch {
@@ -1563,7 +1579,7 @@ struct ChatView: View {
             reachedStart = page.count < pageSize
             merge(page)
             // the page goes above what I was reading: keep that message where it was (no jump)
-            if let proxy {
+            if let proxy, !bottomVisible {
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) { proxy.scrollTo(first.id, anchor: .top) }
@@ -2397,4 +2413,25 @@ struct DraftField: View {
             .padding(.horizontal, 4)
             .accessibilityIdentifier("chat.composer")
     }
+}
+
+
+/// The last messages each chat showed, kept in memory for this app session only (never on disk): opening a chat again
+/// shows them at once while the newest are fetched. A locked chat and a sign-out drop them.
+@MainActor
+enum ChatMemo {
+    private static var store: [String: [Message]] = [:]
+    private static var order: [String] = []
+
+    static func get(_ id: String) -> [Message]? { store[id] }
+
+    static func put(_ id: String, _ list: [Message]) {
+        store[id] = list
+        order.removeAll { $0 == id }
+        order.append(id)
+        while order.count > 20 { store[order.removeFirst()] = nil }
+    }
+
+    static func drop(_ id: String) { store[id] = nil; order.removeAll { $0 == id } }
+    static func clear() { store = [:]; order = [] }
 }
