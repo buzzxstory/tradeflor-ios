@@ -40,55 +40,93 @@ struct CreateGroupView: View {
     private var isEdit: Bool { editing != nil }
     private var handleLocked: Bool { !(editing?.handle ?? "").isEmpty }
 
+    /// The fields that light up when focused (website .g-control:focus / .g-link-input:focus-within).
+    private enum Field: Hashable { case name, handle, about }
+    @FocusState private var focus: Field?
+
+    // the owner's design (website 14-modals.css, fb9b6fc + bea99e7)
+    private static let fieldFill = Theme.dyn(0x01141B, 0xFFFFFF, 0.6, 1)
+    private static let fieldLine = Theme.dyn(0x287896, 0xC5D6E0, 0.55, 1)
+    private static let fieldFocus = Theme.dyn(0x12E0F0, 0x0097A5, 0.8, 0.8)
+    private static let labelTint = Theme.dyn(0x5FE6EE, 0x0097A5)
+
+    private var sheetGround: some View {
+        ZStack {
+            LinearGradient(colors: [Theme.dyn(0x03202B, 0xF6F9FC), Theme.dyn(0x021821, 0xF1F6F9), Theme.dyn(0x01141B, 0xEEF4F8)],
+                           startPoint: .top, endPoint: .bottom)
+            RadialGradient(colors: [Theme.dyn(0x06465A, 0xDFF2F5, 0.35, 0.6), .clear], center: .topLeading, startRadius: 0, endRadius: 420)
+        }
+        .ignoresSafeArea()
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if !isEdit {
-                        Text("grp.create.sub").font(.system(size: 14)).foregroundStyle(Theme.faint)
-                    }
-                    HStack(spacing: 14) {
+                    Text(LocalizedStringKey(isEdit ? "gx.edit.sub" : "grp.create.sub")).font(.system(size: 13.5)).foregroundStyle(Theme.faint)
+                    HStack(spacing: 18) {
                         ZStack {
                             Circle().fill(Theme.avatarGradient)
                             if let logo {
                                 Image(uiImage: logo).resizable().scaledToFill()
                             } else if let g = editing {
-                                Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id, size: 72)
+                                Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id, size: 68)
                             } else {
-                                Image(systemName: "camera").font(.system(size: 22)).foregroundStyle(Theme.accent)
+                                Image(systemName: "person.3").font(.system(size: 24)).foregroundStyle(Theme.accent)
                             }
                         }
-                        .frame(width: 72, height: 72).clipShape(Circle())
+                        .frame(width: 68, height: 68).clipShape(Circle())
+                        .overlay(Circle().stroke(Theme.hex(0x12E0F0, 0.55), lineWidth: 2))
                         PhotosPicker(selection: $logoItem, matching: .images) {
-                            Text(LocalizedStringKey((logo != nil || editing?.avatar_id != nil) ? "grp.logo.change" : "grp.logo.upload"))
-                                .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.accent)
-                                .padding(.horizontal, 14).frame(height: 36)
-                                .overlay(Capsule().stroke(Theme.borderActive, lineWidth: 1))
+                            HStack(spacing: 8) {
+                                Image(systemName: "camera").font(.system(size: 15))
+                                Text(LocalizedStringKey((logo != nil || editing?.avatar_id != nil) ? "grp.logo.change" : "grp.logo.upload"))
+                            }
+                            .font(.system(size: 13.5, weight: .semibold)).foregroundStyle(Theme.accent).lineLimit(1)
+                            .padding(.horizontal, 14).frame(height: 36)
+                            .background(Theme.hex(0x00CAD1, 0.06), in: Capsule())
+                            .overlay(Capsule().stroke(Theme.borderActive, lineWidth: 1))
                         }
                     }
-                    field("grp.name") {
+                    .padding(.top, 2)
+                    Rectangle().fill(Theme.dyn(0x78BED2, 0xD3E1EA, 0.12, 1)).frame(height: 1)
+
+                    field("grp.name", icon: "person.3", focused: focus == .name) {
                         TextField("", text: $name, prompt: Text("grp.name.ph").foregroundColor(Theme.faint))
+                            .focused($focus, equals: .name)
+                            .padding(.horizontal, 14).frame(height: 42)
                     }
-                    field("grp.link") {
+                    field("grp.link", icon: "link", focused: focus == .handle) {
                         HStack(spacing: 0) {
-                            Text("app.tradeflor.com/g/").foregroundStyle(Theme.faint)
+                            Text("app.tradeflor.com/g/").font(.system(size: 14)).foregroundStyle(Theme.dyn(0x7F9AA7, 0x5F7686))
+                                .lineLimit(1).fixedSize().padding(.leading, 14).padding(.trailing, 2)
                             TextField("", text: $handle, prompt: Text("yourgroup").foregroundColor(Theme.faint))
                                 .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .focused($focus, equals: .handle)
                                 .disabled(handleLocked)
+                                .padding(.trailing, 12)
                                 .onChange(of: handle) { v in
                                     let clean = String(v.lowercased().filter { ($0.isLetter && $0.isASCII) || $0.isNumber || $0 == "_" }.prefix(32))
                                     if clean != v { handle = clean }
                                 }
                         }
+                        .frame(height: 42)
                         .environment(\.layoutDirection, .leftToRight)
                     }
                     Text(LocalizedStringKey(handleLocked ? "grp.link.locked" : "grp.link.hint")).font(.system(size: 12)).foregroundStyle(Theme.faint)
-                    field("grp.desc") {
-                        TextField("", text: $about, prompt: Text("grp.desc.ph").foregroundColor(Theme.faint), axis: .vertical).lineLimit(2...5)
+                        .padding(.top, -6).padding(.leading, 4)
+                    field("grp.desc", icon: "doc.text", focused: focus == .about) {
+                        TextField("", text: $about, prompt: Text("grp.desc.ph").foregroundColor(Theme.faint), axis: .vertical)
+                            .lineLimit(2...5)
+                            .focused($focus, equals: .about)
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .frame(minHeight: 72, alignment: .topLeading)
                     }
-                    Text("grp.privacy").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.muted)
-                    radio("grp.privacy.public", selected: isPublic) { isPublic = true }
-                    radio("grp.privacy.private", selected: !isPublic) { isPublic = false }
+                    label("grp.privacy", icon: "lock.shield")
+                    VStack(spacing: 8) {
+                        radio("grp.privacy.public", icon: "globe", selected: isPublic) { isPublic = true }
+                        radio("grp.privacy.private", icon: "lock", selected: !isPublic) { isPublic = false }
+                    }
 
                     if !isEdit && !people.isEmpty {
                         TFSectionLabel(text: NSLocalizedString("group.members.pick", comment: ""))
@@ -110,23 +148,55 @@ struct CreateGroupView: View {
                         }
                     }
                     if let error { Text(error).font(.system(size: 13)).foregroundStyle(Theme.danger) }
-                    Button { Task { await submit() } } label: {
-                        HStack { if busy { ProgressView().tint(Theme.onAccent) } else { Text(LocalizedStringKey(isEdit ? "grp.save" : "grp.create.go")).bold() } }
-                            .foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 50)
-                            .background(Theme.accent, in: Capsule())
+
+                    // Cancel / Create (website .g-foot)
+                    HStack(spacing: 10) {
+                        Spacer()
+                        Button { dismiss() } label: {
+                            Text("grp.cancel").font(.system(size: 14.5, weight: .semibold)).foregroundStyle(Theme.text)
+                                .frame(width: 92, height: 40)
+                                .background(Self.fieldFill, in: Capsule())
+                                .overlay(Capsule().stroke(Self.fieldLine, lineWidth: 1.5))
+                        }
+                        .buttonStyle(.plain)
+                        Button { Task { await submit() } } label: {
+                            HStack(spacing: 8) {
+                                if busy { ProgressView().tint(Theme.hex(0x032229)) }
+                                else {
+                                    Image(systemName: isEdit ? "checkmark" : "plus").font(.system(size: 15, weight: .bold))
+                                    Text(LocalizedStringKey(isEdit ? "grp.save" : "grp.create.go")).font(.system(size: 14.5, weight: .bold))
+                                }
+                            }
+                            .foregroundStyle(Theme.hex(0x032229))
+                            .padding(.horizontal, 20).frame(height: 42)
+                            .background(LinearGradient(colors: [Theme.hex(0x2FF0F3), Theme.hex(0x08A8B8)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                                        in: Capsule())
+                            .shadow(color: Theme.hex(0x2FF0F3, 0.3), radius: 8)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .opacity(name.trimmingCharacters(in: .whitespaces).isEmpty ? 0.6 : 1)
                     }
-                    .disabled(busy || name.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .opacity(name.trimmingCharacters(in: .whitespaces).isEmpty ? 0.6 : 1)
-                    .padding(.top, 6)
+                    .padding(.top, 10)
                 }
-                .padding(16)
+                .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 20)
             }
-            .background(Theme.panelGradient.ignoresSafeArea())
+            .scrollDismissesKeyboard(.interactively)
+            .background(sheetGround)
             .navigationTitle(Text(LocalizedStringKey(isEdit ? "grp.edit.title" : "grp.new.title")))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Theme.header, for: .navigationBar)
+            .toolbarBackground(Theme.dyn(0x03202B, 0xF6F9FC), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.text)
+                            .frame(width: 32, height: 32)
+                            .background(Theme.dyn(0x78BED2, 0xD3E1EA, 0.1, 1), in: Circle())
+                    }
+                    .accessibilityLabel(Text("chat.close"))
+                }
+            }
         }
         .task {
             if let g = editing {
@@ -146,27 +216,39 @@ struct CreateGroupView: View {
         }
     }
 
-    private func field<C: View>(_ label: LocalizedStringKey, @ViewBuilder _ content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.muted)
-            content()
-                .foregroundStyle(Theme.text)
-                .padding(.horizontal, 14).padding(.vertical, 12)
-                .background(Theme.inputGradient, in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.borderStrong, lineWidth: 1))
+    /// A label with its 17 pt icon (website .g-label).
+    private func label(_ key: LocalizedStringKey, icon: String) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: icon).font(.system(size: 15)).frame(width: 17, height: 17).foregroundStyle(Self.labelTint)
+            Text(key).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(Theme.muted)
         }
     }
 
-    private func radio(_ key: LocalizedStringKey, selected: Bool, action: @escaping () -> Void) -> some View {
+    /// A field: label, then the control in a 42 pt box (radius 11, 1.5 pt line, cyan while focused).
+    private func field<C: View>(_ key: LocalizedStringKey, icon: String, focused: Bool, @ViewBuilder _ content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            label(key, icon: icon)
+            content()
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Self.fieldFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(focused ? Self.fieldFocus : Self.fieldLine, lineWidth: 1.5))
+                .animation(.easeOut(duration: 0.18), value: focused)
+        }
+    }
+
+    private func radio(_ key: LocalizedStringKey, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: selected ? "largecircle.fill.circle" : "circle").foregroundStyle(selected ? Theme.accent : Theme.faint)
+                Image(systemName: icon).font(.system(size: 16)).frame(width: 20).foregroundStyle(selected ? Theme.accent : Theme.faint)
                 Text(key).font(.system(size: 14)).foregroundStyle(Theme.text)
                 Spacer()
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle").foregroundStyle(selected ? Theme.accent : Theme.faint)
             }
-            .padding(12)
-            .background(selected ? Theme.active : Theme.chip, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(selected ? Theme.borderActive : Theme.borderStrong, lineWidth: 1))
+            .padding(.horizontal, 14).frame(minHeight: 42)
+            .background(selected ? Theme.hex(0x00CAD1, 0.08) : Self.fieldFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(selected ? Self.fieldFocus : Self.fieldLine, lineWidth: 1.5))
         }
         .buttonStyle(.plain)
     }
@@ -303,11 +385,19 @@ struct GroupInfoView: View {
     @State private var showQR = false
     @State private var manageInvites = false
     @State private var mediaCat: String?
+    @State private var inviting = false
+    /// Join requests that arrived live while Group Info is open (website freshIds): they keep the cyan edge.
+    @State private var freshIDs: Set<String> = []
+    @EnvironmentObject private var live: LiveConnection
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var token: String { store.session?.token ?? "" }
     private var me: String { store.session?.userID ?? "" }
     private var admin: Bool { group?.isAdmin ?? false }
     private var owner: Bool { group?.isOwner ?? false }
+    private var canInvite: Bool { admin || group?.can_invite == true }
+    /// Invite friends is offered when there is a link to share: a public group's permanent link, or the right to make invites.
+    private func showInvite(_ g: GrpInfo) -> Bool { (!(g.handle ?? "").isEmpty && g.privacy == "public") || canInvite }
     /// Telegram's member view (website .gip-tg, aa1cb91): everyone but the owner; the owner keeps the management panel.
     private var tg: Bool { !owner }
     private var groupLink: String? { group?.handle.flatMap { $0.isEmpty ? nil : "https://app.tradeflor.com/g/\($0)" } }
@@ -399,6 +489,18 @@ struct GroupInfoView: View {
             AddMembersSheet(groupID: groupID, groupName: group?.name ?? "", memberIDs: Set(members.map(\.user_id))).environmentObject(store)
         }
         .sheet(isPresented: $showQR) { GroupQRSheet(name: group?.name ?? "", link: groupLink ?? newLink ?? "") }
+        .sheet(isPresented: $inviting, onDismiss: { Task { await load() } }) {
+            if let g = group {
+                InviteFriendsSheet(groupID: groupID, groupName: g.name, handle: g.handle ?? "", isPublic: g.privacy == "public",
+                                   canInvite: canInvite, memberIDs: Set(members.map(\.user_id))).environmentObject(store)
+            }
+        }
+        // someone just asked to join this group: show it now, with the cyan edge (website tf-join-request, 3c68bec)
+        .onReceive(live.joinRequests) { d in
+            guard d["conversation_id"] == groupID, group?.isAdmin == true else { return }
+            if let u = d["user_id"], !u.isEmpty { freshIDs.insert(u) }
+            Task { requests = await APIClient.shared.grpJoinRequests(token: token, id: groupID) }
+        }
         .fullScreenCover(item: $cropping) { p in
             AvatarEditor(image: p.image) { jpeg in
                 Task { await run { try await APIClient.shared.grpUploadAvatar(token: token, id: groupID, jpeg: jpeg) } }
@@ -514,6 +616,7 @@ struct GroupInfoView: View {
             if tg { actionButton("rectangle.portrait.and.arrow.right", "gi.leave") { confirmLeave = true } }
             if owner { actionButton("slider.horizontal.3", "grp.manage") { manage = true } }
             Menu {
+                if showInvite(g) { Button { inviting = true } label: { Label("gx.inv.title", systemImage: "paperplane") } }
                 if admin || g.can_invite == true { Button { addingMembers = true } label: { Label("grp.add.members", systemImage: "person.badge.plus") } }
                 Button { addingToFolder = true } label: { Label("folder.addto", systemImage: "folder.badge.plus") }
                 if let h = g.handle, !h.isEmpty {
@@ -533,7 +636,50 @@ struct GroupInfoView: View {
     @ViewBuilder private func infoTab(_ g: GrpInfo) -> some View {
         identity(g)
         tiles(g)
+        if g.isAdmin && (!requests.isEmpty || g.join_approval == true) {
+            joinRequestsCard
+                .padding(.horizontal, tg ? 14 : 0)
+                .padding(.top, tg ? 12 : 0)
+        }
         if tg { memberBlocks(g) } else { ownerBlocks(g) }
+    }
+
+    // MARK: join requests (website .jr, 3c68bec): right under the tiles, owners and admins
+
+    private var joinRequestsCard: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "person.badge.plus").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.hex(0xE8B931))
+                    .frame(width: 30, height: 30)
+                    .background(Theme.hex(0xE8B931, 0.1), in: RoundedRectangle(cornerRadius: 10))
+                Text(NSLocalizedString("gx.jr.title", comment: "").uppercased()).font(.system(size: 13, weight: .bold)).tracking(0.78)
+                    .foregroundStyle(Theme.dyn(0xE8B931, 0x9A7410)).lineLimit(1)
+                Spacer(minLength: 4)
+                if requests.isEmpty {
+                    Text("gx.jr.none").font(.system(size: 12.5)).foregroundStyle(Theme.dyn(0x7F9AA7, 0x5F7686))
+                        .padding(.horizontal, 10).padding(.vertical, 3)
+                        .background(Theme.hex(0x78BED2, 0.07), in: Capsule())
+                } else {
+                    JoinRequestCountBadge(count: requests.count, animate: !reduceMotion)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 11)
+            TimelineView(.periodic(from: .now, by: 15)) { ctx in
+                VStack(spacing: 0) {
+                    ForEach(requests) { r in
+                        JoinRequestRow(token: token, request: r, now: ctx.date, live: freshIDs.contains(r.user_id), animate: !reduceMotion,
+                                       decide: { approve in
+                                           freshIDs.remove(r.user_id)
+                                           Task { await run { try await APIClient.shared.grpDecide(token: token, id: groupID, userID: r.user_id, approve: approve) } }
+                                       })
+                    }
+                }
+            }
+        }
+        .background(Theme.soulCard, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.soulCardBorder, lineWidth: 1))
+        .accessibilityElement(children: .contain)
     }
 
     // MARK: the member view (Telegram)
@@ -541,7 +687,8 @@ struct GroupInfoView: View {
     @ViewBuilder private func memberBlocks(_ g: GrpInfo) -> some View {
         let handle = g.handle ?? ""
         let desc = g.description.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !handle.isEmpty || !desc.isEmpty {
+        let invite = showInvite(g)
+        if !handle.isEmpty || !desc.isEmpty || invite {
             block {
                 if !handle.isEmpty {
                     HStack(spacing: 10) {
@@ -561,7 +708,23 @@ struct GroupInfoView: View {
                     }
                     .padding(.vertical, 12)
                 }
-                if !handle.isEmpty && !desc.isEmpty { hair() }
+                if invite {
+                    // Invite friends (website .gip-tg-invite, 9f7f25d): link, contacts, QR
+                    if !handle.isEmpty { hair() }
+                    Button { inviting = true } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "paperplane").font(.system(size: 17))
+                            Text("gx.inv.title").font(.system(size: 15, weight: .bold))
+                            Spacer(minLength: 4)
+                            Text("gx.inv.row.sub").font(.system(size: 12)).foregroundStyle(Theme.dyn(0x7F9AA7, 0x5F7686)).lineLimit(1)
+                        }
+                        .foregroundStyle(Theme.dyn(0x2FF0F3, 0x0097A5))
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                if (!handle.isEmpty || invite) && !desc.isEmpty { hair() }
                 if !desc.isEmpty {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(desc).font(.system(size: 15)).foregroundStyle(Theme.text).lineSpacing(3).textSelection(.enabled)
@@ -742,29 +905,7 @@ struct GroupInfoView: View {
         inviteBlock(g)
         management(g)
 
-        if g.join_approval ?? false {
-            block {
-                VStack(alignment: .leading, spacing: 0) {
-                    upperLabel(String(format: NSLocalizedString("grp.requests.n", comment: ""), requests.count)).padding(.vertical, 12)
-                    if requests.isEmpty {
-                        Text("grp.requests.none").font(.system(size: 13)).foregroundStyle(Theme.faint).padding(.bottom, 12)
-                    }
-                    ForEach(requests) { r in
-                        hair()
-                        HStack {
-                            Avatar(token: token, userID: r.user_id, avatarID: nil, title: r.display_name ?? r.username, size: 36)
-                            Text((r.display_name?.isEmpty == false ? r.display_name! : r.username)).foregroundStyle(Theme.text)
-                            Spacer()
-                            Button("grp.decline") { Task { await run { try await APIClient.shared.grpDecide(token: token, id: groupID, userID: r.user_id, approve: false) } } }
-                                .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.danger)
-                            Button("grp.approve") { Task { await run { try await APIClient.shared.grpDecide(token: token, id: groupID, userID: r.user_id, approve: true) } } }
-                                .font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
-                        }
-                        .padding(.vertical, 8)
-                    }
-                }
-            }
-        }
+        // join requests: the card right under the tiles (infoTab)
 
         block {
             Button { showAudit.toggle() } label: { gipRow("clock.arrow.circlepath", NSLocalizedString("grp.audit", comment: ""), chevron: true) }
@@ -1002,14 +1143,16 @@ struct GroupInfoView: View {
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.soulCardBorder, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        TFCard {
-            ForEach(Array(members.enumerated()), id: \.element.id) { i, m in
-                memberRow(m)
-                    .onTapGesture { if m.user_id != me { profileFor = MemberProfileRef(userID: m.user_id, username: m.username) } }
-                    .contextMenu { if admin && m.user_id != me && m.role != "owner" { memberMenu(m) } }
-                if i < members.count - 1 { Rectangle().fill(Theme.rowRule).frame(height: 1).padding(.leading, 62) }
-            }
+        // two cards (website .mgroup, 75bbc6f): Admins (the owner first), then Members · N; each A-Z
+        let sorted: [GrpMember] = members.sorted { (a: GrpMember, b: GrpMember) -> Bool in
+            let ra = Self.roleRank(a.role), rb = Self.roleRank(b.role)
+            if ra != rb { return ra < rb }
+            return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
         }
+        let staff = sorted.filter { $0.role == "owner" || $0.role == "admin" }
+        let plain = sorted.filter { $0.role != "owner" && $0.role != "admin" }
+        if !staff.isEmpty { memberGroup(NSLocalizedString("gx.m.admins", comment: ""), staff) }
+        if !plain.isEmpty { memberGroup(String(format: NSLocalizedString("gx.m.members", comment: ""), plain.count), plain) }
         if !members.isEmpty {
             Text("grp.members.hint").font(.system(size: 12)).foregroundStyle(Theme.faint)
         }
@@ -1029,23 +1172,83 @@ struct GroupInfoView: View {
         }
     }
 
-    private func memberRow(_ m: GrpMember) -> some View {
-        HStack(spacing: 12) {
-            Avatar(token: token, userID: m.user_id, avatarID: m.avatar_id, title: m.title, size: 40)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(m.user_id == me ? m.title + " " + NSLocalizedString("grp.you", comment: "") : m.title)
-                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
-                Text("@" + m.username).font(.system(size: 12)).foregroundStyle(Theme.faint)
-            }
-            Spacer()
-            if m.isMuted { Text("grp.muted").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.gold) }
-            if m.role != "member" {
-                Text(LocalizedStringKey(m.role == "owner" ? "grp.role.owner" : "grp.role.admin"))
-                    .font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 8).padding(.vertical, 3).overlay(Capsule().stroke(Theme.borderActive, lineWidth: 1))
+    private static func roleRank(_ role: String) -> Int { role == "owner" ? 0 : role == "admin" ? 1 : 2 }
+
+    /// One card of the Members tab (website .mgroup): a small uppercase title, then compact rows.
+    private func memberGroup(_ title: String, _ list: [GrpMember]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(title.uppercased()).font(.system(size: 11, weight: .bold)).tracking(0.88)
+                .foregroundStyle(Theme.dyn(0x6F93A3, 0x5F7686))
+                .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 6)
+            ForEach(Array(list.enumerated()), id: \.element.id) { i, m in
+                if i > 0 { Rectangle().fill(Theme.dyn(0x78BED2, 0xD3E1EA, 0.06, 1)).frame(height: 1) }
+                memberRow(m)
+                    .onTapGesture { if m.user_id != me { profileFor = MemberProfileRef(userID: m.user_id, username: m.username) } }
+                    .contextMenu { if memberHasActions(m) { memberMenu(m) } }
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.soulCard, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.soulCardBorder, lineWidth: 1))
+    }
+
+    private func memberHasActions(_ m: GrpMember) -> Bool { admin && m.user_id != me && m.role != "owner" }
+
+    /// A member row (website .mrow): avatar in a gold (owner) or cyan (admin) ring, name with " (you)" and the owner's crown,
+    /// @username under it, the role chip, and ⋯ for the member's actions.
+    private func memberRow(_ m: GrpMember) -> some View {
+        let isOwner = m.role == "owner", isAdmin = m.role == "admin"
+        let ring: Color = isOwner ? Theme.hex(0xE8B931) : isAdmin ? Theme.hex(0x2FF0F3) : .clear
+        let glow: Color = isOwner ? Theme.hex(0xE8B931, 0.45) : isAdmin ? Theme.hex(0x2FF0F3, 0.35) : .clear
+        let mutedText = Theme.dyn(0x7F9AA7, 0x5F7686)
+        return HStack(spacing: 11) {
+            Avatar(token: token, userID: m.user_id, avatarID: m.avatar_id, title: m.title, size: 36)
+                .frame(width: 38, height: 38)
+                .overlay(Circle().stroke(ring, lineWidth: 2).shadow(color: glow, radius: isOwner ? 6 : 5))
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    (Text(m.title).font(.system(size: 14.5, weight: .semibold)).foregroundColor(Theme.text)
+                     + (m.user_id == me ? Text(" " + NSLocalizedString("grp.you", comment: "")).font(.system(size: 14.5, weight: .medium)).foregroundColor(mutedText) : Text("")))
+                        .lineLimit(1)
+                    if isOwner {
+                        Image(systemName: "crown.fill").font(.system(size: 11)).foregroundStyle(Theme.hex(0xE8B931))
+                            .shadow(color: Theme.hex(0xE8B931, 0.6), radius: 3)
+                    }
+                }
+                Text("@" + m.username).font(.system(size: 12)).foregroundStyle(mutedText).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if m.isMuted {
+                Text("grp.muted").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x9FB2BB))
+                    .padding(.horizontal, 9).padding(.vertical, 3).background(Theme.hex(0x78BED2, 0.1), in: Capsule())
+            }
+            if isOwner {
+                Text("grp.role.owner").font(.system(size: 11, weight: .heavy)).tracking(0.33).foregroundStyle(Theme.hex(0x2B1D00))
+                    .padding(.horizontal, 9).padding(.vertical, 3)
+                    .background(LinearGradient(colors: [Theme.hex(0xFFD76A), Theme.hex(0xE8B931)], startPoint: .topLeading, endPoint: .bottomTrailing), in: Capsule())
+                    .shadow(color: Theme.hex(0xE8B931, 0.35), radius: 5)
+            } else if isAdmin {
+                HStack(spacing: 4) {
+                    Image(systemName: "shield.fill").font(.system(size: 9.5, weight: .bold))
+                    Text("grp.role.admin").font(.system(size: 11, weight: .heavy)).tracking(0.33)
+                }
+                .foregroundStyle(Theme.hex(0x032229))
+                .padding(.horizontal, 9).padding(.vertical, 3)
+                .background(LinearGradient(colors: [Theme.hex(0x2FF0F3), Theme.hex(0x08A8B8)], startPoint: .topLeading, endPoint: .bottomTrailing), in: Capsule())
+            }
+            if memberHasActions(m) {
+                Menu { memberMenu(m) } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 14, weight: .bold)).foregroundStyle(mutedText)
+                        .frame(width: 30, height: 30)
+                        .background(Theme.hex(0x78BED2, 0.06), in: Circle())
+                        .contentShape(Circle())
+                }
+                .accessibilityLabel(Text("grp.more"))
+            }
+        }
+        .padding(.leading, 14).padding(.trailing, 10).padding(.vertical, 7)
+        .frame(minHeight: 52)
         .contentShape(Rectangle())
     }
 

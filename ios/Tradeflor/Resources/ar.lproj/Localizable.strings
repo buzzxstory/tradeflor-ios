@@ -1458,3 +1458,28 @@
 "vp.seek" = "الموضع في الفيديو";
 "qx.focus.former" = "عضو سابق";
 "chat.upload.cancel" = "إلغاء الإرسال";
+
+/* groups: invite friends, join requests, members, edit */
+"gx.inv.title" = "دعوة الأصدقاء";
+"gx.inv.row.sub" = "رابط، جهات اتصال، رمز QR";
+"gx.inv.placeholder" = "يُنشأ رابط الدعوة عند المشاركة";
+"gx.inv.qr" = "رمز QR";
+"gx.inv.contacts" = "أرسل إلى جهات اتصالك";
+"gx.inv.search" = "ابحث في جهات الاتصال";
+"gx.inv.send" = "إرسال";
+"gx.inv.sent" = "أُرسلت ✓";
+"gx.inv.loading" = "جارٍ تحميل جهات اتصالك…";
+"gx.inv.nomatch" = "لا توجد جهة اتصال مطابقة.";
+"gx.inv.empty" = "لا توجد جهات اتصال بعد. انسخ الرابط أو شاركه بدلاً من ذلك.";
+"gx.inv.private" = "هذه المجموعة خاصة: يمكن لمشرفيها فقط دعوة الأشخاص.";
+"gx.inv.msg" = "انضم إلى \"%@\" على Tradeflor 👋\n%@";
+"gx.inv.linkfail" = "تعذّر إنشاء رابط دعوة.";
+"gx.inv.sendfail" = "تعذّر إرسال الدعوة.";
+"gx.jr.title" = "طلبات الانضمام";
+"gx.jr.none" = "لا أحد بالانتظار";
+"gx.jr.now" = "الآن";
+"gx.jr.min" = "منذ %d دقيقة";
+"gx.jr.h" = "منذ %d ساعة";
+"gx.m.admins" = "المشرفون";
+"gx.m.members" = "الأعضاء · %d";
+"gx.edit.sub" = "حدّث تفاصيل مجموعتك";

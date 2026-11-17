@@ -1458,3 +1458,28 @@
 "vp.seek" = "Position in the video";
 "qx.focus.former" = "Former member";
 "chat.upload.cancel" = "Cancel sending";
+
+/* groups: invite friends, join requests, members, edit */
+"gx.inv.title" = "Invite friends";
+"gx.inv.row.sub" = "link, contacts, QR";
+"gx.inv.placeholder" = "An invitation link is made when you share";
+"gx.inv.qr" = "QR code";
+"gx.inv.contacts" = "Send to your contacts";
+"gx.inv.search" = "Search contacts";
+"gx.inv.send" = "Send";
+"gx.inv.sent" = "Sent ✓";
+"gx.inv.loading" = "Loading your contacts…";
+"gx.inv.nomatch" = "No contact matches.";
+"gx.inv.empty" = "No contacts yet. Copy or share the link instead.";
+"gx.inv.private" = "This group is private: only its admins can invite people.";
+"gx.inv.msg" = "Join \"%@\" on Tradeflor 👋\n%@";
+"gx.inv.linkfail" = "Could not make an invitation link.";
+"gx.inv.sendfail" = "Could not send the invitation.";
+"gx.jr.title" = "Join requests";
+"gx.jr.none" = "None waiting";
+"gx.jr.now" = "just now";
+"gx.jr.min" = "%d min ago";
+"gx.jr.h" = "%d h ago";
+"gx.m.admins" = "Admins";
+"gx.m.members" = "Members · %d";
+"gx.edit.sub" = "Update your group details";

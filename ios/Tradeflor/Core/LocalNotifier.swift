@@ -143,6 +143,8 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     private func joinRequested(_ d: [String: String]) async {
         guard let conv = d["conversation_id"] else { return }
         if Date().timeIntervalSince(refreshedAt) > 120 { await refresh() }
+        // the soft two-note chime, once per request, unless sounds are off (website preferences.tsx, 3c68bec)
+        if flag("notifications.sound") { JoinChime.playOnce(conversation: conv, user: d["user_id"] ?? "") }
         guard flag("notifications.enabled") else { return }
         let content = UNMutableNotificationContent()
         content.title = d["group"] ?? titles[conv] ?? NSLocalizedString("notify.group", comment: "")
