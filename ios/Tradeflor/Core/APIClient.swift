@@ -418,7 +418,12 @@ final class APIClient {
         case 200..<300: return
         case 401: throw APIError.badCredentials
         case 423: throw APIError.locked
-        case 429: throw APIError.rateLimited
+        case 429:
+            // the server's Retry-After (seconds): a waiting line never retries sooner (web sendRetryDelay)
+            if let ra = http.value(forHTTPHeaderField: "Retry-After"), let secs = Double(ra.trimmingCharacters(in: .whitespaces)) {
+                lastRetryAfter = secs
+            }
+            throw APIError.rateLimited
         case 403, 413:
             throw APIError.refused(String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
         default: throw APIError.server(status: http.statusCode)
@@ -658,6 +663,9 @@ final class APIClient {
     static func q(_ s: String) -> String {
         s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&=+?/"))) ?? s
     }
+
+    /// The last Retry-After the server sent with a 429 (seconds), read by the send line.
+    var lastRetryAfter: Double = 0
 
     let avatarCache: NSCache<NSString, NSData> = {
         let c = NSCache<NSString, NSData>()

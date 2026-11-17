@@ -42,10 +42,25 @@ enum MediaDrafts {
 }
 
 struct MediaSendSheet: View {
+    /// At most this many photos and videos at a time (website MediaSendSheet MAX_MEDIA, 34a8e2a).
+    static let maxItems = 30
+
     @State var items: [MediaDraft]
     let title: String
     let onSend: ([MediaDraft], _ hd: Bool) -> Void
     @Environment(\.dismiss) private var dismiss
+    /// "Up to 30 photos and videos at a time." when a pick went past the limit (website Attachments addMedia)
+    @State private var notice: String?
+
+    init(items: [MediaDraft], title: String, onSend: @escaping ([MediaDraft], _ hd: Bool) -> Void) {
+        _items = State(initialValue: Array(items.prefix(Self.maxItems)))
+        _notice = State(initialValue: items.count > Self.maxItems ? Self.limitText : nil)
+        self.title = title
+        self.onSend = onSend
+    }
+
+    private static var limitText: String { String(format: NSLocalizedString("gp2.media.max", comment: ""), maxItems) }
+    private var room: Int { max(0, Self.maxItems - items.count) }
     @State private var index = 0
     @State private var hd = false
     @State private var adding: [PhotosPickerItem] = []
@@ -65,17 +80,25 @@ struct MediaSendSheet: View {
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
+                if let notice {
+                    Text(notice).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(Color.white.opacity(0.15), in: Capsule())
+                        .padding(.top, 6)
+                }
                 strip
                 captionBar
             }
         }
         .preferredColorScheme(.dark)
-        .photosPicker(isPresented: $showAdd, selection: $adding, maxSelectionCount: 10, matching: .any(of: [.images, .videos]))
+        .photosPicker(isPresented: $showAdd, selection: $adding, maxSelectionCount: max(1, room), matching: .any(of: [.images, .videos]))
         .onChange(of: adding) { picked in
             guard !picked.isEmpty else { return }
             adding = []
             Task {
-                let more = await MediaDrafts.load(picked)
+                let loaded = await MediaDrafts.load(picked)
+                let more = Array(loaded.prefix(room))
+                notice = loaded.count > more.count ? Self.limitText : nil
                 items.append(contentsOf: more)
                 if !more.isEmpty { index = items.count - more.count }
             }
@@ -141,10 +164,13 @@ struct MediaSendSheet: View {
                             .overlay(RoundedRectangle(cornerRadius: 8).stroke(i == index ? Theme.hex(0x00D4DF) : .clear, lineWidth: 2))
                         }
                         .accessibilityLabel(Text(String(format: NSLocalizedString("media.item", comment: ""), i + 1, items.count)))
-                        if i == index && items.count > 1 {
+                        // the last one too: taking it out closes the screen (website remove(): no items -> onClose)
+                        if i == index {
                             Button {
                                 player?.pause(); player = nil
                                 items.remove(at: i)
+                                notice = nil
+                                if items.isEmpty { dismiss(); return }
                                 index = min(index, items.count - 1)
                             } label: {
                                 Image(systemName: "xmark.circle.fill").font(.system(size: 18)).foregroundStyle(.white, .black.opacity(0.7))
@@ -154,7 +180,7 @@ struct MediaSendSheet: View {
                         }
                     }
                 }
-                if items.count < 30 {
+                if items.count < Self.maxItems {
                     Button { showAdd = true } label: {
                         Image(systemName: "plus").font(.system(size: 20, weight: .semibold)).foregroundStyle(.white)
                             .frame(width: 56, height: 56).background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))

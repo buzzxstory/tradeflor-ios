@@ -83,6 +83,14 @@ struct ChatView: View {
     /// Text and voice waiting to leave, in writing order (one at a time per conversation).
     @State private var sendQueue: [String] = []
     @State private var queueRunning = false
+    /// The line's wait (rate limit / offline): Retry cuts it short (web lane.wake()).
+    @State private var queueWait: Task<Void, Never>?
+    /// Photos / videos / documents: automatic retries on a passing error (web: files keep their own timer).
+    @State private var fileRetries: [String: Int] = [:]
+    /// Group typing: everyone typing now, each with their own 3.5 s timer (web 86beee5).
+    @State private var typingUsers: [String: Date] = [:]
+    /// Rows on screen now: the floating date pill shows the day of the top one (groups, web 5b6f8e1).
+    @State private var visibleIDs: Set<String> = []
     /// "Select all" took the whole chat (every older page loaded first): Delete then also takes the call entries (web b9833d1).
     @State private var allPicked = false
     @State private var pickingAll = false
@@ -176,7 +184,7 @@ struct ChatView: View {
                         }
                         let rows = shown
                         let lookIDs = lookAlike
-                        let albums = Albums.runs(rows)
+                        let albums = Albums.runs(rows, isGroup: isGroup)
                         ForEach(Array(rows.enumerated()), id: \.element.id) { i, m in
                             if i == 0 || !sameDay(rows[i - 1], m) {
                                 DayDivider(date: m.date)
@@ -191,7 +199,7 @@ struct ChatView: View {
                             let asGroup = isGroup && roleOf(m.sender_id) == "owner"
                             MessageRow(message: m, mine: m.sender_id == me, myID: me, peerName: chat.title,
                                        senderName: isGroup && (m.sender_id != me || asGroup)
-                                           && (i == 0 || rows[i - 1].sender_id != m.sender_id)
+                                           && newBlock(rows, i)
                                            ? (asGroup ? chat.title : (memberNames[m.sender_id] ?? "")) : nil,
                                        onReply: { replyingTo = m; composerFocused = true },
                                        onReact: { e in Task { await react(m, e) } },
@@ -205,7 +213,7 @@ struct ChatView: View {
                                            highlighted: searchOpen && searchHits.indices.contains(searchIndex) && searchHits[searchIndex].id == m.id,
                                            roleTag: isGroup ? roleOf(m.sender_id) : nil,
                                            asGroup: asGroup,
-                                           senderAvatar: isGroup && !asGroup && m.sender_id != me && (i == 0 || rows[i - 1].sender_id != m.sender_id)
+                                           senderAvatar: isGroup && !asGroup && m.sender_id != me && newBlock(rows, i)
                                                ? AnyView(Avatar(token: token, userID: m.sender_id, avatarID: memberAvatars[m.sender_id], title: memberNames[m.sender_id] ?? "?", size: 34))
                                                : nil,
                                            avatarSlot: isGroup && !asGroup,
@@ -221,7 +229,9 @@ struct ChatView: View {
                                            select: { selecting = true; selected = [m.id] },
                                            toggleSelect: {
                                                guard m.kind != "call" else { return } // a call entry goes with "Select all" only
-                                               if selected.contains(m.id) { selected.remove(m.id) } else { selected.insert(m.id) }
+                                               // an album is selected (and unselected) with all its photos
+                                               let ids = albums.at[m.id]?.map(\.id) ?? [m.id]
+                                               if selected.contains(m.id) { ids.forEach { selected.remove($0) } } else { ids.forEach { selected.insert($0) } }
                                                allPicked = false
                                            },
                                            pin: { on in Task { await setPin(m, on) } },
@@ -245,13 +255,22 @@ struct ChatView: View {
                                            edit: canEdit(m) ? { startEdit(m) } : nil)) {
                                 if let album = albums.at[m.id] {
                                     AlbumGrid(token: token, photos: album, mine: m.sender_id == me,
-                                              state: m.sender_id == me ? receipt(album.last ?? m) : nil) { fid in viewing = ViewedPhoto(id: fid) }
+                                              state: m.sender_id == me ? receipt(album.last ?? m) : nil,
+                                              me: me,
+                                              actions: AlbumTileActions(
+                                                  reply: { p in replyingTo = p; composerFocused = true },
+                                                  react: { p, e in Task { await react(p, e) } },
+                                                  forward: restricted ? nil : { p in forwarding = p },
+                                                  save: restricted ? nil : { p in Task { await saveAttachment(p) } },
+                                                  delete: { p in deleteTargets = [p]; showDelete = true },
+                                                  select: { p in selecting = true; selected = Set(album.map(\.id)) })) { fid in viewing = ViewedPhoto(id: fid) }
                                 } else {
                                     messageContent(m)
                                 }
                             }
                             .id(m.id)
-                            .onAppear { seen(m.id) }
+                            .onAppear { seen(m.id); visibleIDs.insert(m.id) }
+                            .onDisappear { visibleIDs.remove(m.id) }
                             }
                         }
                         ForEach(pending) { p in
@@ -371,7 +390,7 @@ struct ChatView: View {
                                     .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
                                     .overlay(alignment: .topLeading) {
                                         if !unseenBelow.isEmpty {
-                                            Text("\(unseenBelow.count)").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
+                                            Text(unseenBelow.count > 99 ? "99+" : "\(unseenBelow.count)").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
                                                 .padding(.horizontal, 5).frame(minWidth: 20, minHeight: 20)
                                                 .background(Theme.hex(0x00C6C4), in: Capsule())
                                                 .scaleEffect(badgePop ? 1.2 : 1)
@@ -387,6 +406,18 @@ struct ChatView: View {
                     .onChange(of: unseenBelow.count) { _ in
                         withAnimation(.spring(response: 0.2, dampingFraction: 0.5)) { badgePop = true }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { withAnimation { badgePop = false } }
+                    }
+                }
+                .overlay(alignment: .top) {
+                    // the day of the top message, floating while a group is scrolled (web: sticky date in groups)
+                    if isGroup, toast == nil, let first = messages.first, !visibleIDs.contains(first.id),
+                       let top = messages.first(where: { visibleIDs.contains($0.id) }), let d = top.date {
+                        Text(DayLabel.text(d)).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(Theme.surface.opacity(0.95), in: Capsule())
+                            .padding(.top, 8)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
                     }
                 }
                 .overlay(alignment: .top) {
@@ -481,11 +512,15 @@ struct ChatView: View {
         }
         .onReceive(live.typing) { t in
             guard t.conversation == chat.conversation_id, t.user != me else { return }
-            peerTypingUntil = Date().addingTimeInterval(5)
+            let until = Date().addingTimeInterval(isGroup ? 3.5 : 5)
+            peerTypingUntil = until
             typingUser = t.user
+            typingUsers[t.user] = until
             Task {
-                try? await Task.sleep(nanoseconds: 5_200_000_000)
-                if let u = peerTypingUntil, u <= Date() { peerTypingUntil = nil }
+                try? await Task.sleep(nanoseconds: UInt64((isGroup ? 3.6 : 5.2) * 1_000_000_000))
+                let now = Date()
+                typingUsers = typingUsers.filter { $0.value > now }
+                if let u = peerTypingUntil, u <= now { peerTypingUntil = nil }
             }
         }
         .confirmationDialog(Text(String(format: NSLocalizedString("chat.block.confirm", comment: ""), chat.title)),
@@ -607,13 +642,13 @@ struct ChatView: View {
         .sheet(isPresented: $showLocationSheet) {
             ShareLocationSheet { minutes in location.start(token: token, conversationID: chat.conversation_id, minutes: minutes) }
         }
-        .photosPicker(isPresented: $showPhotoPicker, selection: $picked, maxSelectionCount: 10, matching: .any(of: [.images, .videos]))
+        .photosPicker(isPresented: $showPhotoPicker, selection: $picked, maxSelectionCount: 30, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $showDocPicker, allowedContentTypes: [.item]) { result in
             if case let .success(url) = result { Task { await sendDocument(url) } }
         }
         .confirmationDialog(Text(LocalizedStringKey(deleteTargets.count > 1 ? "chat.delete.many" : "chat.delete.one")),
                             isPresented: $showDelete, titleVisibility: .visible) {
-            if !deleteTargets.isEmpty && deleteTargets.allSatisfy({ $0.sender_id == me }) {
+            if deleteTargets.contains(where: { $0.sender_id == me && !$0.isDeleted && $0.kind != "call" }) {
                 Button("chat.unsend", role: .destructive) { Task { await deleteSelected(everyone: true) } }
             }
             Button("chat.delete.me", role: .destructive) { Task { await deleteSelected(everyone: false) } }
@@ -668,7 +703,10 @@ struct ChatView: View {
             let saved = OutboxStore.load(account: me, conversation: chat.conversation_id).filter { s in !pending.contains { $0.id == s.id } }
             pending.append(contentsOf: saved)
             outboxLoaded = true
-            for p in saved.sorted(by: { $0.date < $1.date }) { await deliver(p) }
+            // texts and voice first, in writing order; a long upload never holds them back
+            for p in saved.sorted(by: { $0.date < $1.date }) where isLine(p) { sendQueue.append(p.id) }
+            for p in saved where !isLine(p) { Task { await deliver(p) } }
+            await runQueue()
         }
         .onReceive(live.messages) { m in
             guard m.conversation_id == chat.conversation_id else { return }
@@ -703,10 +741,13 @@ struct ChatView: View {
         .fullScreenCover(item: $reviewing) { batch in
             MediaSendSheet(items: batch.items, title: chat.title) { drafts, hd in
                 Task {
+                    // every preview shows at once (in order), then they leave side by side
+                    var ready: [PendingMessage] = []
                     for d in drafts {
-                        if let url = d.videoURL { await sendVideo(url, caption: d.caption) }
-                        else if let img = d.image { await sendPhoto(img, caption: d.caption, hd: hd) }
+                        if let url = d.videoURL { Task { await sendVideo(url, caption: d.caption) } }
+                        else if let img = d.image, let p = await preparePhoto(img, caption: d.caption, hd: hd) { ready.append(p) }
                     }
+                    for p in ready { Task { await deliver(p) } }
                 }
             }
         }
@@ -942,7 +983,8 @@ struct ChatView: View {
                         .accessibilityLabel(Text("location.share"))
                     TextField(LocalizedStringKey(isGroup ? "chat.placeholder.group" : "chat.placeholder"), text: $draft, axis: .vertical)
                         .onChange(of: draft) { v in
-                            guard !v.isEmpty, Date().timeIntervalSince(lastTypingSent) > 3 else { return }
+                            guard !v.trimmingCharacters(in: .whitespaces).isEmpty, editing == nil,
+                                  Date().timeIntervalSince(lastTypingSent) > 3 else { return }
                             lastTypingSent = Date()
                             live.sendTyping(conversationID: chat.conversation_id)
                         }
@@ -1304,6 +1346,23 @@ struct ChatView: View {
         } catch { flash("chat.action.failed") }
     }
 
+    /// A group's sender line and picture start again after another sender, a 5-minute pause or a new day (web fda47e1).
+    private func newBlock(_ rows: [Message], _ i: Int) -> Bool {
+        guard i > 0 else { return true }
+        let a = rows[i - 1], b = rows[i]
+        return a.sender_id != b.sender_id || ChatEdit.secs(b.created_at) - ChatEdit.secs(a.created_at) > 300 || !sameDay(a, b)
+            || a.kind == "notice" || a.kind == "call"
+    }
+
+    private func transient(_ error: Error) -> Bool {
+        if error is URLError { return true }
+        switch error as? APIError {
+        case .rateLimited?, .network?: return true
+        case .server(let status)?: return status >= 500
+        default: return false
+        }
+    }
+
     /// What a tap can select: every message, "This message was deleted" too; a call entry only goes with "Select all".
     private func selectable(_ m: Message) -> Bool { m.kind != "call" }
 
@@ -1345,15 +1404,8 @@ struct ChatView: View {
 
     /// Batches of 100 (the server's limit), 3 tries each; a batch that fails does not stop the others, every batch the
     /// server took leaves the screen at once, and what is left stays selected for Delete again (website b9833d1).
-    private func deleteSelected(everyone: Bool) async {
-        let asked = Set(deleteTargets.map(\.id))
-        var ids = deleteTargets.map(\.id)
-        // after "Select all" of the whole chat, the call entries go too: nothing is left behind
-        if !everyone && allPicked && messages.filter(selectable).allSatisfy({ asked.contains($0.id) }) {
-            ids += messages.filter { $0.kind == "call" && !asked.contains($0.id) }.map(\.id)
-        }
-        deleteTargets = []
-        if ids.count > 100 { flashText(String(format: NSLocalizedString("select.deleting", comment: ""), ids.count)) }
+    /// Batches of 100, 3 tries each; returns the ids that could not be done.
+    private func inBatches(_ ids: [String], _ op: ([String]) async throws -> Void) async -> [String] {
         var failed: [String] = []
         var i = 0
         while i < ids.count {
@@ -1361,21 +1413,42 @@ struct ChatView: View {
             i += 100
             var done = false
             for attempt in 0..<3 where !done {
-                do {
-                    if everyone { try await APIClient.shared.chDeleteBatch(token: token, ids: chunk) }
-                    else { try await APIClient.shared.chHideBatch(token: token, ids: chunk) }
-                    done = true
-                } catch {
+                do { try await op(chunk); done = true } catch {
                     if attempt < 2 { try? await Task.sleep(nanoseconds: UInt64(600_000_000 * (attempt + 1))) }
                 }
             }
-            if done {
-                if !everyone { let gone = Set(chunk); messages.removeAll { gone.contains($0.id) } }
-            } else {
-                failed += chunk
-            }
+            if !done { failed += chunk }
         }
-        if everyone { await loadNewest(quiet: true) }
+        return failed
+    }
+
+    private func deleteSelected(everyone: Bool) async {
+        let targets = deleteTargets
+        let asked = Set(targets.map(\.id))
+        var ids = targets.map(\.id)
+        // after "Select all" of the whole chat, the call entries go too: nothing is left behind
+        if allPicked && messages.filter(selectable).allSatisfy({ asked.contains($0.id) }) {
+            ids += messages.filter { $0.kind == "call" && !asked.contains($0.id) }.map(\.id)
+        }
+        deleteTargets = []
+        if ids.count > 100 { flashText(String(format: NSLocalizedString("select.deleting", comment: ""), ids.count)) }
+        var failed: [String] = []
+        if everyone {
+            // unsend only my own messages that are still there; then everything chosen leaves my view too (web b9833d1)
+            let mine = targets.filter { $0.sender_id == me && !$0.isDeleted && $0.kind != "call" }.map(\.id)
+            failed += await inBatches(mine) { try await APIClient.shared.chDeleteBatch(token: token, ids: $0) }
+        }
+        let hideFailed = await inBatches(ids.filter { !failed.contains($0) }) { chunk in
+            try await APIClient.shared.chHideBatch(token: token, ids: chunk)
+            let gone = Set(chunk)
+            messages.removeAll { gone.contains($0.id) } // every batch the server took leaves the screen at once
+        }
+        failed += hideFailed
+        let done = ids.count - Set(failed).count
+        if done > 0 && failed.isEmpty {
+            flashText(done == 1 ? NSLocalizedString("select.deleted.one", comment: "")
+                                : String(format: NSLocalizedString("select.deleted.n", comment: ""), done))
+        }
         allPicked = false
         if failed.isEmpty {
             selecting = false
@@ -1506,7 +1579,8 @@ struct ChatView: View {
         draft = ""
         guard text != m.body else { return }
         do {
-            merge([try await APIClient.shared.editMessage(token: token, messageID: m.id, body: text)])
+            merge([try await APIClient.shared.editMessage(token: token, messageID: m.id, body: text,
+                                                          mentions: isGroup ? MentionsBuilder.build(text, members: members) : [])])
         } catch APIError.refused(let why) {
             flashText(why.isEmpty ? NSLocalizedString("chat.edit.failed", comment: "") : why)
         } catch APIError.server(status: 409) {
@@ -1533,6 +1607,7 @@ struct ChatView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if let e = editing { await saveEdit(e, text); return }
+        unreadMarkID = nil // the "N unread messages" line goes once I write here (web 5b6f8e1)
         draft = ""
         var p = PendingMessage(id: UUID().uuidString.lowercased(), body: text, date: Date())
         p.replyTo = replyingTo?.id ?? ""
@@ -1644,8 +1719,19 @@ struct ChatView: View {
     private var subtitle: String? {
         if let until = peerTypingUntil, until > Date() {
             // groups: "<name> is typing…" (website 86beee5)
-            if isGroup, let u = typingUser, let name = memberNames[u], !name.isEmpty {
-                return String(format: NSLocalizedString("chat.typing.name", comment: ""), name)
+            if isGroup {
+                let now = Date()
+                let names = typingUsers.filter { $0.value > now }.keys.sorted()
+                    .map { id in members.first { $0.user_id == id }?.username ?? memberNames[id] ?? "" }.filter { !$0.isEmpty }
+                switch names.count {
+                case 0: break
+                case 1: return String(format: NSLocalizedString("chat.typing.name", comment: ""), names[0])
+                case 2: return String(format: NSLocalizedString("chat.typing.two", comment: ""), names[0], names[1])
+                default: return String(format: NSLocalizedString("chat.typing.many", comment: ""), names.count)
+                }
+                if let u = typingUser, let name = memberNames[u], !name.isEmpty {
+                    return String(format: NSLocalizedString("chat.typing.name", comment: ""), name)
+                }
             }
             return NSLocalizedString("chat.typing", comment: "")
         }
@@ -1718,14 +1804,19 @@ struct ChatView: View {
     }
 
     private func sendPhoto(_ img: UIImage, caption: String = "", hd: Bool = false) async {
+        if let p = await preparePhoto(img, caption: caption, hd: hd) { await deliver(p) }
+    }
+
+    /// The photo's pending row, shown at once (dimmed, with its ring), ready to be sent.
+    private func preparePhoto(_ img: UIImage, caption: String, hd: Bool) async -> PendingMessage? {
         // Encoding a 12 MP photo takes a moment: off the main thread.
         let encoded = await Task.detached(priority: .userInitiated) { ImagePrep.jpeg(from: img, hd: hd) }.value
-        guard let jpeg = encoded else { return }
+        guard let jpeg = encoded else { return nil }
         let preview = UIImage(data: jpeg) ?? img
         let p = PendingMessage(id: UUID().uuidString.lowercased(), body: caption.trimmingCharacters(in: .whitespacesAndNewlines),
                                date: Date(), image: preview, jpeg: jpeg)
         pending.append(p)
-        await deliver(p)
+        return p
     }
 
     /// Same idempotency key on every retry, so a message that did reach the server is never stored twice.
@@ -1744,6 +1835,7 @@ struct ChatView: View {
             let order = Dictionary(pending.map { ($0.id, $0.date) }, uniquingKeysWith: { a, _ in a })
             sendQueue.sort { (order[$0] ?? .distantFuture) < (order[$1] ?? .distantFuture) }
             if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = false }
+            if queueRunning { queueWait?.cancel() } // Retry: stop waiting and try now
             await runQueue()
         } else {
             _ = await sendOne(p, queued: false)
@@ -1764,9 +1856,15 @@ struct ChatView: View {
                 sendQueue.removeAll { $0 == id }
                 backoff = 1
             case .wait:
-                try? await Task.sleep(nanoseconds: backoff * 1_000_000_000)
+                // never sooner than the server's Retry-After; a little jitter so devices don't retry together
+                let after = APIClient.shared.lastRetryAfter
+                APIClient.shared.lastRetryAfter = 0
+                let secs = max(after, Double(backoff) * Double.random(in: 0.8...1.2))
+                let t = Task { try? await Task.sleep(nanoseconds: UInt64(secs * 1_000_000_000)) }
+                queueWait = t
+                await t.value
+                queueWait = nil
                 backoff = min(backoff * 2, 30)
-                if Task.isCancelled { return }
             }
         }
     }
@@ -1804,11 +1902,23 @@ struct ChatView: View {
                 defer { uploads[p.id] = nil }
                 m = try await t.value
             } else {
-                m = try await APIClient.shared.sendText(token: token, conversationID: chat.conversation_id,
-                                                        body: p.body, key: p.id, replyTo: p.replyTo)
+                let mentions = isGroup ? MentionsBuilder.build(p.body, members: members) : []
+                if mentions.isEmpty {
+                    m = try await APIClient.shared.sendText(token: token, conversationID: chat.conversation_id,
+                                                            body: p.body, key: p.id, replyTo: p.replyTo)
+                } else {
+                    m = try await APIClient.shared.chSendText(token: token, conversationID: chat.conversation_id, body: p.body,
+                                                              replyTo: p.replyTo, mentions: mentions, key: p.id)
+                }
+            }
+            // a sent photo shows from my own copy at once, at its shape (web seedPhoto)
+            if let fid = m.file_id, let jpeg = p.jpeg {
+                APIClient.shared.seedFile(fileID: fid, data: jpeg)
+                if let img = p.image { MediaDims.shared.set(fid, img.size) }
             }
             merge([m])
             pending.removeAll { $0.id == p.id }
+            fileRetries[p.id] = nil
             if let f = p.file { try? FileManager.default.removeItem(at: f) } // sent: this device's copy is no longer needed
             return .sent
         } catch APIError.badCredentials {
@@ -1829,6 +1939,16 @@ struct ChatView: View {
                 }
             }
             if queued, (error as? URLError) != nil { return .wait }
+            if !queued && transient(error) && (fileRetries[p.id] ?? 0) < 4 {
+                // a photo / video / document on a passing error: tried again by itself (4, 8, 16, 30 s), same key
+                let n = fileRetries[p.id] ?? 0
+                fileRetries[p.id] = n + 1
+                Task {
+                    try? await Task.sleep(nanoseconds: UInt64(min(30, 4 << n)) * 1_000_000_000)
+                    if let again = pending.first(where: { $0.id == p.id }), !cancelledUploads.contains(p.id) { await deliver(again) }
+                }
+                return .wait
+            }
             if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = true }
             if case let .refused(why)? = error as? APIError, !why.isEmpty { problem = why }
             return .failed
@@ -1842,8 +1962,13 @@ struct ChatView: View {
         switch m.kind {
         case "text": return m.body
         case "voice": return "🎤 " + NSLocalizedString("chats.kind.voice", comment: "")
-        case "image": return "🖼 " + NSLocalizedString("chats.kind.image", comment: "")
-        case "file": return "📎 " + (m.file_name ?? NSLocalizedString("chats.kind.file", comment: ""))
+        case "image": return m.body.isEmpty ? "📷 " + NSLocalizedString("chats.kind.image", comment: "") : "📷 " + m.body
+        case "file":
+            let mime = m.file_mime ?? ""
+            if VideoNotePrep.isNote(m) { return NSLocalizedString("note.video", comment: "") }
+            if mime.hasPrefix("video/") { return m.body.isEmpty ? "🎬 " + NSLocalizedString("chats.kind.video", comment: "") : "🎬 " + m.body }
+            if mime.hasPrefix("audio/") { return m.body.isEmpty ? "🎵 " + NSLocalizedString("chats.kind.audio", comment: "") : "🎵 " + m.body }
+            return "📄 " + (m.file_name ?? NSLocalizedString("chats.kind.file", comment: ""))
         default: return m.body.isEmpty ? NSLocalizedString("chat.unsupported", comment: "") : m.body
         }
     }
@@ -2050,7 +2175,7 @@ struct Bubble: View {
     }
 
     private var card: some View {
-        let cut = faded || expanded ? nil : ReadMore.cut(text)
+        let cut = faded || expanded || ReadMore.opened.contains(text.hashValue) ? nil : ReadMore.cut(text)
         let arabic = TextLook.isArabic(text)
         var shown = TextLook.linked(cut ?? text)
         if cut != nil {
@@ -2074,7 +2199,11 @@ struct Bubble: View {
                     .textSelection(.enabled)
                     .multilineTextAlignment(arabic ? .trailing : .leading)
                     .environment(\.openURL, OpenURLAction { url in
-                        if url.scheme == "tfreadmore" { withAnimation(.easeOut(duration: 0.15)) { expanded = true }; return .handled }
+                        if url.scheme == "tfreadmore" {
+                            ReadMore.opened.insert(text.hashValue)
+                            withAnimation(.easeOut(duration: 0.15)) { expanded = true }
+                            return .handled
+                        }
                         parentOpen(url)
                         return .handled
                     })

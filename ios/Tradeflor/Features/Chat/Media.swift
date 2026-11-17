@@ -82,6 +82,15 @@ struct RemoteImage: View {
     @State private var failed = false
     @State private var attempt = 0
 
+    /// A picture already in memory shows at once (no spinner flash), as on the web.
+    init(token: String, fileID: String, thumb: Bool = true, contentMode: ContentMode = .fill) {
+        self.token = token
+        self.fileID = fileID
+        self.thumb = thumb
+        self.contentMode = contentMode
+        _image = State(initialValue: APIClient.shared.cachedFile(fileID: fileID, thumb: thumb).flatMap { UIImage(data: $0) })
+    }
+
     var body: some View {
         ZStack {
             if let image {
@@ -102,6 +111,7 @@ struct RemoteImage: View {
             }
         }
         .task(id: fileID + (thumb ? "t" : "f") + String(attempt)) {
+            if image != nil && attempt == 0 { return }
             for wait in [0, 1_000_000_000, 3_000_000_000] as [UInt64] {
                 if wait > 0 { try? await Task.sleep(nanoseconds: wait) }
                 if Task.isCancelled { return }

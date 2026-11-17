@@ -4,10 +4,24 @@ import Foundation
 // the server answers 409 when it is too late, 403 when it may not be edited. Everyone sees the new text live (the
 // usual "message" event carries it, with edited_at).
 extension APIClient {
-    func editMessage(token: String, messageID: String, body: String) async throws -> Message {
+    func editMessage(token: String, messageID: String, body: String, mentions: [[String: Any]] = []) async throws -> Message {
         let id = messageID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? messageID
-        let data = try await postJSON("messages/\(id)/edit", token: token, body: ["Body": body])
+        var payload: [String: Any] = ["Body": body]
+        if !mentions.isEmpty { payload["Mentions"] = mentions }
+        let data = try await postJSON("messages/\(id)/edit", token: token, body: payload)
         do { return try JSONDecoder().decode(Message.self, from: data) } catch { throw APIError.decoding }
+    }
+}
+
+extension APIClient {
+    /// A photo I just sent shows at once from my own copy (web seedPhoto): no spinner after the upload.
+    func seedFile(fileID: String, data: Data) {
+        avatarCache.setObject(data as NSData, forKey: "\(fileID)/t" as NSString, cost: data.count)
+    }
+
+    /// What is already in memory, without a request (a cached picture shows at once, no spinner).
+    func cachedFile(fileID: String, thumb: Bool) -> Data? {
+        avatarCache.object(forKey: "\(fileID)/\(thumb ? "t" : "f")" as NSString) as Data?
     }
 }
 
@@ -29,5 +43,24 @@ enum ChatEdit {
         guard let raw = m.mentions, let d = raw.data(using: .utf8),
               let list = try? JSONSerialization.jsonObject(with: d) as? [[String: Any]] else { return false }
         return list.contains { ($0["user_id"] as? String) == me || ($0["user_id"] as? String) == "all" }
+    }
+}
+
+
+/// Mentions from the @usernames written in a group message (server Mentions: [{user_id, username}]).
+enum MentionsBuilder {
+    static func build(_ text: String, members: [GroupMember]) -> [[String: Any]] {
+        guard text.contains("@") else { return [] }
+        var out: [[String: Any]] = []
+        var seen: Set<String> = []
+        let byName = Dictionary(members.map { ($0.username.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
+        for word in text.split(whereSeparator: { $0.isWhitespace || $0 == "," || $0 == "." || $0 == "!" || $0 == "?" }) where word.hasPrefix("@") {
+            let name = word.dropFirst().lowercased()
+            if let m = byName[name], !seen.contains(m.user_id) {
+                seen.insert(m.user_id)
+                out.append(["user_id": m.user_id, "username": m.username])
+            }
+        }
+        return out
     }
 }

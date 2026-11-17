@@ -191,9 +191,11 @@ struct MessageRow<Content: View>: View {
                 .onTapGesture { if !options.selecting && !options.asGroup { actions.openSender?() } }
             if let h = options.handle { Text("@" + h).font(.caption2).foregroundStyle(Theme.faint) }
             if let r = options.roleTag, !options.asGroup {
-                let c = r == "owner" ? Theme.gold : Theme.hex(0xC3B2FF)
-                Text(LocalizedStringKey("group.role." + r)).font(.system(size: 9.5, weight: .bold)).foregroundStyle(c)
-                    .padding(.horizontal, 6).padding(.vertical, 1).overlay(Capsule().stroke(c.opacity(0.45), lineWidth: 1))
+                // in the card, as on the web: lowercase, 11 pt, medium, lavender (#c3b2ff)
+                Text(NSLocalizedString("group.role." + r, comment: "").lowercased())
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.hex(0xC3B2FF))
+                    .padding(.horizontal, 6).padding(.vertical, 1)
+                    .overlay(Capsule().stroke(Theme.hex(0xC3B2FF, 0.45), lineWidth: 1))
             }
         })
     }

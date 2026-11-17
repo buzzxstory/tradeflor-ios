@@ -25,6 +25,7 @@ struct GroupsListView: View {
     @State private var problem: String?
 
     private var token: String { store.session?.token ?? "" }
+    private var me: String { store.session?.userID ?? "" }
 
     private func isUnread(_ g: GroupSummary) -> Bool { g.unread_count > 0 || (prefs[g.conversation_id]?.marked_unread ?? false) }
     private var archivedCount: Int { groups.filter { prefs[$0.conversation_id]?.archived ?? false }.count }
@@ -221,7 +222,7 @@ struct GroupsListView: View {
                     }
                 }
                 HStack(spacing: 5) {
-                    Text(preview(g)).font(.system(size: 15)).foregroundStyle(Theme.muted).lineLimit(1)
+                    previewLine(g)
                     Spacer(minLength: 6)
                     if muted { Image(systemName: "bell.slash.fill").font(.system(size: 11)).foregroundStyle(Theme.faint) }
                     if mentions > 0 {
@@ -282,10 +283,29 @@ struct GroupsListView: View {
         Button(role: .destructive) { leaving = g } label: { Label("grp.leave", systemImage: "rectangle.portrait.and.arrow.right") }
     }
 
-    private func preview(_ g: GroupSummary) -> String {
-        if g.last_message.isEmpty { return String(format: NSLocalizedString("groups.members", comment: ""), g.member_count) }
-        if let n = g.last_sender_name, !n.isEmpty { return "\(n): \(g.last_message)" }
-        return g.last_message
+    /// The second line, as a private chat's (website GroupsView + chatPreview, b6c3ae8 / 63f2616): my own message shows its
+    /// ticks, someone else's starts with "Name: "; then the type glyph (photo, video, voice, file, call) and WhatsApp words
+    /// ("Voice message (0:10)", "Video", "Audio"), never a bare file name. ChatRow's helpers do the wording.
+    @ViewBuilder private func previewLine(_ g: GroupSummary) -> some View {
+        if g.last_message.isEmpty && g.last_message_at <= 0 {
+            Text(String(format: NSLocalizedString("groups.members", comment: ""), g.member_count))
+                .font(.system(size: 15)).foregroundStyle(Theme.muted).lineLimit(1)
+        } else {
+            let c = g.previewConversation(me: me)
+            let row = ChatRow(chat: c, token: token)
+            let status = row.ownStatus
+            // my own message: its ticks instead of a name; someone else's: their name first (website: !mine && !p.status)
+            let who = !c.last_message_mine && status == nil && !(g.last_sender_name ?? "").isEmpty ? (g.last_sender_name ?? "") + ": " : ""
+            if let st = status { ChatRow.ticks(st) }
+            if let icon = row.previewIcon {
+                // the sender's name comes before the glyph (website .conv-preview-who, then PreviewGlyph)
+                if !who.isEmpty { Text(who).font(.system(size: 15)).foregroundStyle(Theme.muted).lineLimit(1).fixedSize() }
+                Image(systemName: icon).font(.system(size: 12)).foregroundStyle(row.callMissed ? Theme.danger : Theme.accent)
+                Text(row.preview).font(.system(size: 15)).foregroundStyle(row.callMissed ? Theme.danger : Theme.muted).lineLimit(1)
+            } else {
+                Text(who + row.preview).font(.system(size: 15)).foregroundStyle(Theme.muted).lineLimit(1)
+            }
+        }
     }
 
     private func change(_ work: @escaping () async throws -> Void) {
@@ -406,15 +426,27 @@ struct InviteJoinView: View {
                         dismiss()
                         if let id = p.conversation_id { onOpen(id) }
                     }
+                } else if sent || (p.request_pending ?? false) {
+                    // the request is on its way (website InviteJoin, 596067a): a clear note and one Done button, no dead "Request sent"
+                    VStack(spacing: 4) {
+                        Text("gp2.inv.sent").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.text)
+                        Text("gp2.inv.sent.note").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                    }
+                    .multilineTextAlignment(.center)
+                    primary("id.done") { dismiss() }
                 } else if p.needs_approval ?? false {
                     Text("grp.approval.note").font(.system(size: 14)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
-                    primary((sent || (p.request_pending ?? false)) ? "grp.request.sent" : "grp.request.join") { Task { await join() } }
-                        .disabled(sent || (p.request_pending ?? false))
+                    primary(busy ? "grp.joining" : "grp.request.join") { Task { await join() } }.disabled(busy)
                 } else {
                     primary(busy ? "grp.joining" : "grp.join") { Task { await join() } }.disabled(busy)
                 }
                 if let problem { Text(problem).font(.system(size: 13)).foregroundStyle(Theme.danger).multilineTextAlignment(.center) }
-                Button("grp.notnow") { dismiss() }.foregroundStyle(Theme.faint).padding(.top, 4)
+                // a second button only while there is still a choice: "Close" for a member, "Not now" before joining
+                if p.already_member ?? false {
+                    Button("chat.close") { dismiss() }.foregroundStyle(Theme.faint).padding(.top, 4)
+                } else if !(sent || (p.request_pending ?? false)) {
+                    Button("grp.notnow") { dismiss() }.foregroundStyle(Theme.faint).padding(.top, 4).disabled(busy)
+                }
                 Spacer()
             } else {
                 Spacer()

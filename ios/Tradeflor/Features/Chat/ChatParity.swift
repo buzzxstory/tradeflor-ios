@@ -36,6 +36,8 @@ extension EnvironmentValues {
 /// characters / 12 lines, cut at a space or line break), then "… Read more".
 enum ReadMore {
     static let maxChars = 700, keepChars = 560, maxLines = 16, keepLines = 12
+    /// Texts opened with Read more stay open while the app runs (web: a module-level set), also when a row is reused.
+    static var opened: Set<Int> = []
 
     static func cut(_ text: String) -> String? {
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
@@ -108,7 +110,7 @@ enum Albums {
         var hidden: Set<String> = []         // the others (drawn inside the album)
     }
 
-    static func runs(_ rows: [Message]) -> Runs {
+    static func runs(_ rows: [Message], isGroup: Bool = false) -> Runs {
         var out = Runs()
         var run: [Message] = []
         func close() {
@@ -122,6 +124,7 @@ enum Albums {
         for m in rows {
             let ok = m.kind == "image" && !m.isDeleted && m.file_id != nil && (m.reply_to_id ?? "").isEmpty
                 && m.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !(isGroup && m.forwarded == true) // groups leave forwarded photos out of an album (web 8f4a9e3)
             guard ok else { close(); continue }
             if let last = run.last {
                 let t = ChatEdit.secs(m.created_at), lt = ChatEdit.secs(last.created_at)
@@ -155,6 +158,16 @@ struct MediaTimeChip: View {
     }
 }
 
+/// What each photo of an album can do: it stays its own message (menu, reactions), as on the web.
+struct AlbumTileActions {
+    var reply: (Message) -> Void = { _ in }
+    var react: (Message, String) -> Void = { _, _ in }
+    var forward: ((Message) -> Void)?
+    var save: ((Message) -> Void)?
+    var delete: (Message) -> Void = { _ in }
+    var select: (Message) -> Void = { _ in }
+}
+
 /// An album (website 66-albums.css): 2 side by side (4:5), 3 = one wide (2:1) + two, 4+ = 2×2 with "+N" on the last;
 /// one time, on the last square shown.
 struct AlbumGrid: View {
@@ -162,6 +175,8 @@ struct AlbumGrid: View {
     let photos: [Message]
     let mine: Bool
     let state: Bubble.Delivery?
+    var me = ""
+    var actions = AlbumTileActions()
     let onOpen: (String) -> Void
 
     private var width: CGFloat { min(330, UIScreen.main.bounds.width * 0.8) }
@@ -217,8 +232,36 @@ struct AlbumGrid: View {
         .overlay(alignment: .bottomTrailing) {
             if last { MediaTimeChip(date: photos.last?.date, state: state).padding(6) }
         }
+        .overlay(alignment: .bottomLeading) {
+            // this photo's own reactions
+            let rs = m.reactionList(me: me)
+            if !rs.isEmpty {
+                HStack(spacing: 3) {
+                    ForEach(rs, id: \.emoji) { r in
+                        Text(r.count > 1 ? "\(r.emoji) \(r.count)" : r.emoji).font(.caption2)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Theme.hex(r.mine ? 0x0F3A45 : 0x0D2A35), in: Capsule())
+                            .overlay(Capsule().stroke(Theme.soul, lineWidth: 1.5))
+                            .onTapGesture { actions.react(m, r.emoji) }
+                    }
+                }
+                .padding(5)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture { if let f = m.file_id { onOpen(f) } }
+        .contextMenu {
+            // each photo stays its own message
+            ControlGroup {
+                ForEach(["❤️", "🔥", "👏", "👍", "😂", "😮", "😡"], id: \.self) { e in Button(e) { actions.react(m, e) } }
+            }
+            Button { actions.reply(m) } label: { Label("chat.reply", systemImage: "arrowshape.turn.up.left") }
+            if let f = actions.forward { Button { f(m) } label: { Label("chat.forward", systemImage: "arrowshape.turn.up.right") } }
+            if let s = actions.save { Button { s(m) } label: { Label("chat.save.as", systemImage: "square.and.arrow.down") } }
+            Button { actions.select(m) } label: { Label("chat.select", systemImage: "checkmark.circle") }
+            Divider()
+            Button(role: .destructive) { actions.delete(m) } label: { Label("chat.delete", systemImage: "trash") }
+        }
     }
 }
 
@@ -227,7 +270,7 @@ enum UnreadMark {
     static func startID(_ list: [Message], unread: Int, me: String) -> String? {
         guard unread > 0, !list.isEmpty else { return nil }
         var seen = 0
-        for m in list.reversed() where m.sender_id != me && m.kind != "notice" {
+        for m in list.reversed() where m.sender_id != me {
             seen += 1
             if seen == unread { return m.id }
         }

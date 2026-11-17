@@ -1683,3 +1683,14 @@
 "ls.summary.online" = "%@, online: Everyone";
 "cv4.block.msg" = "@%@ won't be able to message or call you. You can unblock them later.";
 "cv4.err.chat.qr" = "The contact is saved, but the chat could not be opened. Tap Open Chat to try again.";
+
+/* audit fixes: chats */
+"chat.typing.two" = "%@ and %@ are typing…";
+"chat.typing.many" = "%d people are typing…";
+"select.deleted.one" = "Deleted 1 message";
+"select.deleted.n" = "Deleted %d messages";
+
+/* audit fixes: groups */
+"gp2.inv.sent" = "Request sent ✓";
+"gp2.inv.sent.note" = "The group's admins will review it; you will see the group in your list once approved.";
+"gp2.media.max" = "Up to %d photos and videos at a time.";

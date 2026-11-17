@@ -223,9 +223,29 @@ struct GroupSummary: Decodable, Identifiable, Hashable {
     let last_message_kind: String?
     let last_message_at: Int64
     let last_sender_name: String?
+    // the newest message's details, as the server sends them (GET /groups, messaging/groups.go; website types.ts Group), all optional
+    var last_message_sender: String? = nil
+    var last_message_id: String? = nil
+    /// for my own newest message: "sent", or "read" once every other member has read up to it (no "delivered" in groups)
+    var last_message_status: String? = nil
+    var last_duration_ms: Int64? = nil
+    var last_file_type: String? = nil
 
     var id: String { conversation_id }
     var lastDate: Date? { serverDate(last_message_at) }
+
+    /// The groups list's second line as a private chat's (website chatPreview, b6c3ae8 / 63f2616): the same fields, with
+    /// "mine" worked out from the sender. Only for ChatRow's preview helpers; opening a group still uses asConversation.
+    func previewConversation(me: String) -> ConversationSummary {
+        var c = ConversationSummary(conversation_id: conversation_id, peer_id: "", peer_username: name, peer_display_name: name,
+                                    peer_avatar_id: avatar_id, last_message: last_message, last_message_at: last_message_at,
+                                    last_message_mine: !me.isEmpty && last_message_sender == me, unread_count: unread_count,
+                                    last_message_kind: last_message_kind)
+        c.last_file_type = last_file_type
+        c.last_duration_ms = last_duration_ms
+        c.last_message_status = last_message_status
+        return c
+    }
 
     /// A group opens in the same chat screen as a private chat.
     var asConversation: ConversationSummary {

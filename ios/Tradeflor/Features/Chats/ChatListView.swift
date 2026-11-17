@@ -407,15 +407,7 @@ struct ChatRow: View {
                     }
                 }
                 HStack(spacing: 5) {
-                    if let st = ownStatus {
-                        Image(systemName: st == "sent" ? "checkmark" : "checkmark.circle")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(st == "read" ? Theme.accent : Theme.faint)
-                            .overlay(alignment: .leading) {
-                                if st != "sent" { Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(st == "read" ? Theme.accent : Theme.faint).offset(x: -4) }
-                            }
-                            .accessibilityLabel(Text(LocalizedStringKey("receipt." + st)))
-                    }
+                    if let st = ownStatus { Self.ticks(st) }
                     if let icon = previewIcon {
                         Image(systemName: icon).font(.system(size: 12)).foregroundStyle(callMissed ? Theme.danger : Theme.accent)
                     }
@@ -437,6 +429,17 @@ struct ChatRow: View {
         .frame(height: 83)
         .overlay(alignment: .top) { Rectangle().fill(Theme.rowRule).frame(height: 1) }
         .contentShape(Rectangle())
+    }
+
+    /// My latest message's ticks (sent / delivered / read); shared with the groups list (GroupsListView).
+    static func ticks(_ st: String) -> some View {
+        Image(systemName: st == "sent" ? "checkmark" : "checkmark.circle")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(st == "read" ? Theme.accent : Theme.faint)
+            .overlay(alignment: .leading) {
+                if st != "sent" { Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(st == "read" ? Theme.accent : Theme.faint).offset(x: -4) }
+            }
+            .accessibilityLabel(Text(LocalizedStringKey("receipt." + st)))
     }
 
     /// "now", "12 min", "4 h", "Yesterday", "16 Nov" -- the website's relative times.
@@ -478,18 +481,18 @@ struct ChatRow: View {
     }
 
     /// My latest message's delivery state (sent / delivered / read), from the real receipts.
-    private var ownStatus: String? {
+    var ownStatus: String? {
         guard chat.last_message_mine, kind != "call", kind != "locked", let s = chat.last_message_status,
               ["sent", "delivered", "read"].contains(s) else { return nil }
         return s
     }
 
-    private var callMissed: Bool {
+    var callMissed: Bool {
         kind == "call" && (chat.last_call_state == "missed" || chat.last_call_state == "failed"
             || (chat.last_call_state == nil && (chat.last_message.hasPrefix("Missed") || chat.last_message.hasPrefix("Voice call failed"))))
     }
 
-    private var previewIcon: String? {
+    var previewIcon: String? {
         switch kind {
         case "call": return callMissed ? "phone.arrow.down.left" : "phone"
         case "voice": return "mic"
@@ -508,7 +511,7 @@ struct ChatRow: View {
         }
     }
 
-    private var preview: String {
+    var preview: String {
         switch kind {
         case "voice":
             if let ms = chat.last_duration_ms, ms > 0 {

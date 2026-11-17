@@ -38,7 +38,10 @@ struct CreateGroupView: View {
 
     private var token: String { store.session?.token ?? "" }
     private var isEdit: Bool { editing != nil }
-    private var handleLocked: Bool { !(editing?.handle ?? "").isEmpty }
+    /// The permanent link and the privacy are the owner's (server: handle and privacy refuse admins, web 6f61080):
+    /// an admin editing the group sees them but cannot change them.
+    private var ownerEdit: Bool { editing.map { $0.isOwner } ?? true }
+    private var handleLocked: Bool { !(editing?.handle ?? "").isEmpty || !ownerEdit }
 
     /// The fields that light up when focused (website .g-control:focus / .g-link-input:focus-within).
     private enum Field: Hashable { case name, handle, about }
@@ -128,6 +131,8 @@ struct CreateGroupView: View {
                         radio("grp.privacy.public", icon: "globe", selected: isPublic) { isPublic = true }
                         radio("grp.privacy.private", icon: "lock", selected: !isPublic) { isPublic = false }
                     }
+                    .disabled(!ownerEdit)
+                    .opacity(ownerEdit ? 1 : 0.55)
 
                     if !isEdit && !people.isEmpty {
                         TFSectionLabel(text: NSLocalizedString("group.members.pick", comment: ""))
@@ -268,8 +273,10 @@ struct CreateGroupView: View {
             let id: String
             if let g = editing {
                 id = g.conversation_id
+                // privacy only from the owner, and only when it changed (website saveGroupEdit): the server refuses it from an admin
+                let wanted = isPublic ? "public" : "private"
                 try await APIClient.shared.grpUpdate(token: token, id: id, name: cleanName, description: about,
-                                                     privacy: isPublic ? "public" : "private")
+                                                     privacy: g.isOwner && wanted != g.privacy ? wanted : nil)
                 if !handleLocked && !h.isEmpty { try await APIClient.shared.grpSetHandle(token: token, id: id, handle: h) }
             } else {
                 id = try await APIClient.shared.createGroup(token: token, name: cleanName, description: about, isPublic: isPublic,
@@ -399,15 +406,16 @@ struct GroupInfoView: View {
     private var canInvite: Bool { admin || group?.can_invite == true }
     /// Invite friends is offered when there is a link to share: a public group's permanent link, or the right to make invites.
     private func showInvite(_ g: GrpInfo) -> Bool { (!(g.handle ?? "").isEmpty && g.privacy == "public") || canInvite }
-    /// Telegram's member view (website .gip-tg, aa1cb91): everyone but the owner; the owner keeps the management panel.
-    private var tg: Bool { !owner }
+    /// Telegram's member view (website .gip-tg, aa1cb91): ordinary members only; the owner and the admins keep the management
+    /// panel (website GroupsView isOwner = owner || admin). `admin` is true for the owner too (GrpInfo.isAdmin).
+    private var tg: Bool { !admin }
     private var groupLink: String? { group?.handle.flatMap { $0.isEmpty ? nil : "https://app.tradeflor.com/g/\($0)" } }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: tg ? 0 : 12) {
-                    if owner {
+                    if admin {
                         Picker("", selection: $tab) {
                             Text("grp.tab.info").tag(0)
                             Text(String(format: NSLocalizedString("grp.tab.members", comment: ""), group?.member_count ?? members.count)).tag(1)
@@ -584,7 +592,8 @@ struct GroupInfoView: View {
             .padding(.top, 14)
             Text(String(format: NSLocalizedString("groups.members", comment: ""), g.member_count)).font(.system(size: 13))
                 .foregroundStyle(Theme.dyn(0x8FB0BC, 0x5F7686)).padding(.top, 4)
-            if owner {
+            // picture actions: owner and admins (server SetAvatar: isModerator)
+            if admin {
                 HStack(spacing: 8) {
                     if let a = g.avatar_id, !a.isEmpty {
                         pill("grp.picture.view", Theme.hex(0x5FE6EE), Theme.hex(0x00CAD1)) { viewingPicture = a }
@@ -626,7 +635,7 @@ struct GroupInfoView: View {
                 }
             }
             if tg { actionButton("rectangle.portrait.and.arrow.right", "gi.leave") { confirmLeave = true } }
-            if owner { actionButton("slider.horizontal.3", "grp.manage") { manage = true } }
+            if admin { actionButton("slider.horizontal.3", "grp.manage") { manage = true } }
             Menu {
                 if showInvite(g) { Button { inviting = true } label: { Label("gx.inv.title", systemImage: "paperplane") } }
                 if admin || g.can_invite == true { Button { addingMembers = true } label: { Label("grp.add.members", systemImage: "person.badge.plus") } }
@@ -821,7 +830,8 @@ struct GroupInfoView: View {
     // MARK: the owner's view (cards)
 
     @ViewBuilder private func ownerBlocks(_ g: GrpInfo) -> some View {
-        // link
+        // link: shown when there is one, or to the owner who may set it (website: handle || isGroupOwner; server: handle is the owner's)
+        if !(g.handle ?? "").isEmpty || owner {
         block {
             VStack(alignment: .leading, spacing: 8) {
                 upperLabel("gi.link.label")
@@ -833,8 +843,11 @@ struct GroupInfoView: View {
                     }
                     if g.privacy != "public" {
                         Text("grp.link.private").font(.system(size: 12)).foregroundStyle(Theme.faint)
+                        // privacy is the owner's (server UpdateGroup refuses Privacy from an admin)
+                        if owner {
                         Button("grp.make.public") { Task { await run { try await APIClient.shared.grpUpdate(token: token, id: groupID, privacy: "public") } } }
                             .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                        }
                     }
                 } else {
                     Text("grp.link.permanent").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
@@ -859,6 +872,7 @@ struct GroupInfoView: View {
                 }
             }
             .padding(.vertical, 12)
+        }
         }
 
         // description
@@ -945,11 +959,14 @@ struct GroupInfoView: View {
                 gipRow("rectangle.portrait.and.arrow.right", NSLocalizedString("grp.leave", comment: ""), tint: Theme.hex(0xFF8F8F), textTint: Theme.hex(0xFF8F8F))
             }
             .buttonStyle(.plain)
-            hair()
-            Button { confirmDelete = true } label: {
-                gipRow("trash", NSLocalizedString("grp.delete", comment: ""), tint: Theme.hex(0xFF8F8F), textTint: Theme.hex(0xFF8F8F))
+            // deleting the group is the owner's alone (server DeleteGroup: RoleOwner; website: myRole === "owner")
+            if owner {
+                hair()
+                Button { confirmDelete = true } label: {
+                    gipRow("trash", NSLocalizedString("grp.delete", comment: ""), tint: Theme.hex(0xFF8F8F), textTint: Theme.hex(0xFF8F8F))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         Spacer().frame(height: 12)
     }
@@ -1205,7 +1222,12 @@ struct GroupInfoView: View {
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.soulCardBorder, lineWidth: 1))
     }
 
-    private func memberHasActions(_ m: GrpMember) -> Bool { admin && m.user_id != me && m.role != "owner" }
+    /// What this account may do to that member (website actionsFor): the owner acts on everyone but themself; an admin only on
+    /// ordinary members (server: an admin cannot mute, remove or ban another admin).
+    private func memberHasActions(_ m: GrpMember) -> Bool {
+        guard admin, m.user_id != me, m.role != "owner" else { return false }
+        return owner || (m.role != "admin" && m.role != "owner")
+    }
 
     /// A member row (website .mrow): avatar in a gold (owner) or cyan (admin) ring, name with " (you)" and the owner's crown,
     /// @username under it, the role chip, and ⋯ for the member's actions.
@@ -1271,6 +1293,8 @@ struct GroupInfoView: View {
             }
             Button { transferTo = m } label: { Label("grp.m.transfer", systemImage: "crown") }
         }
+        // restrictions apply to ordinary members only (website actionsFor)
+        if m.role != "admin" && m.role != "owner" {
         if m.isMuted {
             Button { Task { await run { try await APIClient.shared.grpMuteMember(token: token, id: groupID, userID: m.user_id, seconds: 0, permanent: false) } } } label: {
                 Label("grp.m.unmute", systemImage: "speaker.wave.2")
@@ -1282,6 +1306,7 @@ struct GroupInfoView: View {
             Button { Task { await run { try await APIClient.shared.grpMuteMember(token: token, id: groupID, userID: m.user_id, seconds: 0, permanent: true) } } } label: {
                 Label("grp.m.mutep", systemImage: "speaker.slash.fill")
             }
+        }
         }
         Button(role: .destructive) { Task { await run { try await APIClient.shared.grpRemove(token: token, id: groupID, userID: m.user_id) } } } label: {
             Label("grp.m.remove", systemImage: "person.fill.xmark")
