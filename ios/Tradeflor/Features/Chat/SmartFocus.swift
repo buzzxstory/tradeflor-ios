@@ -363,7 +363,7 @@ struct FocusBanner: View {
                 .accessibilityLabel(Text("focus.title"))
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
-        .background(Theme.header)
+        .background(Theme.soul)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
     }
 }

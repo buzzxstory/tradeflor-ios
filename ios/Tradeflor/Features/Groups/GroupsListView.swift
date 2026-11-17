@@ -215,8 +215,9 @@ struct GroupsListView: View {
                     }
                     Spacer(minLength: 8)
                     if let d = g.lastDate {
-                        Text(ChatRow.timeLabel(d)).font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(g.unread_count > 0 ? Theme.accent : Theme.faint)
+                        // teal and bold when unread, unless muted (website 9ba9f40)
+                        Text(ChatRow.timeLabel(d)).font(.system(size: 12.5, weight: g.unread_count > 0 && !muted ? .bold : .medium))
+                            .foregroundStyle(g.unread_count > 0 && !muted ? Theme.hex(0x08D9D9) : Theme.faint)
                     }
                 }
                 HStack(spacing: 5) {
@@ -229,9 +230,7 @@ struct GroupsListView: View {
                             .accessibilityLabel(Text(String(format: NSLocalizedString("grp.mentions.n", comment: ""), mentions)))
                     }
                     if g.unread_count > 0 {
-                        Text("\(g.unread_count)").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.onAccent)
-                            .padding(.horizontal, 7).frame(minWidth: 22, minHeight: 22)
-                            .background(muted ? AnyShapeStyle(Theme.faint) : AnyShapeStyle(Theme.accent), in: Capsule())
+                        UnreadBadge(count: g.unread_count, muted: muted)
                     } else if p?.marked_unread ?? false {
                         Circle().stroke(Theme.accent, lineWidth: 2).frame(width: 12, height: 12)
                     } else if p?.pinned ?? false {

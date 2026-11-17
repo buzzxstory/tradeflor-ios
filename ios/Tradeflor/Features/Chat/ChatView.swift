@@ -80,6 +80,9 @@ struct ChatView: View {
     @State private var unreadMarkCount = 0
     @State private var unreadMarkSet = false
     @State private var openedAtEnd = false
+    /// "Select all" took the whole chat (every older page loaded first): Delete then also takes the call entries (web b9833d1).
+    @State private var allPicked = false
+    @State private var pickingAll = false
     @State private var confirmLeave = false
     @State private var confirmDeleteGroup = false
     @State private var exportURL: URL?
@@ -152,7 +155,7 @@ struct ChatView: View {
                         Spacer()
                     }
                     .padding(.horizontal, 14).frame(height: 40)
-                    .background(Theme.header)
+                    .background(barColor)
                     .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
                 }
                 .buttonStyle(.plain)
@@ -213,7 +216,11 @@ struct ChatView: View {
                                                flash("chat.link.copied")
                                            },
                                            select: { selecting = true; selected = [m.id] },
-                                           toggleSelect: { if selected.contains(m.id) { selected.remove(m.id) } else { selected.insert(m.id) } },
+                                           toggleSelect: {
+                                               guard m.kind != "call" else { return } // a call entry goes with "Select all" only
+                                               if selected.contains(m.id) { selected.remove(m.id) } else { selected.insert(m.id) }
+                                               allPicked = false
+                                           },
                                            pin: { on in Task { await setPin(m, on) } },
                                            report: { flash("chat.report.soon") },
                                            moreReactions: { reactTarget = m; showEmoji = true },
@@ -1112,24 +1119,24 @@ struct ChatView: View {
 
     private var selectHead: some View {
         HStack(spacing: 12) {
-            Button { selecting = false; selected = [] } label: {
+            Button { selecting = false; selected = []; allPicked = false } label: {
                 Image(systemName: "xmark").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.accent).frame(width: 36, height: 44)
             }
             .accessibilityLabel(Text("select.cancel"))
             Text(String(format: NSLocalizedString("select.count", comment: ""), selected.count))
                 .font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text)
             Spacer()
-            Button {
-                if selected.count == messages.filter({ !$0.isDeleted }).count { selected = [] }
-                else { selected = Set(messages.filter { !$0.isDeleted }.map(\.id)) }
-            } label: {
-                Text(LocalizedStringKey(selected.count == messages.filter({ !$0.isDeleted }).count ? "select.clear" : "select.all"))
-                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.accent)
+            Button { Task { await selectAll() } } label: {
+                if pickingAll { ProgressView().tint(Theme.accent) } else {
+                    Text(LocalizedStringKey(allSelected ? "select.clear" : "select.all"))
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.accent)
+                }
             }
+            .disabled(pickingAll)
         }
         .padding(.horizontal, 12)
         .frame(height: 60)
-        .background(Theme.header.ignoresSafeArea(edges: .top))
+        .background(barColor.ignoresSafeArea(edges: .top))
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
     }
 
@@ -1161,7 +1168,7 @@ struct ChatView: View {
         .foregroundStyle(Theme.accent)
         .padding(.horizontal, 20)
         .frame(height: 56)
-        .background(Theme.header.ignoresSafeArea(edges: .bottom))
+        .background(barColor.ignoresSafeArea(edges: .bottom))
         .overlay(alignment: .top) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
     }
 
@@ -1178,7 +1185,7 @@ struct ChatView: View {
         }
         .foregroundStyle(Theme.accent)
         .padding(.horizontal, 10).padding(.vertical, 8)
-        .background(Theme.header)
+        .background(barColor)
     }
 
     private var pinnedBar: some View {
@@ -1211,7 +1218,7 @@ struct ChatView: View {
             .accessibilityLabel(Text("pin.hide"))
         }
         .padding(.leading, 14).padding(.trailing, 4).frame(height: 50)
-        .background(Theme.header)
+        .background(barColor)
         .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
     }
 
@@ -1294,20 +1301,86 @@ struct ChatView: View {
         } catch { flash("chat.action.failed") }
     }
 
+    /// What a tap can select: every message, "This message was deleted" too; a call entry only goes with "Select all".
+    private func selectable(_ m: Message) -> Bool { m.kind != "call" }
+
+    private var allSelected: Bool {
+        let every = messages.filter(selectable)
+        return reachedStart && !every.isEmpty && every.allSatisfy { selected.contains($0.id) }
+    }
+
+    /// "Select all" (website b9833d1): the whole chat, not only what is on screen: every older page is loaded first.
+    private func selectAll() async {
+        if allSelected { selected = []; allPicked = false; return }
+        guard !pickingAll else { return }
+        var whole = reachedStart
+        if !reachedStart {
+            pickingAll = true
+            flash("select.loading")
+            whole = await loadAllOlder()
+            pickingAll = false
+        }
+        selected = Set(messages.filter(selectable).map(\.id))
+        allPicked = whole
+        if !whole { flash("select.partial") }
+    }
+
+    /// Every older page, 200 at a time, until the start of what this account may see. false = stopped (offline…).
+    private func loadAllOlder() async -> Bool {
+        for _ in 0..<500 {
+            guard let first = messages.first else { return true }
+            if first.seq <= 1 { reachedStart = true; return true }
+            guard let page = try? await APIClient.shared.messages(token: token, conversationID: chat.conversation_id,
+                                                                  before: first.seq, limit: 200) else { return false }
+            merge(page)
+            // a short page is the start; a page of only deleted gaps still moves the anchor down
+            if page.count < 200 { reachedStart = true; return true }
+            if messages.first?.seq == first.seq { return false }
+        }
+        return false
+    }
+
+    /// Batches of 100 (the server's limit), 3 tries each; a batch that fails does not stop the others, every batch the
+    /// server took leaves the screen at once, and what is left stays selected for Delete again (website b9833d1).
     private func deleteSelected(everyone: Bool) async {
-        let ids = deleteTargets.map(\.id)
+        let asked = Set(deleteTargets.map(\.id))
+        var ids = deleteTargets.map(\.id)
+        // after "Select all" of the whole chat, the call entries go too: nothing is left behind
+        if !everyone && allPicked && messages.filter(selectable).allSatisfy({ asked.contains($0.id) }) {
+            ids += messages.filter { $0.kind == "call" && !asked.contains($0.id) }.map(\.id)
+        }
         deleteTargets = []
-        selecting = false
-        selected = []
-        do {
-            if everyone {
-                try await APIClient.shared.chDeleteBatch(token: token, ids: ids)
-                await loadNewest(quiet: true)
-            } else {
-                try await APIClient.shared.chHideBatch(token: token, ids: ids)
-                messages.removeAll { ids.contains($0.id) }
+        if ids.count > 100 { flashText(String(format: NSLocalizedString("select.deleting", comment: ""), ids.count)) }
+        var failed: [String] = []
+        var i = 0
+        while i < ids.count {
+            let chunk = Array(ids[i..<min(i + 100, ids.count)])
+            i += 100
+            var done = false
+            for attempt in 0..<3 where !done {
+                do {
+                    if everyone { try await APIClient.shared.chDeleteBatch(token: token, ids: chunk) }
+                    else { try await APIClient.shared.chHideBatch(token: token, ids: chunk) }
+                    done = true
+                } catch {
+                    if attempt < 2 { try? await Task.sleep(nanoseconds: UInt64(600_000_000 * (attempt + 1))) }
+                }
             }
-        } catch { flash("chat.action.failed") }
+            if done {
+                if !everyone { let gone = Set(chunk); messages.removeAll { gone.contains($0.id) } }
+            } else {
+                failed += chunk
+            }
+        }
+        if everyone { await loadNewest(quiet: true) }
+        allPicked = false
+        if failed.isEmpty {
+            selecting = false
+            selected = []
+        } else {
+            selected = Set(failed).intersection(Set(messages.map(\.id)))
+            flash("select.some.failed")
+        }
     }
 
     private func sendDocument(_ url: URL) async {

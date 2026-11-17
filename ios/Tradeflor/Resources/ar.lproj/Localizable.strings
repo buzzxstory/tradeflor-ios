@@ -1672,3 +1672,9 @@
 "up.left.minutes" = "متبقٍ نحو %d د";
 "up.retrying" = "انقطع الاتصال · جارٍ الاستئناف…";
 "up.finishing" = "جارٍ الإنهاء…";
+
+/* select all + delete (web b9833d1) */
+"select.loading" = "جارٍ تحميل الدردشة كاملة…";
+"select.partial" = "تم تحديد الرسائل المحمّلة فقط. تحقّق من اتصالك.";
+"select.deleting" = "جارٍ حذف %d رسالة…";
+"select.some.failed" = "تعذّر حذف بعض الرسائل. تحقّق من اتصالك وحاول مجددًا.";

@@ -1672,3 +1672,9 @@
 "up.left.minutes" = "About %d min left";
 "up.retrying" = "Connection lost · resuming…";
 "up.finishing" = "Finishing…";
+
+/* select all + delete (web b9833d1) */
+"select.loading" = "Loading the whole chat…";
+"select.partial" = "Only the loaded messages are selected. Check your connection.";
+"select.deleting" = "Deleting %d messages…";
+"select.some.failed" = "Some messages couldn't be deleted. Check your connection and try again.";

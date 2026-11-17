@@ -401,8 +401,9 @@ struct ChatRow: View {
                     Text(chat.title).font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
                     Spacer(minLength: 8)
                     if let d = chat.lastDate {
-                        Text(Self.timeLabel(d)).font(.system(size: 12.5, weight: .medium))
-                            .foregroundStyle(chat.unread_count > 0 ? Theme.accent : Theme.faint)
+                        // teal and bold when unread, unless muted (website 27-chats-list .conv-time.unread)
+                        Text(Self.timeLabel(d)).font(.system(size: 12.5, weight: chat.unread_count > 0 && !muted ? .bold : .medium))
+                            .foregroundStyle(chat.unread_count > 0 && !muted ? Theme.hex(0x08D9D9) : Theme.faint)
                     }
                 }
                 HStack(spacing: 5) {
@@ -422,12 +423,7 @@ struct ChatRow: View {
                     Spacer(minLength: 6)
                     if muted { Image(systemName: "bell.slash.fill").font(.system(size: 11)).foregroundStyle(Theme.faint) }
                     if chat.unread_count > 0 {
-                        Text("\(chat.unread_count)")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(Theme.onAccent)
-                            .padding(.horizontal, 7)
-                            .frame(minWidth: 22, minHeight: 22)
-                            .background(muted ? AnyShapeStyle(Theme.faint) : AnyShapeStyle(Theme.accent), in: Capsule())
+                        UnreadBadge(count: chat.unread_count, muted: muted)
                     } else if markedUnread {
                         Circle().fill(Theme.accent).frame(width: 12, height: 12)
                     } else if pinned {

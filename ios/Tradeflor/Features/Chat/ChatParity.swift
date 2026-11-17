@@ -288,3 +288,22 @@ struct SwipeToReply: ViewModifier {
                 }, including: enabled ? .all : .subviews)
     }
 }
+
+
+/// The unread count on a chat or group row (website 27-chats-list .unread-badge, 9ba9f40): 22 pt, #00c6c4 with dark
+/// #002327 figures, 12.5 pt; grey when the chat is muted.
+struct UnreadBadge: View {
+    let count: Int
+    let muted: Bool
+
+    var body: some View {
+        Text(count > 999 ? "999+" : "\(count)")
+            .font(.system(size: 12.5, weight: .bold))
+            .monospacedDigit()
+            .foregroundStyle(muted ? Theme.hex(0x0B1F26) : Theme.hex(0x002327))
+            .padding(.horizontal, 6)
+            .frame(minWidth: 22, minHeight: 22)
+            .background(muted ? AnyShapeStyle(Theme.faint) : AnyShapeStyle(Theme.hex(0x00C6C4)), in: Capsule())
+            .accessibilityLabel(Text(String(format: NSLocalizedString("chat.unread.n", comment: ""), count)))
+    }
+}
