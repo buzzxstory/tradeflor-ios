@@ -29,6 +29,10 @@ final class LiveConnection: ObservableObject {
     let opened = PassthroughSubject<Void, Never>()
     /// Someone asked to join a group I own or run: conversation_id, group, name, user_id.
     let joinRequests = PassthroughSubject<[String: String], Never>()
+    /// Something changed in my signed-in sessions (sign-in, sign-out, rename on any device): Linked Devices reloads.
+    let sessionsChanged = PassthroughSubject<Void, Never>()
+    /// Messages gone from my view (hidden for me, or a cleared chat, in batches): conversation id and message ids.
+    let hidden = PassthroughSubject<(conversation: String, ids: [String]), Never>()
     /// Scan & Connect (event type "flash"): the raw `data` (action claimed / accepted / declined / decided, session_id, guest, peer).
     /// A notification only: whoever listens re-reads GET /connect/sessions/{id} or /connect/pending.
     let flash = PassthroughSubject<[String: Any], Never>()
@@ -194,6 +198,15 @@ final class LiveConnection: ObservableObject {
             }
             return
         }
+        if env.type == "sessions" { sessionsChanged.send(()); return }
+        if env.type == "hidden" {
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let d = obj["data"] as? [String: Any] {
+                let conv = (d["conversation_id"] as? String) ?? env.conversation_id ?? ""
+                let ids = (d["message_ids"] as? [String]) ?? []
+                if !conv.isEmpty { hidden.send((conv, ids)); changes.send(conv) }
+            }
+            return
+        }
         if env.type == "flash" {
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let d = obj["data"] as? [String: Any] {
                 flash.send(d)
@@ -215,7 +228,7 @@ final class LiveConnection: ObservableObject {
             } else if let id = env.conversation_id {
                 changes.send(id)
             }
-        case "reaction", "deleted", "receipt", "edited", "conversation", "vanished", "notice", "scheduled":
+        case "reaction", "deleted", "receipt", "edited", "conversation", "vanished", "notice", "scheduled", "hidden":
             if let id = env.conversation_id { changes.send(id) }
         default:
             break

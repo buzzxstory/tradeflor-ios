@@ -450,61 +450,6 @@ struct LiveLocationPage: View {
     }
 }
 
-// MARK: Linked devices
-
-struct DevicesPage: View {
-    @EnvironmentObject private var store: SessionStore
-    @State private var devices: [LinkedDevice] = []
-    @State private var confirm: LinkedDevice?
-    private var token: String { store.session?.token ?? "" }
-
-    var body: some View {
-        SettingsPage(title: NSLocalizedString("settings.devices", comment: ""), subtitle: NSLocalizedString("settings.devices.sub", comment: "")) {
-            TFCard {
-                ForEach(Array(devices.enumerated()), id: \.element.id) { i, d in
-                    HStack(spacing: 12) {
-                        Image(systemName: d.device.localizedCaseInsensitiveContains("iphone") ? "iphone"
-                              : (d.device.localizedCaseInsensitiveContains("windows") ? "desktopcomputer" : "globe"))
-                            .foregroundStyle(Theme.accent).frame(width: 24)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(d.device).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
-                            if d.current == true {
-                                Text("settings.devices.this").font(.system(size: 12)).foregroundStyle(Theme.accent)
-                            } else if let seen = d.last_seen_at.flatMap(serverDate) {
-                                if Date().timeIntervalSince(seen) < 300 {
-                                    Text("set.active.now").font(.system(size: 12)).foregroundStyle(Theme.online)
-                                } else {
-                                    Text(seen, style: .relative).font(.system(size: 12)).foregroundStyle(Theme.faint)
-                                }
-                            }
-                        }
-                        Spacer()
-                        if d.current != true {
-                            Button { confirm = d } label: {
-                                Text("settings.devices.signout").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.danger)
-                                    .padding(.horizontal, 10).frame(height: 28).overlay(Capsule().stroke(Theme.danger.opacity(0.5), lineWidth: 1))
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 11)
-                    if i < devices.count - 1 { TFDivider() }
-                }
-            }
-        }
-        .task { devices = (try? await APIClient.shared.devices(token: token)) ?? [] }
-        .confirmationDialog(Text(String(format: NSLocalizedString("set.device.confirm", comment: ""), confirm?.device ?? "")),
-                            isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }), titleVisibility: .visible) {
-            Button("settings.devices.signout", role: .destructive) {
-                if let d = confirm {
-                    Task {
-                        if (try? await APIClient.shared.revokeDevice(token: token, id: d.id)) != nil { devices.removeAll { $0.id == d.id } }
-                    }
-                }
-            }
-        }
-    }
-}
-
 // MARK: Events
 
 struct EventsPage: View {

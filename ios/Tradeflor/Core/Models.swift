@@ -175,6 +175,13 @@ struct LinkedDevice: Decodable, Identifiable {
     let created_at: Int64
     let last_seen_at: Int64?
     let current: Bool?
+    // Linked Devices V2 (server aa69255): the name the owner gave it, which client ("browser" | "desktop" | "ios"),
+    // the machine ("iPhone", "Windows", "Mac"...), the browser, and whether it holds a live connection right now.
+    let label: String?
+    let app: String?
+    let platform: String?
+    let browser: String?
+    let connected: Bool?
 }
 
 struct Reaction: Hashable {

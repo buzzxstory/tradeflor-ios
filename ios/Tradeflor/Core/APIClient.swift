@@ -53,6 +53,8 @@ final class APIClient {
         req.httpMethod = method
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
+        // the native app, never mistaken for Safari: Linked Devices names it "TRADEFLOR for iOS" (server aa69255)
+        req.setValue("ios", forHTTPHeaderField: "X-Tradeflor-Client")
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if token != nil, let unlock = unlockToken { req.setValue(unlock, forHTTPHeaderField: "X-Tradeflor-Unlock") }
         if let body {
@@ -649,6 +651,7 @@ final class APIClient {
     func webSocket(_ url: URL) -> URLSessionWebSocketTask {
         var req = URLRequest(url: url)
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue("ios", forHTTPHeaderField: "X-Tradeflor-Client")
         return session.webSocketTask(with: req)
     }
 

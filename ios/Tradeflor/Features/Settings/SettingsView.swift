@@ -55,7 +55,7 @@ struct SettingsView: View {
                                     : String(format: NSLocalizedString("settings.sharing.n", comment: ""), sharingCount))
                         }
                         divider
-                        NavigationLink { DevicesPage() } label: {
+                        NavigationLink { LinkedDevicesView() } label: {
                             TFRow(icon: "laptopcomputer.and.iphone", title: NSLocalizedString("settings.devices", comment: ""), subtitle: NSLocalizedString("settings.devices.sub", comment: ""))
                         }
                         divider

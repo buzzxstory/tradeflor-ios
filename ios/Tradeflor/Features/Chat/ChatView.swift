@@ -628,6 +628,12 @@ struct ChatView: View {
             }
             if m.sender_id != me { Task { await markSeen() } }
         }
+        .onReceive(live.hidden) { h in
+            // hidden for me, or the chat cleared on any of my devices: those messages leave at once
+            guard h.conversation == chat.conversation_id else { return }
+            let gone = Set(h.ids)
+            messages.removeAll { gone.contains($0.id) }
+        }
         .onReceive(live.changes) { id in
             guard id == chat.conversation_id else { return }
             Task { await loadNewest(quiet: true) }
