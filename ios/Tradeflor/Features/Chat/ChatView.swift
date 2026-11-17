@@ -664,9 +664,8 @@ struct ChatView: View {
             }
         }
         .sheet(item: Binding(get: { exportURL.map { ExportFile(url: $0) } }, set: { if $0 == nil { exportURL = nil } })) { f in
-            ShareLink(item: f.url) { Label("group.export", systemImage: "square.and.arrow.up") }
-                .padding(30)
-                .presentationDetents([.height(160)])
+            // the system share sheet itself (a ShareLink alone in a 160 pt sheet crashed the app when it opened)
+            ActivityShare(items: [f.url]).ignoresSafeArea()
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar) // full height for the conversation, like other messengers
@@ -1497,9 +1496,15 @@ struct ChatView: View {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm"
         let lines = all.map { m in "[\(m.date.map { f.string(from: $0) } ?? "")] \(memberNames[m.sender_id] ?? (m.sender_id == me ? "Me" : m.sender_id)): \(displayText(m))" }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(chat.title)-chat.txt")
-        try? lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
-        exportURL = url
+        // a file name without "/" ":" and other characters a file name can't hold
+        let safe = chat.title.components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>\n\r")).joined(separator: "-")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safe.isEmpty ? "chat" : safe)-chat-history.txt")
+        do {
+            try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+            exportURL = url
+        } catch {
+            flash("chat.action.failed")
+        }
     }
 
     /// The header and message bar: the soul colour #01141B in the default chat (website --tf-chat-header-bg / footer-bg).
