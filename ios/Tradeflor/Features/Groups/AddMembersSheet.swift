@@ -81,7 +81,12 @@ struct AddMembersSheet: View {
             }
         }
         .tfColorScheme()
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            #if DEBUG
+            if let ci = ProcessInfo.processInfo.environment["TF_CI_ADD_MEMBERS"], !ci.isEmpty, q.isEmpty { q = ci }
+            #endif
+        }
         .task(id: trimmed) { await search() }
     }
 

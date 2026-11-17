@@ -79,6 +79,8 @@ if [ -n "${TF_CI_USERNAME:-}" ] && [ -n "${TF_CI_PASSWORD:-}" ]; then
   SIMCTL_CHILD_TF_CI_TAB=groups SIMCTL_CHILD_TF_CI_OPEN_GROUP=1 SIMCTL_CHILD_TF_CI_GROUP_INFO=1 launch en en_US && sleep 14 && shot 13-group-info.png || status=1
   SIMCTL_CHILD_TF_CI_TAB=groups SIMCTL_CHILD_TF_CI_OPEN_GROUP=1 launch ar ar_SA && sleep 12 && shot 14-group-chat-ar.png || status=1
   SIMCTL_CHILD_TF_CI_TAB=groups SIMCTL_CHILD_TF_CI_OPEN_GROUP=1 SIMCTL_CHILD_TF_CI_MEMBER=1 launch en en_US && sleep 14 && shot 15-member-info.png || status=1
+  SIMCTL_CHILD_TF_CI_TAB=groups SIMCTL_CHILD_TF_CI_OPEN_GROUP=1 SIMCTL_CHILD_TF_CI_GROUP_INFO=1 SIMCTL_CHILD_TF_CI_ADD_MEMBERS=buzzxstory launch en en_US && sleep 16 && shot 16-add-members.png || status=1
+  SIMCTL_CHILD_TF_CI_TAB=groups SIMCTL_CHILD_TF_CI_OPEN_GROUP=1 SIMCTL_CHILD_TF_CI_GROUP_INFO=1 launch ar ar_SA && sleep 14 && shot 17-group-info-ar.png || status=1
   SIMCTL_CHILD_TF_CI_DAY=1 launch en en_US && sleep 8 && shot 10-chats-day.png || status=1
   SIMCTL_CHILD_TF_CI_DAY=1 SIMCTL_CHILD_TF_CI_OPEN_CHAT=1 launch en en_US && sleep 10 && shot 11-chat-day.png || status=1
   # End the CI session on the server (POST /auth/logout) so test runs do not pile up under Linked devices.

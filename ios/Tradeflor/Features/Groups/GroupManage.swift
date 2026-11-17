@@ -374,7 +374,13 @@ struct GroupInfoView: View {
                 }
             }
         }
-        .task { await load() }
+        .task {
+            await load()
+            #if DEBUG
+            // CI only: TF_CI_ADD_MEMBERS=<name> opens Add members with that name typed, for a screenshot
+            if let q = ProcessInfo.processInfo.environment["TF_CI_ADD_MEMBERS"], !q.isEmpty { addingMembers = true }
+            #endif
+        }
         .onChange(of: avatarItem) { item in
             guard let item else { return }
             avatarItem = nil
@@ -570,8 +576,8 @@ struct GroupInfoView: View {
         if let s = stats {
             VStack(spacing: 0) {
                 let rows: [(String, String, Int, String?)] = [
-                    ("photo", "gi.n.photos", s.photos, "media"), ("video", "gi.n.videos", s.videos, "media"), ("doc", "gi.n.files", s.files, "files"),
-                    ("link", "gi.n.links", s.links, "links"), ("mic", "gi.n.voice", s.voice, "voice"), ("chart.bar", "gi.n.polls", s.polls, nil),
+                    ("photo", "gi.n.photos", s.photos ?? 0, "media"), ("video", "gi.n.videos", s.videos ?? 0, "media"), ("doc", "gi.n.files", s.files ?? 0, "files"),
+                    ("link", "gi.n.links", s.links ?? 0, "links"), ("mic", "gi.n.voice", s.voice ?? 0, "voice"), ("chart.bar", "gi.n.polls", s.polls ?? 0, nil),
                 ]
                 ForEach(rows.filter { $0.2 > 0 }, id: \.1) { r in
                     Button { if let c = r.3 { mediaCat = mediaCat == c ? nil : c } } label: {
@@ -587,7 +593,7 @@ struct GroupInfoView: View {
                     .buttonStyle(.plain)
                     .disabled(r.3 == nil)
                 }
-                if s.photos + s.videos + s.files + s.links + s.voice + s.polls == 0 {
+                if [s.photos, s.videos, s.files, s.links, s.voice, s.polls].allSatisfy({ ($0 ?? 0) == 0 }) {
                     Text("gi.nothing").font(.system(size: 13.5)).foregroundStyle(Theme.faint).padding(10).frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
