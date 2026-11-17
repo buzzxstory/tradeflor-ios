@@ -84,23 +84,22 @@ struct ChatListView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            ScrollView {
-                // website phone layout (27-chats-list.css): brand bar, "Chats" + round buttons, search, status row, chips, rows
-                VStack(spacing: 0) {
-                    header
-                    ListSearchField(placeholder: "chats.search", text: $query)
-                    StatusStrip()
-                    chipsRow
+            // as on the web: the top (brand bar, title and buttons, search, status row, chips) stays still and only the
+            // conversations scroll; nothing moves up or down by itself, a tap anywhere closes the keyboard and still works
+            VStack(spacing: 0) {
+                header
+                ListSearchField(placeholder: "chats.search", text: $query)
+                StatusStrip()
+                chipsRow
+                ScrollView {
                     list
                         .padding(.bottom, 12)
                 }
+                .modifier(ListNoBounce())
             }
+            .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })
             .scrollDismissesKeyboard(.immediately)
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .refreshable {
-                await load()
-                await loadStatuses()
-            }
             .background(ChatsWallpaper())
             .fullScreenCover(item: $statusOpen) { o in
                 StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) { Task { await loadStatuses() } }

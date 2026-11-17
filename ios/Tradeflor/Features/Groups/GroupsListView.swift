@@ -70,23 +70,26 @@ struct GroupsListView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            ScrollView {
-                // website phone layout (GroupsView.tsx, 27-chats-list.css): big "Groups" + the new-group button, the round
-                // search, the folder chips, "Archived (n)", public groups found by the search, then the group rows
-                VStack(spacing: 0) {
-                    header
-                    ListSearchField(placeholder: "groups.search", text: $query)
-                    circles
-                    chips
-                    archivedToggle
-                    discover
-                    content
-                        .padding(.bottom, 12)
+            // as on the web: the top stays still (brand bar, title and buttons, search, circles, chips) and only the groups
+            // scroll; nothing moves by itself, a tap anywhere closes the keyboard and still works
+            VStack(spacing: 0) {
+                header
+                ListSearchField(placeholder: "groups.search", text: $query)
+                circles
+                chips
+                ScrollView {
+                    VStack(spacing: 0) {
+                        archivedToggle
+                        discover
+                        content
+                            .padding(.bottom, 12)
+                    }
                 }
+                .modifier(ListNoBounce())
             }
+            .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })
             .scrollDismissesKeyboard(.immediately)
             .ignoresSafeArea(.keyboard, edges: .bottom)
-            .refreshable { await load() }
             .background(ChatsWallpaper())
             .sheet(isPresented: $showFolderEditor) {
                 FolderEditorView(token: token, chats: groups.map(\.asConversation)) { Task { await reloadFolders() } }

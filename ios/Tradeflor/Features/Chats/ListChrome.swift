@@ -500,3 +500,15 @@ struct ListAmbientBackground: View {
         .accessibilityHidden(true)
     }
 }
+
+
+/// A list that fits on the screen does not bounce (the web's page never moves); a long one scrolls normally.
+struct ListNoBounce: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 16.4, *) {
+            content.scrollBounceBehavior(.basedOnSize)
+        } else {
+            content
+        }
+    }
+}
