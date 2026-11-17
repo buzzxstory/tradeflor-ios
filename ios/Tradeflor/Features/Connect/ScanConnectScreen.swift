@@ -602,8 +602,9 @@ struct MyCodePanel: View {
                             copied = nil
                         }
                     } label: {
-                        Label("mc.copy", systemImage: "doc.on.doc").font(.system(size: 15, weight: .bold)).lineLimit(1).minimumScaleFactor(0.75)
+                        Label("mc.copy", systemImage: "doc.on.doc").font(.system(size: 15, weight: .bold)).lineLimit(1).minimumScaleFactor(0.7)
                             .foregroundStyle(ScanLook.white)
+                            .padding(.horizontal, 12)
                             .frame(maxWidth: .infinity).frame(height: small ? 50 : 54)
                             .background(Theme.hex(0x041019, 0.55), in: Capsule())
                             .overlay(Capsule().stroke(Theme.hex(0x6EE8F4, 0.55), lineWidth: 1.5))

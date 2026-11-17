@@ -1,13 +1,20 @@
 import SwiftUI
 
-/// Contact info (website ContactInfo.tsx): hero, Voice / Search / Share, About, Media, links and docs, Notifications,
-/// Chat theme, Disappearing messages, Lock chat, Restricted chat, contact details with the TRADEFLOR PIN, Pin chat,
-/// Share contact and Block.
+/// Contact info V3 (website features/profile/ContactInfo.tsx, 77-contact-info-v3.css, db83951), WhatsApp's order in TRADEFLOR's look:
+/// back · "Contact info" · big picture (opens full screen) · name · About · TRADEFLOR PIN (copy) · badges · @username
+/// · Chat · Voice · Search
+/// · Media, links and docs (count) · Free up storage (this device's copy)
+/// · Notifications · Chat theme · Save to Photos
+/// · Disappearing messages · Lock chat · Restricted chat
+/// · N groups in common
+/// · Share contact · Add to Favorites · Add to list · Pin chat · Export chat · Clear chat · Block
+/// No video call (calls are voice only), no phone number (private to its owner).
 struct ContactInfoView: View {
     let chat: ConversationSummary
     var onSearch: (() -> Void)? = nil
     @EnvironmentObject private var store: SessionStore
     @EnvironmentObject private var live: LiveConnection
+    @ObservedObject private var calls = CallManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var profile: Profile?
     @State private var identity: IdentityDetail?
@@ -17,20 +24,34 @@ struct ContactInfoView: View {
     @State private var theme = ""
     @State private var locked = false
     @State private var blocked = false
-    @State private var tab = "media"
-    @State private var media: [Message] = []
-    @State private var viewing: ViewedPhoto?
-    @State private var problem: String?
+    @State private var mediaCount: Int?
+    @State private var groups: [CommonGroup]?
+    @State private var folders: [EditableFolder]?
+    @State private var localCopy = LocalChatCopy.Copy()
+    @State private var localBytes: Int64 = 0
+    @State private var measuring = true
+    @State private var busy = false
     @State private var confirmBlock = false
+    @State private var confirmClear = false
     @State private var showMute = false
     @State private var showLock = false
-    @State private var copied: String?
     @State private var showAvatar = false
+    @State private var share: CIV3Share?
+    @State private var note: String?
+    @State private var noteTask: Task<Void, Never>?
 
     private var token: String { store.session?.token ?? "" }
     private var name: String { profile.map { $0.display_name.isEmpty ? $0.username : $0.display_name } ?? chat.title }
     private var username: String { profile?.username ?? chat.peer_username }
     private var shareLink: String { "https://app.tradeflor.com/?id=\(identity?.pin ?? "")" }
+    /// the full-size picture's version (the profile's, else the one the chat list knows)
+    private var avatarID: String {
+        if let a = profile?.avatar_id, !a.isEmpty { return a }
+        return chat.peer_avatar_id ?? ""
+    }
+    private var favorite: Bool {
+        (folders ?? []).contains { CIV3Folders.isFavorites($0) && $0.items.contains(chat.conversation_id) }
+    }
 
     static let timers = [0, 86400, 604800, 7776000]
     static func timerKey(_ v: Int) -> String {
@@ -42,249 +63,351 @@ struct ContactInfoView: View {
         }
     }
 
+    private func tr(_ key: String) -> String { NSLocalizedString(key, comment: "") }
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 14) {
+                VStack(spacing: 16) {
                     hero
-                    actions
-                    if let bio = profile?.bio, !bio.isEmpty {
-                        TFCard {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("ci.about").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.faint)
-                                Text(bio).font(.system(size: 15)).foregroundStyle(Theme.text)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(14)
-                        }
-                    }
-                    SharedMediaCard(token: token, conversationID: chat.conversation_id)
-                    TFCard {
-                        Button { showMute = true } label: {
-                            TFRow(icon: "bell", title: NSLocalizedString("ci.notifications", comment: ""),
-                                  trailing: MuteSheet.label(mutedUntil: prefs?.muted_until) ?? NSLocalizedString("ci.on", comment: ""))
-                        }
-                        line
-                        NavigationLink { ChatThemePicker(conversationID: chat.conversation_id, selected: $theme) } label: {
-                            TFRow(icon: "paintpalette", title: NSLocalizedString("ci.theme", comment: ""), trailing: ChatThemeStyle.item(theme).name)
-                        }
-                        line
-                        NavigationLink { SaveToPhotosPage(restricted: restricted) } label: {
-                            TFRow(icon: "square.and.arrow.down", title: NSLocalizedString("ci.save", comment: ""))
-                        }
-                    }
-                    TFCard {
-                        NavigationLink { DisappearingPage(conversationID: chat.conversation_id, value: $disappear) } label: {
-                            TFRow(icon: "timer", title: NSLocalizedString("info.disappear", comment: ""),
-                                  trailing: NSLocalizedString(Self.timerKey(disappear), comment: ""))
-                        }
-                        line
-                        Button { showLock = true } label: {
-                            TFRow(icon: "lock", title: NSLocalizedString("ci.lock", comment: ""), subtitle: NSLocalizedString("ci.lock.sub", comment: ""),
-                                  trailing: NSLocalizedString(locked ? "ci.on" : "ci.off", comment: ""))
-                        }
-                        line
-                        NavigationLink { RestrictedPage(conversationID: chat.conversation_id, on: $restricted) } label: {
-                            TFRow(icon: "hand.raised", title: NSLocalizedString("ci.restricted", comment: ""), subtitle: NSLocalizedString("ci.restricted.sub", comment: ""),
-                                  trailing: NSLocalizedString(restricted ? "ci.on" : "ci.off", comment: ""))
-                        }
-                    }
-                    if let id = identity { details(id) }
-                    TFCard {
-                        Button { Task { await togglePin() } } label: {
-                            TFRow(icon: "pin", title: NSLocalizedString((prefs?.pinned ?? false) ? "ci.unpin" : "ci.pinchat", comment: ""), showChevron: false)
-                        }
-                        line
-                        ShareLink(item: shareLink) {
-                            TFRow(icon: "square.and.arrow.up", title: NSLocalizedString("ci.share.contact", comment: ""), showChevron: false)
-                        }
-                    }
-                    Button {
-                        if blocked { Task { await unblock() } } else { confirmBlock = true }
-                    } label: {
-                        TFRow(icon: "hand.raised.fill", title: String(format: NSLocalizedString(blocked ? "ci.unblock.name" : "ci.block.name", comment: ""), name),
-                              tint: Theme.danger, showChevron: false)
-                            .background(Theme.danger.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.danger.opacity(0.35), lineWidth: 1))
-                    }
-                    if let problem { Text(problem).font(.system(size: 12)).foregroundStyle(Theme.danger) }
+                    tiles
+                    mediaCard
+                    settingsCard
+                    privacyCard
+                    if let g = groups, !g.isEmpty { groupsCard(g) }
+                    actionsCard
                 }
-                .padding(16)
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 36)
             }
             .buttonStyle(.plain)
             .background(Starfield())
             .navigationTitle(Text("info.title"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Theme.header, for: .navigationBar)
+            .toolbar(.visible, for: .navigationBar)
+            .toolbarBackground(Theme.soul, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
-            .fullScreenCover(item: $viewing) { v in PhotoViewer(token: token, fileID: v.id) }
-            .fullScreenCover(isPresented: $showAvatar) {
-                ZStack(alignment: .topTrailing) {
-                    Color.black.ignoresSafeArea()
-                    Avatar(token: token, userID: chat.peer_id, avatarID: profile?.avatar_id, title: name, size: 320)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    Button { showAvatar = false } label: {
-                        Image(systemName: "xmark").font(.system(size: 17, weight: .bold)).foregroundStyle(.white).frame(width: 44, height: 44)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { dismiss() } label: {
+                        Image(systemName: "chevron.backward").font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text)
+                            .frame(width: 36, height: 36).contentShape(Rectangle())
                     }
-                    .padding()
+                    .accessibilityLabel(Text("chat.back"))
                 }
             }
-            .sheet(isPresented: $showMute) { MuteSheet(conversationID: chat.conversation_id, name: name) { Task { await loadPrefs() } } }
+            .alert(Text(verbatim: String(format: tr("ci.block.confirm"), name)), isPresented: $confirmBlock) {
+                Button("grp.cancel", role: .cancel) {}
+                Button("ci.block", role: .destructive) { Task { await block() } }
+            } message: {
+                Text("ci.block.msg")
+            }
+            .sheet(isPresented: $showMute) {
+                MuteSheet(conversationID: chat.conversation_id, name: name) { Task { await loadPrefs() } }
+            }
             .sheet(isPresented: $showLock) {
                 LockChatSheet(conversationID: chat.conversation_id, name: name, locked: locked) { Task { await loadLock() } }
             }
-            .confirmationDialog(Text(String(format: NSLocalizedString("ci.block.confirm", comment: ""), name)),
-                                isPresented: $confirmBlock, titleVisibility: .visible) {
-                Button("ci.block", role: .destructive) { Task { await block() } }
-            } message: { Text("ci.block.msg") }
-            .overlay(alignment: .bottom) {
-                if let copied {
-                    Text(copied).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
-                        .padding(.horizontal, 14).padding(.vertical, 8).background(Theme.card, in: Capsule())
-                        .padding(.bottom, 30)
-                }
+        }
+        .alert(Text("civ3.clear.confirm"), isPresented: $confirmClear) {
+            Button("grp.cancel", role: .cancel) {}
+            Button("civ3.clear", role: .destructive) { Task { await clearChat() } }
+        } message: {
+            Text(verbatim: String(format: tr("civ3.clear.msg"), name))
+        }
+        .sheet(item: $share) { s in ActivityShare(items: s.items) }
+        .fullScreenCover(isPresented: $showAvatar) {
+            ContactPictureViewer(token: token, userID: chat.peer_id, avatarID: avatarID, name: name)
+        }
+        .overlay(alignment: .bottom) {
+            if let note {
+                Text(verbatim: note)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(Theme.card, in: Capsule())
+                    .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1))
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 30)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+                    .accessibilityAddTraits(.updatesFrequently)
             }
         }
+        .animation(.easeOut(duration: 0.18), value: note)
         .task { await load() }
     }
 
-    private var line: some View { Rectangle().fill(Theme.rowRule).frame(height: 1).padding(.leading, 50) }
+    // MARK: top
 
     private var hero: some View {
         VStack(spacing: 6) {
             Button {
-                if let a = profile?.avatar_id, !a.isEmpty { showAvatar = true }
+                if !avatarID.isEmpty { showAvatar = true }
             } label: {
-                Avatar(token: token, userID: chat.peer_id, avatarID: (profile?.avatar_id.isEmpty ?? true) ? chat.peer_avatar_id : profile?.avatar_id,
-                       title: name, size: 96)
+                Avatar(token: token, userID: chat.peer_id, avatarID: avatarID.isEmpty ? nil : avatarID, title: name, size: 132)
+                    .padding(4)
+                    .overlay(Circle().stroke(Theme.hex(0x35E6F2, 0.75), lineWidth: 2))
+                    .shadow(color: Theme.hex(0x35E6F2, 0.18), radius: 9)
             }
-            Text(name).font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
-            Button {
-                UIPasteboard.general.string = "@" + username
-                flash(NSLocalizedString("ci.copied.username", comment: ""))
-            } label: { Text("@" + username).font(.system(size: 14)).foregroundStyle(Theme.accent) }
-            // the same line as the chat header ("Blocked" if blocked); nothing when hidden (website d4d2e77)
-            if let line = blocked ? NSLocalizedString("ci.blocked", comment: "") : live.presenceLine(chat.peer_id) {
-                Text(line).font(.system(size: 13)).foregroundStyle(live.online.contains(chat.peer_id) && !blocked ? Theme.online : Theme.faint)
-            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text(verbatim: String(format: tr("civ3.picture.view"), name)))
+            Text(verbatim: name)
+                .font(.system(size: 26, weight: .bold))
+                .foregroundStyle(Theme.text)
+                .multilineTextAlignment(.center)
+                .padding(.top, 8)
+            about
+            if let id = identity, !id.pin.isEmpty { pinPill(id.pin) }
+            if let id = identity { badges(id) }
+            Text(verbatim: handleLine)
+                .font(.system(size: 13.5))
+                .foregroundStyle(CIV3.handle)
+                .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 6)
     }
 
-    private var actions: some View {
+    /// Blocked · their About · else the presence line ("online", "last seen …") · else nothing (website d4d2e77).
+    @ViewBuilder private var about: some View {
+        if blocked {
+            aboutLine(tr("ci.blocked"), online: false)
+        } else if let bio = profile?.bio.trimmingCharacters(in: .whitespacesAndNewlines), !bio.isEmpty {
+            aboutLine(bio, online: false)
+        } else if let line = live.presenceLine(chat.peer_id) {
+            aboutLine(line, online: live.online.contains(chat.peer_id))
+        }
+    }
+
+    private func aboutLine(_ text: String, online: Bool) -> some View {
+        HStack(spacing: 8) {
+            if online { Circle().fill(Theme.hex(0x22D68A)).frame(width: 9, height: 9) }
+            Text(verbatim: text).font(.system(size: 16)).foregroundStyle(CIV3.about).multilineTextAlignment(.center)
+        }
+    }
+
+    private func pinPill(_ pin: String) -> some View {
+        Button {
+            UIPasteboard.general.string = pin
+            flash(tr("ci.copied.pin"))
+        } label: {
+            HStack(spacing: 14) {
+                Text("ci.pin").font(.system(size: 13.5)).tracking(0.5).foregroundStyle(Theme.dyn(0xB8CCD5, 0x3C5668))
+                Text(verbatim: pin)
+                    .font(.system(size: 26, weight: .heavy).monospacedDigit())
+                    .foregroundStyle(CIV3.cyan)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .environment(\.layoutDirection, .leftToRight)
+                Image(systemName: "doc.on.doc").font(.system(size: 19)).foregroundStyle(CIV3.cyan)
+            }
+            .padding(.leading, 20)
+            .padding(.trailing, 16)
+            .frame(height: 48)
+            .background(CIV3.tile, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.hex(0x35E6F2, 0.4), lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: String(format: tr("civ3.pin.copy"), pin)))
+        .accessibilityAddTraits(.isButton)
+    }
+
+    /// Early member · PIN class · country (website Badges + CountryMark).
+    @ViewBuilder private func badges(_ id: IdentityDetail) -> some View {
+        let cls = id.pin_class ?? ""
+        let cc = (id.country ?? "").trimmingCharacters(in: .whitespaces)
+        if !cls.isEmpty || id.early_member == true || !cc.isEmpty {
+            HStack(spacing: 6) {
+                if !cls.isEmpty {
+                    badge(Text(LocalizedStringKey("id.class." + cls)), icon: IdentityCardFace.classIcon(cls), color: IdentityTone.tone(cls))
+                }
+                if id.early_member == true {
+                    badge(Text("set.early"), icon: "star", color: Theme.dyn(0x9FE9EA, 0x0097A5))
+                }
+                if !cc.isEmpty {
+                    HStack(spacing: 5) {
+                        if cc.count == 2 && cc.lowercased() != "il" {
+                            Text(verbatim: IdentityCardFace.flag(cc)).font(.system(size: 15))
+                        } else {
+                            Image(systemName: "globe").font(.system(size: 12))
+                        }
+                        if cc.lowercased() != "il" {
+                            Text(verbatim: Locale.current.localizedString(forRegionCode: cc.uppercased()) ?? cc.uppercased())
+                                .font(.system(size: 12.5))
+                        }
+                    }
+                    .foregroundStyle(CIV3.about)
+                    .lineLimit(1)
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private func badge(_ title: Text, icon: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon).font(.system(size: 10.5, weight: .bold))
+            title.font(.system(size: 11.5, weight: .bold)).lineLimit(1)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 9)
+        .frame(height: 24)
+        .overlay(Capsule().stroke(color.opacity(0.5), lineWidth: 1))
+    }
+
+    /// "@username · Member since 2026"
+    private var handleLine: String {
+        guard let year = memberYear else { return "@" + username }
+        return "@" + username + " · " + String(format: tr("ci.member.since"), year)
+    }
+
+    private var memberYear: String? {
+        guard let v = identity?.member_since, v > 0 else { return nil }
+        if v < 10_000 { return String(v) } // already a year
+        guard let d = serverDate(v) else { return nil }
+        return String(Calendar(identifier: .gregorian).component(.year, from: d))
+    }
+
+    // MARK: quick tiles
+
+    private var tiles: some View {
         HStack(spacing: 10) {
-            actionButton("phone", "ci.voice") {
-                dismiss()
-                CallManager.shared.start(conversationID: chat.conversation_id, peerName: name, peerID: chat.peer_id)
+            CIV3Tile(icon: "bubble.left", title: tr("civ3.chat")) { dismiss() }
+            if calls.enabled && !blocked {
+                CIV3Tile(icon: "phone", title: tr("ci.voice")) {
+                    dismiss()
+                    calls.start(conversationID: chat.conversation_id, peerName: name, peerID: chat.peer_id)
+                }
             }
-            .disabled(!CallManager.shared.enabled || blocked)
-            actionButton("magnifyingglass", "ci.search") {
-                dismiss()
-                onSearch?()
+            if onSearch != nil {
+                CIV3Tile(icon: "magnifyingglass", title: tr("ci.search")) {
+                    dismiss()
+                    onSearch?()
+                }
             }
-            ShareLink(item: shareLink) { actionLabel("square.and.arrow.up", "ci.share") }
         }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 
-    private func actionButton(_ icon: String, _ key: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) { actionLabel(icon, key) }
-    }
-
-    private func actionLabel(_ icon: String, _ key: String) -> some View {
-        VStack(spacing: 6) {
-            Image(systemName: icon).font(.system(size: 18)).foregroundStyle(Theme.accent)
-            Text(LocalizedStringKey(key)).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.text)
-        }
-        .frame(maxWidth: .infinity, minHeight: 64)
-        .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.borderStrong, lineWidth: 1))
-    }
+    // MARK: cards
 
     private var mediaCard: some View {
-        TFCard {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("ci.media").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.text)
-                HStack(spacing: 6) {
-                    ForEach(["media", "files", "voice", "links"], id: \.self) { c in
-                        FilterChip(title: NSLocalizedString("ci.tab." + c, comment: ""), selected: tab == c) {
-                            tab = c
-                            Task { await loadMedia() }
-                        }
-                    }
-                }
-                if media.isEmpty {
-                    Text("ci.media.none").font(.system(size: 12)).foregroundStyle(Theme.faint)
-                } else if tab == "media" {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 4) {
-                        ForEach(media.filter { $0.file_id != nil }) { m in
-                            RemoteImage(token: token, fileID: m.file_id ?? "")
-                                .frame(height: 96).clipped().contentShape(Rectangle())
-                                .onTapGesture { viewing = ViewedPhoto(id: m.file_id ?? "") }
-                        }
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(media) { m in
-                            HStack(spacing: 8) {
-                                Image(systemName: tab == "voice" ? "waveform" : (tab == "links" ? "link" : "doc"))
-                                    .foregroundStyle(Theme.accent)
-                                Text(tab == "files" ? (m.file_name ?? m.body) : (tab == "voice" ? VoiceBubble.length(m.duration_ms ?? 0) : m.body))
-                                    .font(.system(size: 13)).foregroundStyle(Theme.text).lineLimit(1)
-                                Spacer()
-                                if let d = m.date { Text(d, style: .date).font(.system(size: 11)).foregroundStyle(Theme.faint) }
-                            }
-                        }
-                    }
-                }
+        CIV3Card {
+            NavigationLink {
+                CIV3MediaPage(token: token, conversationID: chat.conversation_id)
+            } label: {
+                CIV3Row(icon: "photo.on.rectangle", title: tr("ci.media"), value: mediaCount.map { $0.formatted() })
             }
-            .padding(14)
+            CIV3Divider()
+            NavigationLink {
+                CIV3StoragePage(bytes: $localBytes, measuring: $measuring) { clearLocalCopy() }
+            } label: {
+                CIV3Row(icon: "internaldrive", title: tr("civ3.storage"), value: measuring ? nil : CIV3.bytes(localBytes))
+            }
         }
     }
 
-    private func details(_ id: IdentityDetail) -> some View {
-        TFCard {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("ci.pin").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.faint)
-                HStack {
-                    Text(id.pin).font(.system(size: 26, weight: .heavy, design: .rounded)).foregroundStyle(Theme.text)
-                        .environment(\.layoutDirection, .leftToRight)
-                    Spacer()
-                    Button {
-                        UIPasteboard.general.string = id.pin
-                        flash(NSLocalizedString("ci.copied.pin", comment: ""))
-                    } label: {
-                        Label("ci.copy.pin", systemImage: "doc.on.doc").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
-                            .padding(.horizontal, 10).frame(height: 30).overlay(Capsule().stroke(Theme.borderActive, lineWidth: 1))
-                    }
-                }
-                if let since = id.member_since, since > 0 {
-                    Text(String(format: NSLocalizedString("ci.member.since", comment: ""),
-                                Date(timeIntervalSince1970: Double(since > 100_000_000_000 ? since / 1000 : since))
-                                    .formatted(date: .abbreviated, time: .omitted)))
-                        .font(.system(size: 12)).foregroundStyle(Theme.faint)
-                }
-                HStack(spacing: 6) {
-                    if id.early_member == true {
-                        Text("ci.early").font(.system(size: 10.5, weight: .bold)).foregroundStyle(Theme.gold)
-                            .padding(.horizontal, 8).frame(height: 22).overlay(Capsule().stroke(Theme.gold.opacity(0.6), lineWidth: 1))
-                    }
-                    if let c = id.country, !c.isEmpty {
-                        Text("\(CalendarView.flag(c)) \(Locale.current.localizedString(forRegionCode: c) ?? c)")
-                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
-                    }
-                }
+    private var settingsCard: some View {
+        CIV3Card {
+            Button { showMute = true } label: {
+                CIV3Row(icon: "bell", title: tr("ci.notifications"),
+                        value: MuteSheet.label(mutedUntil: prefs?.muted_until) ?? tr("ci.on"))
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
+            CIV3Divider()
+            NavigationLink { ChatThemePicker(conversationID: chat.conversation_id, selected: $theme) } label: {
+                CIV3Row(icon: "paintpalette", title: tr("ci.theme"), value: ChatThemeStyle.item(theme).name)
+            }
+            CIV3Divider()
+            NavigationLink { SaveToPhotosPage(restricted: restricted) } label: {
+                CIV3Row(icon: "square.and.arrow.down", title: tr("ci.save"), value: restricted ? tr("ci.off") : nil)
+            }
+        }
+    }
+
+    private var privacyCard: some View {
+        CIV3Card {
+            NavigationLink { DisappearingPage(conversationID: chat.conversation_id, value: $disappear) } label: {
+                CIV3Row(icon: "timer", title: tr("info.disappear"), value: tr(Self.timerKey(disappear)))
+            }
+            CIV3Divider()
+            Button { showLock = true } label: {
+                CIV3Row(icon: "lock", title: tr("ci.lock"), subtitle: tr("ci.lock.sub"), toggle: locked)
+            }
+            .accessibilityValue(Text(verbatim: tr(locked ? "ci.on" : "ci.off")))
+            CIV3Divider()
+            NavigationLink { RestrictedPage(conversationID: chat.conversation_id, on: $restricted) } label: {
+                CIV3Row(icon: "checkmark.shield", title: tr("ci.restricted"), subtitle: tr("ci.restricted.sub"),
+                        value: tr(restricted ? "ci.on" : "ci.off"))
+            }
+        }
+    }
+
+    private func groupsCard(_ list: [CommonGroup]) -> some View {
+        CIV3Card {
+            NavigationLink {
+                CIV3GroupsPage(token: token, groups: list, name: name) { g in openGroup(g) }
+            } label: {
+                CIV3Row(icon: "person.3", title: list.count == 1 ? tr("civ3.groups.one") : String(format: tr("civ3.groups.n"), list.count))
+            }
+        }
+    }
+
+    private var actionsCard: some View {
+        CIV3Card {
+            if identity != nil {
+                Button { Task { await shareContact() } } label: {
+                    CIV3Row(icon: "square.and.arrow.up", title: tr("ci.share.contact"), chevron: false)
+                }
+                CIV3Divider()
+            }
+            if folders != nil {
+                Button { Task { await toggleFavorite() } } label: {
+                    CIV3Row(icon: favorite ? "heart.fill" : "heart", title: tr(favorite ? "civ3.fav.remove" : "civ3.fav.add"), chevron: false)
+                }
+                .disabled(busy)
+                CIV3Divider()
+                NavigationLink {
+                    CIV3ListsPage(token: token, conversationID: chat.conversation_id, folders: $folders) { flash($0) }
+                } label: {
+                    CIV3Row(icon: "text.badge.plus", title: tr("civ3.list"), chevron: false)
+                }
+                CIV3Divider()
+            }
+            Button { Task { await togglePin() } } label: {
+                CIV3Row(icon: "pin", title: tr((prefs?.pinned ?? false) ? "ci.unpin" : "ci.pinchat"), chevron: false)
+            }
+            CIV3Divider()
+            Button { Task { await exportChat() } } label: {
+                CIV3Row(icon: "arrow.up.doc", title: tr("civ3.export"), chevron: false)
+            }
+            .disabled(busy)
+            CIV3Divider()
+            Button { confirmClear = true } label: {
+                CIV3Row(icon: "trash", title: tr("civ3.clear"), danger: true, chevron: false)
+            }
+            CIV3Divider()
+            Button {
+                if blocked { Task { await unblock() } } else { confirmBlock = true }
+            } label: {
+                CIV3Row(icon: "nosign", title: String(format: tr(blocked ? "ci.unblock.name" : "ci.block.name"), name), danger: true, chevron: false)
+            }
         }
     }
 
     private func flash(_ text: String) {
-        copied = text
-        Task {
-            try? await Task.sleep(nanoseconds: 1_600_000_000)
-            copied = nil
+        noteTask?.cancel()
+        note = text
+        noteTask = Task {
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            if !Task.isCancelled { note = nil }
         }
     }
 
@@ -295,17 +418,25 @@ struct ContactInfoView: View {
         async let i = APIClient.shared.ctIdentity(token: token, userID: chat.peer_id)
         async let s = APIClient.shared.chatSettings(token: token, conversationID: chat.conversation_id)
         async let b = APIClient.shared.blocked(token: token)
+        async let st = APIClient.shared.grpMediaStats(token: token, conversationID: chat.conversation_id)
+        async let cg = APIClient.shared.civ3CommonGroups(token: token, userID: chat.peer_id)
+        async let fd = FolderStore.load(token: token)
         profile = try? await p
         identity = try? await i
-        if let st = try? await s {
-            disappear = st.disappear_secs
-            restricted = st.restricted
+        if let set = try? await s {
+            disappear = set.disappear_secs
+            restricted = set.restricted
         }
         blocked = ((try? await b) ?? []).contains(chat.peer_id)
+        if let m = await st {
+            mediaCount = (m.photos ?? 0) + (m.videos ?? 0) + (m.files ?? 0) + (m.links ?? 0)
+        }
+        groups = try? await cg
+        folders = (try? await fd)?.1
         theme = await ChatThemeStore.load(token: token, conversationID: chat.conversation_id)
         await loadPrefs()
         await loadLock()
-        await loadMedia()
+        await measureLocalCopy()
     }
 
     private func loadPrefs() async {
@@ -316,8 +447,21 @@ struct ContactInfoView: View {
         locked = (try? await APIClient.shared.ctLockState(token: token))?.isLocked(chat.conversation_id) ?? false
     }
 
-    private func loadMedia() async {
-        media = (try? await APIClient.shared.ctMedia(token: token, conversationID: chat.conversation_id, category: tab)) ?? []
+    private func measureLocalCopy() async {
+        measuring = true
+        let copy = await LocalChatCopy.measure(token: token, conversationID: chat.conversation_id)
+        localCopy = copy
+        localBytes = copy.bytes
+        measuring = false
+    }
+
+    /// Free up storage: only this device's copy; nothing on the account changes.
+    private func clearLocalCopy() {
+        LocalChatCopy.clear(localCopy)
+        localCopy = LocalChatCopy.Copy()
+        localBytes = 0
+        flash(tr("civ3.storage.cleared"))
+        Task { await measureLocalCopy() }
     }
 
     private func togglePin() async {
@@ -325,12 +469,87 @@ struct ContactInfoView: View {
         await loadPrefs()
     }
 
+    private func toggleFavorite() async {
+        let on = !favorite
+        busy = true
+        defer { busy = false }
+        do {
+            folders = try await CIV3Folders.setFavorite(token: token, conversationID: chat.conversation_id, on: on)
+            flash(tr(on ? "civ3.fav.added" : "civ3.fav.removed"))
+        } catch {
+            flash(tr("settings.failed"))
+        }
+    }
+
+    private func openGroup(_ g: CommonGroup) {
+        dismiss()
+        LocalNotifier.shared.tappedConversation = g.id
+    }
+
+    /// The identity card as a picture, with the link (Settings › My Identity's Share Card, for this person).
+    @MainActor private func shareContact() async {
+        guard let id = identity else { return }
+        var picture: UIImage?
+        if let a = id.avatar_id, !a.isEmpty, let d = await APIClient.shared.avatar(token: token, userID: id.user_id, avatarID: a) {
+            picture = UIImage(data: d)
+        }
+        let card = StIdentity(user_id: id.user_id, username: id.username, display_name: id.display_name ?? "", pin: id.pin,
+                              early_member: id.early_member, original_pin_length: nil, member_since: id.member_since,
+                              username_change_available_at: nil, avatar_id: id.avatar_id, pin_class: id.pin_class, country: id.country)
+        let renderer = ImageRenderer(content: IdentityCardFace(id: card, link: shareLink, avatar: picture, beam: false)
+            .frame(width: 380).padding(16).background(Theme.hex(0x02090E)))
+        renderer.scale = 3
+        var items: [Any] = []
+        if let img = renderer.uiImage { items.append(img) }
+        if let url = URL(string: shareLink) { items.append(url) }
+        if !items.isEmpty { share = CIV3Share(items: items) }
+    }
+
+    private func exportChat() async {
+        if restricted {
+            flash(tr("civ3.export.restricted"))
+            return
+        }
+        busy = true
+        defer { busy = false }
+        flash(tr("civ3.export.preparing"))
+        let me = store.session?.userID ?? ""
+        let myName = store.session?.username ?? ""
+        let peer = chat.peer_id
+        let peerName = name
+        do {
+            let (url, n) = try await ChatExporter.export(token: token, conversationID: chat.conversation_id, title: peerName,
+                                                         nameOf: { $0 == peer ? peerName : ($0 == me ? myName : $0) }, me: myName)
+            flash(String(format: tr("civ3.export.done"), n))
+            share = CIV3Share(items: [url])
+        } catch {
+            flash(tr("civ3.export.failed"))
+        }
+    }
+
+    /// Clear chat: every message leaves my view on all my devices (the open chat drops them on the live "hidden" event);
+    /// the other person keeps theirs; the chat stays listed. Then this device's copy goes too.
+    private func clearChat() async {
+        do {
+            let n = try await APIClient.shared.civ3ClearChat(token: token, conversationID: chat.conversation_id)
+            LocalChatCopy.clear(localCopy)
+            localCopy = LocalChatCopy.Copy()
+            localBytes = 0
+            mediaCount = 0
+            flash(n > 0 ? String(format: tr("civ3.clear.done"), n) : tr("civ3.clear.empty"))
+        } catch ClearChatError.notMember {
+            flash(tr("civ3.clear.notmember"))
+        } catch {
+            flash(tr("civ3.clear.failed"))
+        }
+    }
+
     private func block() async {
         do {
             try await APIClient.shared.block(token: token, userID: chat.peer_id)
             blocked = true
         } catch {
-            problem = NSLocalizedString("chat.action.failed", comment: "")
+            flash(tr("chat.action.failed"))
         }
     }
 

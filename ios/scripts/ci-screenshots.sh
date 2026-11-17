@@ -39,6 +39,8 @@ run 300 xcrun simctl boot "$UDID" || exit 1
 run 300 xcrun simctl bootstatus "$UDID" -b || exit 1
 run 30 xcrun simctl status_bar "$UDID" override --time "9:41" --batteryState charged --batteryLevel 100 || true
 run 120 xcrun simctl install "$UDID" "$APP" || exit 1
+# no system permission prompt over the screenshots (the scanner asks for the camera)
+run 30 xcrun simctl privacy "$UDID" grant camera "$BID" || true
 # A just-booted simulator can stall app launches for minutes: warm it up with a system app until launches return.
 for i in 1 2 3 4 5 6; do
   if run 60 xcrun simctl launch "$UDID" com.apple.Preferences >/dev/null; then
@@ -99,6 +101,7 @@ run 30 xcrun simctl terminate "$UDID" "$BID" || true
 run 60 xcrun simctl uninstall "$UDID" "$BID" || true
 run 30 xcrun simctl keychain "$UDID" reset || true
 run 120 xcrun simctl install "$UDID" "$APP" || status=1
+run 30 xcrun simctl privacy "$UDID" grant camera "$BID" || true
 launch en en_US && sleep 5 && shot 01-login-en.png || status=1
 launch ar ar_SA && sleep 4 && shot 02-login-ar.png || status=1
 
@@ -118,6 +121,7 @@ size_shots() { # size_shots <label> <device type candidates...>
   run 300 xcrun simctl boot "$UDID" && run 300 xcrun simctl bootstatus "$UDID" -b || { UDID="$MAIN"; return 1; }
   run 30 xcrun simctl status_bar "$UDID" override --time "9:41" --batteryState charged --batteryLevel 100 || true
   run 120 xcrun simctl install "$UDID" "$APP" || { UDID="$MAIN"; return 1; }
+  run 30 xcrun simctl privacy "$UDID" grant camera "$BID" || true
   run 60 xcrun simctl launch "$UDID" com.apple.Preferences >/dev/null || true
   local rc=0
   launch en en_US with-account && sleep 15 || rc=1
