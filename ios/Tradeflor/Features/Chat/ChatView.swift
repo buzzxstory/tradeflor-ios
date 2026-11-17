@@ -432,7 +432,7 @@ struct ChatView: View {
                     if !openedAtEnd && !messages.isEmpty {
                         // the chat opens at its end (or at the unread line): again once pictures have taken their room
                         openedAtEnd = true
-                        for d in [0.0, 0.35, 0.9] {
+                        for d in [0.0, 0.35, 0.9, 1.6, 2.5] {
                             DispatchQueue.main.asyncAfter(deadline: .now() + d) {
                                 if unreadMarkID != nil && unreadMarkCount > 0 { proxy.scrollTo("unread-mark", anchor: .top) }
                                 else { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -791,6 +791,7 @@ struct ChatView: View {
                         HStack(spacing: 4) {
                             Text(subtitle ?? (isGroup ? String(format: NSLocalizedString("groups.members", comment: ""), memberCount) : ""))
                                 .font(.system(size: 13)).foregroundStyle(peerTypingUntil != nil ? Theme.accent : Theme.faint).lineLimit(1)
+                                .minimumScaleFactor(0.8)
                         }
                     }
                 }
