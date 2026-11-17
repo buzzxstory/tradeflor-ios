@@ -215,7 +215,39 @@ struct AlbumGrid: View {
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
     }
 
+    /// Each photo stays its own message: press and hold one for its menu (MessageMenu.swift).
     private func tile(_ m: Message, _ w: CGFloat, _ h: CGFloat, _ k: Int) -> some View {
+        tileBody(m, w, h, k)
+            .modifier(MessageMenuTrigger(enabled: true, menu: { tileMenu(m, w, h, k) }, fallback: { tileFallbackMenu(m) }))
+    }
+
+    private func tileMenu(_ m: Message, _ w: CGFloat, _ h: CGFloat, _ k: Int) -> MessageMenuContent {
+        var items = [MessageMenuItem("chat.reply", systemImage: "arrowshape.turn.up.left") { actions.reply(m) }]
+        if let f = actions.forward { items.append(MessageMenuItem("chat.forward", systemImage: "arrowshape.turn.up.right") { f(m) }) }
+        if let s = actions.save { items.append(MessageMenuItem("chat.save.as", systemImage: "arrow.down.to.line") { s(m) }) }
+        items.append(MessageMenuItem("chat.select", systemImage: "checkmark") { actions.select(m) })
+        items.append(MessageMenuItem("chat.delete", systemImage: "trash", destructive: true) { actions.delete(m) })
+        // "+" opens the host's own emoji picker (moreReactions nil)
+        return MessageMenuContent(active: Set(m.reactionList(me: me).filter(\.mine).map(\.emoji)),
+                                  onReact: { e in actions.react(m, e) },
+                                  items: items, preview: AnyView(tileBody(m, w, h, k)), mine: mine)
+    }
+
+    /// The system context menu, used only when the screen has no menu host (`.messageMenuHost()`).
+    @ViewBuilder private func tileFallbackMenu(_ m: Message) -> some View {
+        ControlGroup {
+            ForEach(MessageMenuStyle.quickEmoji, id: \.self) { e in Button(e) { actions.react(m, e) } }
+        }
+        .tfReactionRow()
+        Button { actions.reply(m) } label: { Label("chat.reply", systemImage: "arrowshape.turn.up.left") }
+        if let f = actions.forward { Button { f(m) } label: { Label("chat.forward", systemImage: "arrowshape.turn.up.right") } }
+        if let s = actions.save { Button { s(m) } label: { Label("chat.save.as", systemImage: "square.and.arrow.down") } }
+        Button { actions.select(m) } label: { Label("chat.select", systemImage: "checkmark.circle") }
+        Divider()
+        Button(role: .destructive) { actions.delete(m) } label: { Label("chat.delete", systemImage: "trash") }
+    }
+
+    private func tileBody(_ m: Message, _ w: CGFloat, _ h: CGFloat, _ k: Int) -> some View {
         let last = k == min(photos.count, Albums.shown) - 1
         return ZStack {
             RemoteImage(token: token, fileID: m.file_id ?? "")
@@ -250,19 +282,6 @@ struct AlbumGrid: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { if let f = m.file_id { onOpen(f) } }
-        .contextMenu {
-            // each photo stays its own message
-            ControlGroup {
-                ForEach(["❤️", "🔥", "👏", "👍", "😂", "😮", "😡"], id: \.self) { e in Button(e) { actions.react(m, e) } }
-            }
-        .tfReactionRow()
-            Button { actions.reply(m) } label: { Label("chat.reply", systemImage: "arrowshape.turn.up.left") }
-            if let f = actions.forward { Button { f(m) } label: { Label("chat.forward", systemImage: "arrowshape.turn.up.right") } }
-            if let s = actions.save { Button { s(m) } label: { Label("chat.save.as", systemImage: "square.and.arrow.down") } }
-            Button { actions.select(m) } label: { Label("chat.select", systemImage: "checkmark.circle") }
-            Divider()
-            Button(role: .destructive) { actions.delete(m) } label: { Label("chat.delete", systemImage: "trash") }
-        }
     }
 }
 

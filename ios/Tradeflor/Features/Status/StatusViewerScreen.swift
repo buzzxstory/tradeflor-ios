@@ -106,10 +106,11 @@ struct StatusViewerScreen: View {
             Button("status.delete", role: .destructive) { Task { await deleteCurrent() } }
         }
         .overlay {
+            // web .status-burst: 104 pt, a little below the middle, floats up and fades
             if let b = burst {
-                Text(b.emoji).font(.system(size: 120)).shadow(radius: 12)
-                    .transition(.scale(scale: 0.3).combined(with: .opacity))
+                StatusBurstView(emoji: b.emoji)
                     .id(b.key)
+                    .offset(y: stageH * 0.02)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
@@ -138,14 +139,16 @@ struct StatusViewerScreen: View {
                 StatusQuickGrid(onPick: { e in Task { await quickReact(e) } }, onDismiss: { replyFocused = false })
                     .transition(.opacity)
             }
-            VStack(spacing: 10) {
+            // web phone: bars 10 pt below the safe area, the head 12 pt under them, both 10 pt from the sides
+            VStack(spacing: 9) {
                 bars
                 header
+                musicChip
                 Spacer()
                 footer
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 6)
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
         }
     }
 
@@ -261,13 +264,9 @@ struct StatusViewerScreen: View {
             case "image":
                 if let image { Image(uiImage: image).resizable().scaledToFit() } else { ProgressView().tint(.white) }
             case "voice":
-                ZStack {
-                    LinearGradient(colors: [Theme.hex(0x0A4756), Theme.hex(0x02161F)], startPoint: .top, endPoint: .bottom)
-                    VStack(spacing: 14) {
-                        Image(systemName: "waveform").font(.system(size: 64, weight: .semibold)).foregroundStyle(Theme.accent)
-                        Text(VoiceBubble.length(post.duration_ms ?? 0)).font(.system(size: 16, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white)
-                    }
+                // web VoiceStatusArt: the speaker in the middle, breathing rings, lit bars and "0:12 / 0:40"
+                StatusVoiceArt(playing: videoStarted && !paused, progress: progress, durationMs: post.duration_ms ?? 0) {
+                    Avatar(token: token, userID: group.user_id, avatarID: nil, title: group.title, groupID: group.group_id, size: 108)
                 }
             default:
                 Text("status.unsupported").foregroundStyle(.white.opacity(0.8)).padding()
@@ -280,7 +279,7 @@ struct StatusViewerScreen: View {
             ForEach(group.posts.indices, id: \.self) { i in
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(.white.opacity(0.35))
+                        Capsule().fill(.white.opacity(0.3))
                         Capsule().fill(.white)
                             .frame(width: geo.size.width * (i < p ? 1 : (i == p ? progress : 0)))
                     }
@@ -291,129 +290,165 @@ struct StatusViewerScreen: View {
         .environment(\.layoutDirection, .leftToRight)
     }
 
+    /// web .status-head (phone): the picture (38 pt), the name (15 pt bold) over "6 h ago" (13 pt), then round 44 pt dark
+    /// buttons: sound (a video, a voice note or music), delete (my own status, web's trash) and close. No pause button and no
+    /// "more" menu on the phone (hold to pause; who viewed it is the eye at the bottom).
     private var header: some View {
         HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
+            Avatar(token: token, userID: group.user_id, avatarID: nil, title: group.title, groupID: group.group_id, size: 38)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
                 Text(group.isMine && group.group_id == nil ? NSLocalizedString("status.mine", comment: "") : group.title)
-                    .font(.subheadline.weight(.semibold))
-                if let d = post?.date { Text(d, style: .relative).font(.caption) }
+                    .font(.system(size: 15, weight: .bold))
+                    .lineLimit(1)
+                Text((group.group_id != nil ? NSLocalizedString("ux2.status.group", comment: "") + " · " : "") + statusAgo(post?.date))
+                    .font(.system(size: 13))
+                    .lineLimit(1)
             }
             .foregroundStyle(.white)
-            Spacer()
-            Button {
-                userPaused.toggle()
-                resume()
-            } label: {
-                Image(systemName: userPaused ? "play.fill" : "pause.fill").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).frame(width: 36, height: 40)
-            }
-            .accessibilityLabel(Text(LocalizedStringKey(userPaused ? "stx.play" : "stx.pause")))
+            .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
             if post?.kind == "video" || post?.kind == "voice" || post?.music != nil {
-                Button {
+                StatusHeadButton(systemName: muted ? "speaker.slash" : "speaker.wave.2", label: LocalizedStringKey(muted ? "stx.unmute" : "stx.mute")) {
                     muted.toggle()
                     player?.isMuted = muted
                     musicPlayer?.isMuted = muted
-                } label: {
-                    Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).frame(width: 36, height: 40)
                 }
-                .accessibilityLabel(Text(LocalizedStringKey(muted ? "stx.unmute" : "stx.mute")))
             }
-            if group.isMine {
-                Menu {
-                    Button { setPaused(true); showViewers = true } label: { Label("status.viewers", systemImage: "eye") }
-                    Button(role: .destructive) { setPaused(true); confirmDelete = true } label: { Label("stx.delete", systemImage: "trash") }
-                } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 17, weight: .bold)).foregroundStyle(.white).frame(width: 36, height: 40)
+            if group.isMine, post != nil {
+                StatusHeadButton(systemName: "trash", label: "stx.delete") {
+                    setPaused(true)
+                    confirmDelete = true
                 }
-                .accessibilityLabel(Text("stx.more"))
             }
-            Button { close() } label: {
-                Image(systemName: "xmark").font(.system(size: 17, weight: .bold)).foregroundStyle(.white).frame(width: 40, height: 40)
-            }
-            .accessibilityLabel(Text("chat.close"))
+            StatusHeadButton(systemName: "xmark", label: "chat.close") { close() }
         }
     }
 
+    /// web .status-music-chip: centred under the head (74 pt below the safe area), 32 pt high, dark glass.
+    @ViewBuilder private var musicChip: some View {
+        if let m = post?.music, !m.isEmpty {
+            Label(StatusMusic.title(m), systemImage: "music.note")
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                .lineLimit(1)
+                .padding(.horizontal, 14).frame(height: 32)
+                .background(Color.black.opacity(0.35), in: Capsule())
+                .frame(maxWidth: 280)
+                .padding(.top, 2)
+                .allowsHitTesting(false)
+                .accessibilityLabel(Text(String(format: NSLocalizedString("stx.music.on", comment: ""), StatusMusic.title(m))))
+        }
+    }
+
+    /// The reply bar's turquoise (web --tq #2fd9dc).
+    private var tq: Color { Theme.hex(0x2FD9DC) }
+
     @ViewBuilder private var footer: some View {
-        VStack(spacing: 10) {
-            if let m = post?.music, !m.isEmpty {
-                Label(StatusMusic.title(m), systemImage: "music.note")
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
-                    .padding(.horizontal, 12).frame(height: 30)
-                    .background(.black.opacity(0.45), in: Capsule())
-                    .accessibilityLabel(Text(String(format: NSLocalizedString("stx.music.on", comment: ""), StatusMusic.title(m))))
-            }
+        VStack(spacing: 12) {
             if let c = post?.caption, !c.isEmpty {
-                Text(c)
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+                // web .status-caption: a full-width band with a dark fade, not a bubble
+                StatusCaptionBand(text: c)
+                    .padding(.horizontal, -10)
+                    .allowsHitTesting(false)
             }
             if group.isMine, let post {
-                // WhatsApp: "^" over "eye N"; opens the "N views" list
+                // web .status-views-wa: "^" over "eye N" on a small dark glass plate (radius 16); opens the "N views" list
                 Button { setPaused(true); showViewers = true } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "chevron.up").font(.system(size: 14, weight: .bold))
-                        HStack(spacing: 5) {
-                            Image(systemName: "eye")
-                            Text(verbatim: "\(post.views ?? 0)")
+                    VStack(spacing: 1) {
+                        Image(systemName: "chevron.up").font(.system(size: 13, weight: .semibold)).opacity(0.8)
+                        HStack(spacing: 7) {
+                            Image(systemName: "eye").font(.system(size: 15, weight: .medium))
+                            Text(verbatim: "\(post.views ?? 0)").font(.system(size: 15, weight: .semibold).monospacedDigit())
                         }
-                        .font(.system(size: 14, weight: .semibold))
                     }
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 14).padding(.vertical, 6).background(.black.opacity(0.45), in: Capsule())
+                    .padding(.horizontal, 18).padding(.top, 4).padding(.bottom, 6)
+                    .background {
+                        RoundedRectangle(cornerRadius: 16).fill(.ultraThinMaterial).environment(\.colorScheme, .dark)
+                            .overlay(RoundedRectangle(cornerRadius: 16).fill(Color.black.opacity(0.32)))
+                    }
                 }
-                .padding(.bottom, 12)
+                .buttonStyle(.plain)
+                .padding(.bottom, 14)
                 .accessibilityLabel(Text(statusViewsTitle(post.views ?? 0)))
                 .accessibilityHint(Text("stx.views.show"))
             } else if group.group_id == nil {
-                VStack(spacing: 6) {
-                    if let replyNote { Text(replyNote).font(.system(size: 12)).foregroundStyle(.white.opacity(0.85)) }
-                    HStack(spacing: 8) {
-                        HStack(spacing: 4) {
-                            TextField("", text: $reply, prompt: Text(String(format: NSLocalizedString("stx.reply.ph", comment: ""), group.title))
-                                .foregroundColor(.white.opacity(0.6)))
+                // web .status-replybar: a 46 pt dark-teal field with a turquoise rim, the emoji button inside its end, and a
+                // 46 pt round heart (or the turquoise send button once something is typed) beside it
+                VStack(spacing: 8) {
+                    if let replyNote {
+                        Text(replyNote).font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                            .padding(.horizontal, 14).padding(.vertical, 7)
+                            .background(Theme.hex(0xB8414A), in: Capsule())
+                    }
+                    HStack(spacing: 10) {
+                        HStack(spacing: 2) {
+                            TextField("", text: $reply, prompt: Text(String(format: NSLocalizedString("stx.reply.ph", comment: ""), group.username))
+                                .foregroundColor(Theme.hex(0xD6E6ED, 0.55)))
+                                .font(.system(size: 16))
                                 .focused($replyFocused)
                                 .foregroundStyle(.white)
+                                .tint(tq)
+                                .submitLabel(.send)
+                                .onSubmit { Task { await sendReply() } }
                                 .onChange(of: replyFocused) { _ in resume() }
-                                .onChange(of: reply) { t in if t.count > 2000 { reply = String(t.prefix(2000)) } }
+                                .onChange(of: reply) { t in
+                                    if t.count > 2000 { reply = String(t.prefix(2000)) }
+                                    if replyNote != nil { replyNote = nil }
+                                }
                             // the full emoji panel for the reply
                             Button {
                                 setPaused(true)
                                 showEmoji = true
                             } label: {
-                                Image(systemName: "face.smiling").font(.system(size: 20, weight: .semibold))
-                                    .foregroundStyle(.white.opacity(0.9)).frame(width: 34, height: 44)
+                                Image(systemName: "face.smiling").font(.system(size: 20))
+                                    .foregroundStyle(showEmoji ? tq : Theme.hex(0xD6E6ED, 0.72))
+                                    .frame(width: 36, height: 36)
+                                    .contentShape(Circle())
                             }
+                            .buttonStyle(.plain)
                             .accessibilityLabel(Text("stv.emoji"))
                         }
-                        .padding(.leading, 16).padding(.trailing, 6).frame(height: 44)
-                        .background(.black.opacity(0.45), in: Capsule())
-                        .overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 1))
+                        .padding(.leading, 20).padding(.trailing, 6).frame(height: 46)
+                        .background(Theme.hex(0x051A24, 0.78), in: Capsule())
+                        .overlay(Capsule().stroke(replyNote != nil ? Theme.hex(0xFF8282, 0.7) : (replyFocused ? tq : tq.opacity(0.35)), lineWidth: 1))
+                        .shadow(color: replyFocused ? tq.opacity(0.12) : .clear, radius: 4)
                         if !reply.trimmingCharacters(in: .whitespaces).isEmpty {
                             Button { Task { await sendReply() } } label: {
-                                Group { if sending { ProgressView().tint(.white) } else { Image(systemName: "paperplane.fill") } }
-                                    .font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
-                                    .frame(width: 44, height: 44).background(Theme.sendGradient, in: Circle())
+                                Group {
+                                    if sending { ProgressView().tint(Theme.hex(0x032128)) } else { Image(systemName: "paperplane.fill").font(.system(size: 18, weight: .semibold)) }
+                                }
+                                .foregroundStyle(Theme.hex(0x032128))
+                                .frame(width: 46, height: 46)
+                                .background(LinearGradient(colors: [Theme.hex(0x5BE6E8), Theme.hex(0x12A9B4)], startPoint: .topLeading, endPoint: .bottomTrailing), in: Circle())
+                                .shadow(color: tq.opacity(0.5), radius: 8, y: 6)
+                                .opacity(sending ? 0.38 : 1)
                             }
+                            .buttonStyle(.plain)
                             .disabled(sending)
                             .accessibilityLabel(Text("stx.reply.send"))
                         } else {
                             // the one-tap like beside the reply box: a private like, no chat message
+                            let liked = myReact == statusLike
                             Button { Task { await react(statusLike) } } label: {
-                                Image(systemName: myReact == statusLike ? "heart.fill" : "heart")
-                                    .font(.system(size: 22, weight: .semibold))
-                                    .foregroundStyle(myReact == statusLike ? Color.red : .white)
-                                    .frame(width: 44, height: 44)
+                                Image(systemName: liked ? "heart.fill" : "heart")
+                                    .font(.system(size: 20, weight: .regular))
+                                    .foregroundStyle(liked ? Theme.hex(0xFF3D5F) : .white)
+                                    .frame(width: 46, height: 46)
+                                    .background(Theme.hex(0x051A24, 0.62), in: Circle())
+                                    .overlay(Circle().stroke(liked ? Theme.hex(0xFF3D5F, 0.55) : .white.opacity(0.28), lineWidth: 1))
+                                    .contentShape(Circle())
                             }
-                            .accessibilityLabel(Text(LocalizedStringKey(myReact == statusLike ? "stx.unlike" : "stx.like")))
-                            .accessibilityAddTraits(myReact == statusLike ? .isSelected : [])
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(Text(LocalizedStringKey(liked ? "stx.unlike" : "stx.like")))
+                            .accessibilityAddTraits(liked ? .isSelected : [])
                         }
                     }
                 }
                 .animation(.easeOut(duration: 0.18), value: replyFocused)
-                .padding(.bottom, 10)
+                .padding(.horizontal, 2)
+                .padding(.bottom, 14)
             }
         }
     }
@@ -614,7 +649,7 @@ struct StatusViewerScreen: View {
     private func showBurst(_ emoji: String) {
         let key = UUID()
         withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { burst = (emoji, key) }
-        Task { try? await Task.sleep(nanoseconds: 1_100_000_000); if burst?.key == key { withAnimation { burst = nil } } }
+        Task { try? await Task.sleep(nanoseconds: 1_300_000_000); if burst?.key == key { withAnimation { burst = nil } } }
     }
 
     /// The like (the heart): recorded on the status only; the owner sees it in "Viewed by" and nothing goes to the chat
@@ -741,12 +776,25 @@ struct StatusViewersSheet: View {
     var body: some View {
         NavigationStack {
             // WhatsApp: "N views", a heart badge on those who liked it, "today 12:31 AM"
-            List(viewers) { v in StatusViewerLine(token: token, viewer: v) }
+            // web .status-sheet-card: the deep teal card (#06212b), rows split by a faint teal line
+            List(viewers) { v in
+                StatusViewerLine(token: token, viewer: v)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparatorTint(Theme.hex(0x3C8CAA, 0.14))
+            }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(Theme.hex(0x06212B))
+            .foregroundStyle(Theme.hex(0xE8F2F8))
+            .environment(\.colorScheme, .dark)
             .overlay {
                 if loading { ProgressView() } else if viewers.isEmpty { Text("status.noviews").foregroundStyle(.secondary) }
             }
             .navigationTitle(Text(statusViewsTitle(loading ? views : viewers.count)))
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Theme.hex(0x06212B), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
         }
         .presentationDetents([.medium, .large])
         .task {

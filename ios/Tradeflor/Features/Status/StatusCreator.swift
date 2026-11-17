@@ -35,50 +35,17 @@ struct StatusCreatorSheet: View {
 
     private var token: String { store.session?.token ?? "" }
 
+    // web .sc palette (58-status-creator.css): deep midnight navy, one turquoise accent
+    private static let ink = Theme.hex(0xEEF6F9)
+    private static let dim = Theme.hex(0x8EA9B6)
+
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    // v2 start (website 58-status-creator.css): the market behind the moment and a lit ring around me
-                    StatusCreatorHero(token: token, userID: store.session?.userID ?? "", name: store.session?.username ?? "?")
-                    Text("stx.share").font(.system(size: 14)).foregroundStyle(Theme.faint).frame(maxWidth: .infinity)
-                    PhotosPicker(selection: $picked, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-                        HStack(spacing: 12) {
-                            Image(systemName: "photo.on.rectangle").font(.system(size: 20)).foregroundStyle(Theme.accent)
-                                .frame(width: 44, height: 44).background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("stx.tile.media").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
-                                Text("stx.tile.media.sub2").font(.system(size: 12)).foregroundStyle(Theme.faint)
-                            }
-                            Spacer()
-                            // a small photo stack
-                            ZStack {
-                                ForEach(0..<3, id: \.self) { k in
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(LinearGradient(colors: [Theme.hex(0x2FD9DC, 0.5 - Double(k) * 0.12), Theme.hex(0x0A3445)], startPoint: .top, endPoint: .bottom))
-                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.3), lineWidth: 1))
-                                        .frame(width: 30, height: 38)
-                                        .rotationEffect(.degrees(Double(k - 1) * 10))
-                                        .offset(x: CGFloat(k - 1) * 8)
-                                }
-                            }
-                            .frame(width: 60)
-                        }
-                        .padding(14)
-                        .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 16))
-                        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.borderActive, lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                        Button { showCamera = true } label: { tile("camera", "stx.tile.camera", "stx.tile.camera.sub", Theme.hex(0x2FD9DC)) }
-                        Button { showText = true } label: { tile("textformat", "stx.tile.text", "stx.tile.text.sub", Theme.hex(0xF2C14E)) }
-                        PhotosPicker(selection: $layoutPicked, maxSelectionCount: 6, matching: .images) {
-                            tile("square.grid.2x2", "stx.tile.layout", "stx.tile.layout.sub", Theme.hex(0xA78BFA))
-                        }
-                        Button { showVoice = true } label: { tile("mic", "stx.tile.voice", "stx.tile.voice.sub", Theme.hex(0xF472B6)) }
-                    }
-                    .buttonStyle(.plain)
-
+                VStack(spacing: 0) {
+                    startSection
+                    // the queue of chosen photos and videos, then Post status
+                    VStack(alignment: .leading, spacing: 14) {
                     if !items.isEmpty {
                         TFSectionLabel(text: String(format: NSLocalizedString("stx.queue", comment: ""), items.count))
                         ForEach($items) { $it in
@@ -114,18 +81,39 @@ struct StatusCreatorSheet: View {
                         }
                         .disabled(posting)
                     }
-                    if let problem { Text(problem).font(.system(size: 13)).foregroundStyle(Theme.danger) }
-                    Text("stx.footer").font(.system(size: 12)).foregroundStyle(Theme.faint).frame(maxWidth: .infinity).padding(.top, 8)
+                        if let problem {
+                            // web .sc-notice
+                            Text(problem).font(.system(size: 14)).lineSpacing(3).foregroundStyle(Theme.hex(0xFFB3B3))
+                                .multilineTextAlignment(.center).frame(maxWidth: .infinity)
+                                .padding(.horizontal, 14).padding(.vertical, 12)
+                                .background(Theme.hex(0xFF8F8F, 0.1), in: RoundedRectangle(cornerRadius: 14))
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    // web .sc-foot
+                    Text("ux2.creator.foot")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.hex(0x6F8B98))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                        .padding(.top, 22)
                 }
-                .padding(16)
+                .padding(.bottom, 16)
+                .frame(maxWidth: .infinity)
+                // web .sc-start-art: the soft market line and candles behind the bar and the ring, fading out downwards
+                .background(alignment: .top) {
+                    StatusCreatorArt()
+                        .frame(height: 300)
+                        .mask(LinearGradient(stops: [.init(color: .black, location: 0.55), .init(color: .clear, location: 1)],
+                                             startPoint: .top, endPoint: .bottom))
+                        .allowsHitTesting(false)
+                }
             }
-            .background(Starfield())
-            .navigationTitle(groupName.map { Text(String(format: NSLocalizedString("stx.new.group", comment: ""), $0)) } ?? Text("stx.new"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Theme.header, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
+            .background(StatusCreatorBackdrop().ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
         }
+        .environment(\.colorScheme, .dark) // the web's creator is always the dark midnight screen
         .onChange(of: picked) { list in
             guard !list.isEmpty else { return }
             picked = []
@@ -193,18 +181,161 @@ struct StatusCreatorSheet: View {
         }
     }
 
-    private func tile(_ icon: String, _ title: String, _ sub: String, _ tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Image(systemName: icon).font(.system(size: 20)).foregroundStyle(tint)
-                .frame(width: 40, height: 40).background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 10))
-            Text(LocalizedStringKey(title)).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.text)
-            Text(LocalizedStringKey(sub)).font(.system(size: 12)).foregroundStyle(Theme.faint)
+    /// The start screen's top half (web .sc-start): the bar, my lit ring, "Share a moment", who sees it, and the ways to post.
+    @ViewBuilder private var startSection: some View {
+        // web .sc-bar: X in a dark glass circle on the left, the title in the middle (no system bar)
+        HStack(spacing: 8) {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Self.ink)
+                    .frame(width: 44, height: 44)
+                    .background(Color.black.opacity(0.2), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("chat.close"))
+            Text(groupName ?? NSLocalizedString("stx.new", comment: ""))
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(Self.ink)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+                .accessibilityAddTraits(.isHeader)
+            Color.clear.frame(width: 44, height: 44)
         }
-        .frame(maxWidth: .infinity, minHeight: 110, alignment: .leading)
-        .padding(12)
-        .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(alignment: .top) { Capsule().fill(tint.opacity(0.8)).frame(height: 2).padding(.horizontal, 18) }
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.borderStrong, lineWidth: 1))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        // the lit ring around me (web .sc-hero), "Share a moment" big, and who sees it right under it
+        StatusCreatorHero(token: token, userID: store.session?.userID ?? "", name: store.session?.username ?? "?")
+            .padding(.top, 10)
+            .padding(.bottom, 16)
+        Text("stx.share")
+            .font(.system(size: 30, weight: .heavy))
+            .tracking(-0.5)
+            .foregroundStyle(Self.ink)
+            .multilineTextAlignment(.center)
+        Text(groupName.map { String(format: NSLocalizedString("ux2.creator.sub.group", comment: ""), $0) }
+             ?? NSLocalizedString("stx.footer", comment: ""))
+            .font(.system(size: 15))
+            .lineSpacing(4)
+            .foregroundStyle(Theme.hex(0x9FB8C4))
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 24)
+            .padding(.top, 8)
+        VStack(spacing: 12) {
+            PhotosPicker(selection: $picked, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
+                mainTile
+            }
+            .buttonStyle(.plain)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                Button { showCamera = true } label: { tile("camera", "stx.tile.camera", "stx.tile.camera.sub", 0x2FD9DC, soft: 0.14, glow: 0.22) }
+                Button { showText = true } label: { tile(nil, "stx.tile.text", "stx.tile.text.sub", 0xF2C14E, soft: 0.15, glow: 0.2) }
+                PhotosPicker(selection: $layoutPicked, maxSelectionCount: 6, matching: .images) {
+                    tile("square.grid.2x2", "stx.tile.layout", "stx.tile.layout.sub", 0xA68BFF, soft: 0.16, glow: 0.22, glowHex: 0x8F6BFF)
+                }
+                Button { showVoice = true } label: { tile("mic", "stx.tile.voice", "stx.tile.voice.sub", 0xFF8AA0, soft: 0.15, glow: 0.2, glowHex: 0xFF7A93) }
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 26)
+    }
+
+    /// web .sc-way--main: the bright turquoise-to-blue card, a white icon on frosted glass, "Photos & videos" (19 pt) over
+    /// "Up to 10 from your phone", and a fanned stack of three colourful photos on the right.
+    private var mainTile: some View {
+        let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+        return HStack(spacing: 16) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 25, weight: .regular))
+                .foregroundStyle(.white)
+                .frame(width: 54, height: 54)
+                .background(Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(Color.white.opacity(0.25), lineWidth: 1))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("stx.tile.media").font(.system(size: 19, weight: .bold)).tracking(-0.2).foregroundStyle(.white)
+                Text("stx.tile.media.sub2").font(.system(size: 13.5)).foregroundStyle(.white.opacity(0.82))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // web .sc-way-stack: gold, violet and a little landscape, fanned
+            ZStack(alignment: .topLeading) {
+                stackCard(LinearGradient(colors: [Theme.hex(0xF6C453), Theme.hex(0xB7791F)], startPoint: .top, endPoint: .bottom))
+                    .rotationEffect(.degrees(-12)).offset(x: 0, y: 10)
+                stackCard(LinearGradient(colors: [Theme.hex(0x8F6BFF), Theme.hex(0x4A2BB5)], startPoint: .top, endPoint: .bottom))
+                    .rotationEffect(.degrees(-2)).offset(x: 9, y: 6)
+                stackCard(LinearGradient(stops: [.init(color: Theme.hex(0x4FD3E0), location: 0), .init(color: Theme.hex(0x4FD3E0), location: 0.55),
+                                                 .init(color: Theme.hex(0x0F6B5A), location: 0.56), .init(color: Theme.hex(0x0F6B5A), location: 1)],
+                                         startPoint: .top, endPoint: .bottom),
+                          sun: true)
+                    .rotationEffect(.degrees(9)).offset(x: 18, y: 2)
+            }
+            .frame(width: 54, height: 60, alignment: .topLeading)
+            .padding(.trailing, 2)
+        }
+        .padding(.vertical, 18)
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity, minHeight: 96)
+        .background {
+            ZStack {
+                LinearGradient(stops: [.init(color: Theme.hex(0x13C3CF), location: 0), .init(color: Theme.hex(0x0C8FB5), location: 0.48),
+                                       .init(color: Theme.hex(0x0B5F93), location: 1)],
+                               startPoint: UnitPoint(x: 0, y: 0.2), endPoint: UnitPoint(x: 1, y: 0.8))
+                RadialGradient(colors: [.white.opacity(0.22), .clear], center: .topLeading, startRadius: 0, endRadius: 170)
+            }
+            .clipShape(shape)
+        }
+        .overlay(shape.stroke(LinearGradient(colors: [.white.opacity(0.25), .clear], startPoint: .top, endPoint: .center), lineWidth: 1))
+        .shadow(color: Theme.hex(0x0CA0BE, 0.32), radius: 20, y: 16)
+        .contentShape(shape)
+    }
+
+    private func stackCard(_ fill: LinearGradient, sun: Bool = false) -> some View {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(fill)
+            .overlay(alignment: .topTrailing) {
+                if sun { Circle().fill(Theme.hex(0xFFE08A)).frame(width: 9, height: 9).padding(.top, 9).padding(.trailing, 6) }
+            }
+            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Color.white.opacity(0.85), lineWidth: 2))
+            .frame(width: 36, height: 46)
+            .shadow(color: .black.opacity(0.25), radius: 7, y: 6)
+    }
+
+    /// web .sc-way (not main): a dark card with the tile's own colour glowing from the top-right corner, its icon on a soft
+    /// tinted square at the top-left, and the name (16.5 pt) over a line of meaning (12.5 pt) at the bottom. `icon` nil: "Aa".
+    private func tile(_ icon: String?, _ title: String, _ sub: String, _ acc: UInt32, soft: Double, glow: Double, glowHex: UInt32? = nil) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+        return VStack(alignment: .leading, spacing: 0) {
+            Group {
+                if let icon {
+                    Image(systemName: icon).font(.system(size: 22, weight: .regular))
+                } else {
+                    Text(verbatim: "Aa").font(.system(size: 21, weight: .heavy)).tracking(-0.4)
+                }
+            }
+            .foregroundStyle(Theme.hex(acc))
+            .frame(width: 46, height: 46)
+            .background(Theme.hex(acc, soft), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .padding(.leading, -2) // the icon sits 14 pt in, the words 16 pt
+            Spacer(minLength: 8)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(LocalizedStringKey(title)).font(.system(size: 16.5, weight: .bold)).foregroundStyle(Self.ink)
+                Text(LocalizedStringKey(sub)).font(.system(size: 12.5)).foregroundStyle(Self.dim)
+            }
+        }
+        .padding(.top, 14)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity, minHeight: 124, alignment: .leading)
+        .background {
+            ZStack {
+                LinearGradient(colors: [Theme.hex(0x0D2A37), Theme.hex(0x071A24)], startPoint: UnitPoint(x: 0.3, y: 0), endPoint: UnitPoint(x: 0.7, y: 1))
+                RadialGradient(colors: [Theme.hex(glowHex ?? acc, glow), .clear], center: .topTrailing, startRadius: 0, endRadius: 130)
+            }
+            .clipShape(shape)
+        }
+        .overlay(shape.stroke(Color.white.opacity(0.06), lineWidth: 1))
+        .shadow(color: .black.opacity(0.28), radius: 13, y: 10)
+        .contentShape(shape)
     }
 
     private func postAll() async {
@@ -478,7 +609,8 @@ struct VoiceStatusRecorder: View {
 }
 
 
-/// The status creator's start: a soft market line and candles behind a slowly rotating lit ring around my picture.
+/// The status creator's lit ring around my picture (web .sc-hero): a 116 pt ring of turquoise, blue and gold turning slowly
+/// (9 s a turn) with a soft turquoise glow, 4 pt thick, around my 100 pt picture.
 struct StatusCreatorHero: View {
     let token: String
     let userID: String
@@ -487,42 +619,72 @@ struct StatusCreatorHero: View {
 
     var body: some View {
         ZStack {
-            Canvas { ctx, size in
-                let w = size.width, h = size.height
-                func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x / 390 * w, y: y / 300 * h) }
-                var line = Path()
-                line.move(to: pt(0, 210))
-                line.addCurve(to: pt(90, 196), control1: pt(40, 200), control2: pt(60, 220))
-                line.addCurve(to: pt(170, 168), control1: pt(120, 172), control2: pt(140, 150))
-                line.addCurve(to: pt(250, 132), control1: pt(200, 186), control2: pt(220, 120))
-                line.addCurve(to: pt(340, 84), control1: pt(280, 144), control2: pt(310, 70))
-                line.addCurve(to: pt(390, 48), control1: pt(370, 98), control2: pt(380, 52))
-                var area = line
-                area.addLine(to: pt(390, 300)); area.addLine(to: pt(0, 300)); area.closeSubpath()
-                ctx.fill(area, with: .linearGradient(Gradient(colors: [Theme.hex(0x2FD9DC, 0.16), .clear]), startPoint: .zero, endPoint: CGPoint(x: 0, y: h)))
-                ctx.stroke(line, with: .linearGradient(Gradient(stops: [.init(color: Theme.hex(0x2FD9DC, 0), location: 0), .init(color: Theme.hex(0x2FD9DC, 0.55), location: 0.35),
-                                                                        .init(color: Theme.hex(0xF2C14E, 0.45), location: 1)]),
-                                                       startPoint: .zero, endPoint: CGPoint(x: w, y: 0)), lineWidth: 2)
-                let candles: [(CGFloat, CGFloat, CGFloat, UInt32)] = [(28, 176, 30, 0x2BD47D), (58, 168, 22, 0xF0525B), (300, 64, 34, 0x2BD47D), (326, 58, 26, 0xF2C14E), (352, 40, 30, 0x2BD47D)]
-                for (x, y, ch, c) in candles {
-                    var wick = Path(); wick.move(to: pt(x, y - 8)); wick.addLine(to: pt(x, y + ch + 8))
-                    ctx.stroke(wick, with: .color(Theme.hex(c, 0.5)), lineWidth: 1.2)
-                    ctx.fill(Path(roundedRect: CGRect(origin: pt(x - 4, y), size: CGSize(width: 8 / 390 * w, height: ch / 300 * h)), cornerRadius: 1.5), with: .color(Theme.hex(c, 0.5)))
-                }
-            }
-            ZStack {
-                Circle()
-                    .stroke(AngularGradient(colors: [Theme.hex(0x2FD9DC), Theme.hex(0xF2C14E), Theme.hex(0x2FD9DC, 0.1), Theme.hex(0x2FD9DC)], center: .center), lineWidth: 3)
-                    .frame(width: 104, height: 104)
-                    .rotationEffect(.degrees(spin ? 360 : 0))
-                    .shadow(color: Theme.hex(0x2FD9DC, 0.5), radius: 10)
-                Avatar(token: token, userID: userID, avatarID: nil, title: name, size: 90)
-            }
-            .offset(y: -6)
+            Circle()
+                .fill(AngularGradient(colors: [Theme.hex(0x2FD9DC), Theme.hex(0x1B7FD6), Theme.hex(0xF2C14E), Theme.hex(0x2FD9DC)], center: .center))
+                .frame(width: 116, height: 116)
+                .rotationEffect(.degrees(spin ? 360 : 0))
+                .shadow(color: Theme.hex(0x2FD9DC, 0.35), radius: 18)
+            Circle().fill(Theme.hex(0x041821)).frame(width: 108, height: 108)
+            Avatar(token: token, userID: userID, avatarID: nil, title: name, size: 100)
         }
-        .frame(height: 170)
+        .frame(width: 116, height: 116)
         .frame(maxWidth: .infinity)
         .accessibilityHidden(true)
-        .onAppear { withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) { spin = true } }
+        .onAppear { withAnimation(.linear(duration: 9).repeatForever(autoreverses: false)) { spin = true } }
+    }
+}
+
+/// web .sc-start-art: the market behind the moment, a soft chart line with its fill and five candles (an SVG of 390 x 300
+/// drawn "xMidYMin slice": scaled evenly to cover, centred, from the top).
+struct StatusCreatorArt: View {
+    var body: some View {
+        Canvas { ctx, size in
+            let s = max(size.width / 390, size.height / 300)
+            let ox = (size.width - 390 * s) / 2
+            func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: ox + x * s, y: y * s) }
+            var line = Path()
+            line.move(to: pt(0, 210))
+            line.addCurve(to: pt(90, 196), control1: pt(40, 200), control2: pt(60, 220))
+            line.addCurve(to: pt(170, 168), control1: pt(120, 172), control2: pt(140, 150))
+            line.addCurve(to: pt(250, 132), control1: pt(200, 186), control2: pt(220, 120))
+            line.addCurve(to: pt(340, 84), control1: pt(280, 144), control2: pt(310, 70))
+            line.addCurve(to: pt(390, 48), control1: pt(370, 98), control2: pt(380, 52))
+            var area = line
+            area.addLine(to: pt(390, 300))
+            area.addLine(to: pt(0, 300))
+            area.closeSubpath()
+            ctx.fill(area, with: .linearGradient(Gradient(colors: [Theme.hex(0x2FD9DC, 0.16), Theme.hex(0x2FD9DC, 0)]),
+                                                 startPoint: pt(0, 48), endPoint: pt(0, 300)))
+            ctx.stroke(line, with: .linearGradient(Gradient(stops: [.init(color: Theme.hex(0x2FD9DC, 0), location: 0),
+                                                                    .init(color: Theme.hex(0x2FD9DC, 0.55), location: 0.35),
+                                                                    .init(color: Theme.hex(0xF2C14E, 0.45), location: 1)]),
+                                                   startPoint: pt(0, 0), endPoint: pt(390, 0)), lineWidth: 2)
+            let candles: [(CGFloat, CGFloat, CGFloat, UInt32)] = [(28, 176, 30, 0x2BD47D), (58, 168, 22, 0xF0525B), (300, 64, 34, 0x2BD47D),
+                                                                  (326, 58, 26, 0xF2C14E), (352, 40, 30, 0x2BD47D)]
+            for (x, y, ch, c) in candles {
+                var wick = Path()
+                wick.move(to: pt(x, y - 8))
+                wick.addLine(to: pt(x, y + ch + 8))
+                ctx.stroke(wick, with: .color(Theme.hex(c, 0.5)), lineWidth: 1.2)
+                ctx.fill(Path(roundedRect: CGRect(origin: pt(x - 4, y), size: CGSize(width: 8 * s, height: ch * s)), cornerRadius: 1.5),
+                         with: .color(Theme.hex(c, 0.5)))
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// web .sc-start's ground: deep midnight navy (#030f16) lit teal from the top and blue from the bottom-right corner.
+struct StatusCreatorBackdrop: View {
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                Theme.hex(0x030F16)
+                RadialGradient(colors: [Theme.hex(0x0B3A4A), Theme.hex(0x0B3A4A, 0)], center: UnitPoint(x: 0.5, y: -0.05),
+                               startRadius: 0, endRadius: max(geo.size.width * 0.9, geo.size.height * 0.36))
+                RadialGradient(colors: [Theme.hex(0x105C96, 0.35), Theme.hex(0x105C96, 0)], center: UnitPoint(x: 1.1, y: 1.05),
+                               startRadius: 0, endRadius: max(geo.size.width * 0.6, geo.size.height * 0.3))
+            }
+        }
     }
 }

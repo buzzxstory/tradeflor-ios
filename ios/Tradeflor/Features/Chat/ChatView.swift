@@ -15,7 +15,15 @@ struct ChatView: View {
     @State private var loadingOlder = false
     @State private var reachedStart = false
     @State private var problem: String?
-    @State private var draft = ""
+    /// What is being typed lives in its own box, watched only by the text field: a key press no longer redraws the
+    /// whole chat (that made typing lag). The chat hears only when the box turns empty / not empty, or an @mention starts.
+    @State private var box = DraftBox()
+    @State private var draftEmpty = true
+    @State private var mentionQ: String?
+    private var draft: String {
+        get { box.text }
+        nonmutating set { box.text = newValue }
+    }
     @FocusState private var composerFocused: Bool
     @State private var picked: [PhotosPickerItem] = []
     @State private var reviewing: MediaBatch?
@@ -80,6 +88,8 @@ struct ChatView: View {
     @State private var unreadMarkCount = 0
     @State private var unreadMarkSet = false
     @State private var openedAtEnd = false
+    /// I scrolled up to read: nothing pulls me back to the end by itself.
+    @State private var userScrolledUp = false
     /// Text and voice waiting to leave, in writing order (one at a time per conversation).
     @State private var sendQueue: [String] = []
     @State private var queueRunning = false
@@ -173,12 +183,14 @@ struct ChatView: View {
                 ScrollView {
                     LazyVStack(spacing: 6) {
                         if !reachedStart && !messages.isEmpty {
+                            // reaching the top loads the page before, as WhatsApp does (the button stays for VoiceOver)
                             Button {
-                                Task { await loadOlder() }
+                                Task { await loadOlder(proxy) }
                             } label: {
                                 if loadingOlder { ProgressView() } else { Text("chat.older").font(.footnote) }
                             }
                             .padding(.vertical, 8)
+                            .onAppear { if openedAtEnd && !loadingOlder { userScrolledUp = true; Task { await loadOlder(proxy) } } }
                         }
                         let rows = shown
                         let lookIDs = lookAlike
@@ -358,7 +370,7 @@ struct ChatView: View {
                             }
                         }
                         Color.clear.frame(height: 1).id("bottom")
-                            .onAppear { bottomVisible = true; unseenBelow = []; unseenMentions = [] }
+                            .onAppear { bottomVisible = true; userScrolledUp = false; unseenBelow = []; unseenMentions = [] }
                             .onDisappear { bottomVisible = false }
                     }
                     .padding(.horizontal, 10)
@@ -458,10 +470,14 @@ struct ChatView: View {
                     if !openedAtEnd && !messages.isEmpty {
                         // the chat opens at its end (or at the unread line): again once pictures have taken their room
                         openedAtEnd = true
-                        for d in [0.0, 0.35, 0.9, 1.6, 2.5] {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + d) {
-                                if unreadMarkID != nil && unreadMarkCount > 0 { proxy.scrollTo("unread-mark", anchor: .top) }
-                                else { proxy.scrollTo("bottom", anchor: .bottom) }
+                        let hasMark = unreadMarkID != nil && unreadMarkCount > 0
+                        if hasMark { proxy.scrollTo("unread-mark", anchor: .top) } else { proxy.scrollTo("bottom", anchor: .bottom) }
+                        if !hasMark {
+                            for d in [0.35, 0.9, 1.6] {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + d) {
+                                    // pictures took their room: settle on the end again, but only if I haven't scrolled away
+                                    if bottomVisible && !userScrolledUp { proxy.scrollTo("bottom", anchor: .bottom) }
+                                }
                             }
                         }
                         return
@@ -486,6 +502,7 @@ struct ChatView: View {
         }
         .background(ChatThemeStyle.background(themeID).ignoresSafeArea())
         .environment(\.tfChatThemed, !(themeID.isEmpty || themeID == "tradeflor"))
+        .messageMenuHost()
         .toolbar(.hidden, for: .navigationBar)
         .task(id: chat.peer_id) {
             guard !isGroup, !chat.peer_id.isEmpty else { return }
@@ -533,7 +550,7 @@ struct ChatView: View {
         }
         .sheet(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft) }
         .sheet(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store) }
-        .sheet(isPresented: $addingGroupStatus) {
+        .fullScreenCover(isPresented: $addingGroupStatus) {
             StatusCreatorSheet(onPosted: { Task { await loadGroupStatus() } }, groupID: chat.conversation_id, groupName: chat.title)
                 .environmentObject(store)
         }
@@ -753,10 +770,14 @@ struct ChatView: View {
             VideoScreen(token: token, fileID: v.id)
         }
         .onAppear {
+            TabChrome.shared.conversationOpened() // the dock steps aside inside a conversation (web: one region at a time)
+            box.onEmptyChange = { e in draftEmpty = e }
+            box.onMentionChange = { q in mentionQ = q }
             LocalNotifier.shared.openConversation = chat.conversation_id
             LocalNotifier.shared.clear(conversation: chat.conversation_id)
         }
         .onDisappear {
+            TabChrome.shared.conversationClosed()
             if LocalNotifier.shared.openConversation == chat.conversation_id { LocalNotifier.shared.openConversation = nil }
             VoicePlayer.shared.stop()
             if recorder.recording { recorder.cancel() }
@@ -845,33 +866,7 @@ struct ChatView: View {
                 Image(systemName: "magnifyingglass").font(.system(size: 18)).foregroundStyle(Theme.muted).frame(width: 34, height: 44)
             }
             .accessibilityLabel(Text("chat.search"))
-            Menu {
-                if isGroup { Button { showInfo = true } label: { Label("group.info", systemImage: "info.circle") } }
-                if isGroup && focusDoc != nil { Button { showFocus = true } label: { Label("focus.title", systemImage: "scope") } }
-                if isGroup, groupStatus != nil {
-                    Button { watchingGroupStatus = true } label: { Label("gst.watch", systemImage: "circle.dashed") }
-                }
-                if isGroup && isAdmin {
-                    Button { addingGroupStatus = true } label: { Label("gst.add", systemImage: "plus.circle.dashed") }
-                }
-                Button { showSchedule = true } label: { Label("chat.scheduled", systemImage: "clock") }
-                if muted {
-                    Button { Task { await mute(seconds: 0) } } label: { Label("chats.unmute", systemImage: "bell") }
-                } else {
-                    Button { showMute = true } label: { Label("chat.mute.menu", systemImage: "bell.slash") }
-                }
-                if isGroup {
-                    Button { Task { await exportHistory() } } label: { Label("group.export", systemImage: "square.and.arrow.up") }
-                    Button(role: .destructive) { confirmLeave = true } label: { Label("group.leave", systemImage: "rectangle.portrait.and.arrow.right") }
-                    if myRole == "owner" {
-                        Button(role: .destructive) { confirmDeleteGroup = true } label: { Label("group.delete", systemImage: "trash") }
-                    }
-                } else {
-                    Button(role: .destructive) { confirmBlock = true } label: {
-                        Label(String(format: NSLocalizedString("chat.block.name", comment: ""), chat.title), systemImage: "hand.raised.fill")
-                    }
-                }
-            } label: {
+            ChatHeaderMenu(items: headerMenuItems) {
                 Image(systemName: "ellipsis").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.muted).frame(width: 36, height: 44)
             }
             .accessibilityLabel(Text("chat.more"))
@@ -894,15 +889,55 @@ struct ChatView: View {
         }
     }
 
-    private var draftIsEmpty: Bool { draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-
-    private var mentionQuery: String? {
-        guard isGroup, let at = draft.lastIndex(of: "@") else { return nil }
-        let after = draft[draft.index(after: at)...]
-        if after.contains(" ") || after.contains("\n") { return nil }
-        if at != draft.startIndex, !(draft[draft.index(before: at)].isWhitespace) { return nil }
-        return String(after).lowercased()
+    private var headerMenuItems: [ChatMenuItem] {
+        var items: [ChatMenuItem] = []
+        if isGroup {
+            items.append(ChatMenuItem("group.info", systemImage: "info.circle") { showInfo = true })
+            if groupStatus != nil { items.append(ChatMenuItem("gst.watch", systemImage: "circle.dashed") { watchingGroupStatus = true }) }
+            if isAdmin { items.append(ChatMenuItem("gst.add", systemImage: "plus.circle.dashed") { addingGroupStatus = true }) }
+        }
+        let muteItem = muted
+            ? ChatMenuItem("chats.unmute", systemImage: "bell") { Task { await mute(seconds: 0) } }
+            : ChatMenuItem("chat.mute.menu", systemImage: "bell.slash") { showMute = true }
+        let scheduledItem = ChatMenuItem("chat.scheduled", systemImage: "calendar") { showSchedule = true }
+        if isGroup {
+            items.append(muteItem)
+            items.append(scheduledItem)
+            if focusDoc != nil { items.append(ChatMenuItem("focus.title", systemImage: "scope") { showFocus = true }) }
+            items.append(ChatMenuItem("group.export", systemImage: "arrow.down.to.line") { Task { await exportHistory() } })
+            items.append(ChatMenuItem("group.leave", systemImage: "rectangle.portrait.and.arrow.right", destructive: true) { confirmLeave = true })
+            if myRole == "owner" { items.append(ChatMenuItem("group.delete", systemImage: "trash", destructive: true) { confirmDeleteGroup = true }) }
+        } else {
+            items.append(scheduledItem)
+            items.append(muteItem)
+            items.append(ChatMenuItem(verbatim: String(format: NSLocalizedString("chat.block.name", comment: ""), chat.title),
+                                      id: "chat.block", systemImage: "nosign", destructive: true) { confirmBlock = true })
+        }
+        return items
     }
+
+    private var attachMenuItems: [ChatMenuItem] {
+        let media = !isGroup || groupCanSendMedia
+        var items: [ChatMenuItem] = []
+        if media {
+            items.append(ChatMenuItem("attach.photo", systemImage: "photo", tint: .photo) { showPhotoPicker = true })
+            items.append(ChatMenuItem("attach.document", systemImage: "doc", tint: .document) { showDocPicker = true })
+        }
+        items.append(ChatMenuItem("location.live", systemImage: "mappin", tint: .location) { showLocationSheet = true })
+        if CameraPicker.isAvailable && media {
+            items.append(ChatMenuItem("note.record", systemImage: "video.fill", tint: .note) { showNoteRecorder = true })
+        }
+        if isGroup {
+            if isAdmin { items.append(ChatMenuItem("poll.new", systemImage: "chart.bar", tint: .poll) { showPoll = true }) }
+            if groupCanSignals { items.append(ChatMenuItem("signal.new", systemImage: "chart.line.uptrend.xyaxis", tint: .signal) { showSignal = true }) }
+        }
+        items.append(ChatMenuItem("schedule.title", systemImage: "clock", tint: .schedule) { showSchedule = true })
+        return items
+    }
+
+    private var draftIsEmpty: Bool { draftEmpty }
+
+    private var mentionQuery: String? { isGroup ? mentionQ : nil }
 
     private var mentionMatches: [GroupMember] {
         guard let q = mentionQuery else { return [] }
@@ -937,22 +972,7 @@ struct ChatView: View {
                 if holdRec {
                     holdStrip
                 } else {
-                Menu {
-                    if isGroup {
-                        // polls are created by the owner and admins only (server release 3c3d2a8); every member still votes
-                        if isAdmin { Button { showPoll = true } label: { Label("poll.new", systemImage: "chart.bar") } }
-                        if groupCanSignals { Button { showSignal = true } label: { Label("signal.new", systemImage: "chart.line.uptrend.xyaxis") } }
-                    }
-                    if !isGroup || groupCanSendMedia {
-                        Button { showPhotoPicker = true } label: { Label("attach.photo", systemImage: "photo.on.rectangle") }
-                        Button { showDocPicker = true } label: { Label("attach.document", systemImage: "doc") }
-                    }
-                    Button { showLocationSheet = true } label: { Label("location.live", systemImage: "location") }
-                    if CameraPicker.isAvailable && (!isGroup || groupCanSendMedia) {
-                        Button { showNoteRecorder = true } label: { Label("note.record", systemImage: "video.circle") }
-                    }
-                    Button { showSchedule = true } label: { Label("schedule.title", systemImage: "clock") }
-                } label: {
+                ChatAttachMenu(items: attachMenuItems) {
                     Image(systemName: "plus").font(.system(size: 19, weight: .semibold)).foregroundStyle(Theme.text)
                         .frame(width: 40, height: 40).background(Theme.inputGradient, in: Circle())
                         .overlay(Circle().stroke(Theme.hex(0x1C8CB2, 0.85), lineWidth: 1.5))
@@ -965,20 +985,12 @@ struct ChatView: View {
                     }
                     Button { showLocationSheet = true } label: { composerIcon("mappin.and.ellipse") }
                         .accessibilityLabel(Text("location.share"))
-                    TextField(LocalizedStringKey(isGroup ? "chat.placeholder.group" : "chat.placeholder"), text: $draft, axis: .vertical)
-                        .onChange(of: draft) { v in
-                            guard !v.trimmingCharacters(in: .whitespaces).isEmpty, editing == nil,
-                                  Date().timeIntervalSince(lastTypingSent) > 3 else { return }
-                            lastTypingSent = Date()
-                            live.sendTyping(conversationID: chat.conversation_id)
-                        }
-                        .font(.system(size: 16))
-                        .foregroundStyle(Theme.text)
-                        .lineLimit(1...6)
-                        .focused($composerFocused)
-                        .padding(.vertical, 10)
-                        .padding(.horizontal, 4)
-                        .accessibilityIdentifier("chat.composer")
+                    DraftField(box: box, placeholder: LocalizedStringKey(isGroup ? "chat.placeholder.group" : "chat.placeholder"),
+                               focus: $composerFocused) {
+                        guard editing == nil, Date().timeIntervalSince(lastTypingSent) > 3 else { return }
+                        lastTypingSent = Date()
+                        live.sendTyping(conversationID: chat.conversation_id)
+                    }
                     Button { reactTarget = nil; showEmoji = true } label: { composerIcon("face.smiling") }
                         .accessibilityLabel(Text("chat.emoji"))
                     if isGroup && isAdmin {
@@ -1542,7 +1554,7 @@ struct ChatView: View {
         }
     }
 
-    private func loadOlder() async {
+    private func loadOlder(_ proxy: ScrollViewProxy? = nil) async {
         guard !loadingOlder, let first = messages.first else { return }
         loadingOlder = true
         defer { loadingOlder = false }
@@ -1550,6 +1562,12 @@ struct ChatView: View {
                                                            before: first.seq, limit: pageSize) {
             reachedStart = page.count < pageSize
             merge(page)
+            // the page goes above what I was reading: keep that message where it was (no jump)
+            if let proxy {
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { proxy.scrollTo(first.id, anchor: .top) }
+            }
         }
     }
 
@@ -2029,9 +2047,11 @@ struct PhotoBubble<Content: View>: View {
     var size: CGSize? = nil
     @ViewBuilder let content: () -> Content
     @Environment(\.tfMediaForward) private var forward
+    /// The box chosen the first time this bubble is drawn: it never changes afterwards while it is on screen.
+    @State private var frozen: CGSize?
 
     var body: some View {
-        let box = MediaDims.box(size ?? fileID.flatMap { MediaDims.shared.size($0) })
+        let box = frozen ?? MediaDims.box(size ?? fileID.flatMap { MediaDims.shared.size($0) })
         HStack(alignment: .center, spacing: 8) {
             if mine { Spacer(minLength: 0) }
             if mine, let forward { forwardButton(forward) }
@@ -2058,6 +2078,7 @@ struct PhotoBubble<Content: View>: View {
             }
             .padding(caption.isEmpty ? 0 : 3)
             .modifier(CaptionCard(on: !caption.isEmpty, mine: mine))
+            .onAppear { if frozen == nil { frozen = box } }
             if !mine, let forward { forwardButton(forward) }
             if !mine { Spacer(minLength: 0) }
         }
@@ -2327,5 +2348,53 @@ enum NameSkeleton {
         var byKey: [String: [String]] = [:]
         for m in members { byKey[skeleton(m.title), default: []].append(m.user_id) }
         return Set(byKey.values.filter { $0.count > 1 }.flatMap { $0 })
+    }
+}
+
+
+/// The text being typed (see ChatView.box): only DraftField watches it; the chat hears when it turns empty / not empty
+/// and when an @mention query starts or changes.
+final class DraftBox: ObservableObject {
+    @Published var text = "" {
+        didSet {
+            let e = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if e != empty { empty = e; onEmptyChange?(e) }
+            let q = Self.mention(in: text)
+            if q != mention { mention = q; onMentionChange?(q) }
+        }
+    }
+    private(set) var empty = true
+    private(set) var mention: String?
+    var onEmptyChange: ((Bool) -> Void)?
+    var onMentionChange: ((String?) -> Void)?
+
+    static func mention(in draft: String) -> String? {
+        guard let at = draft.lastIndex(of: "@") else { return nil }
+        let after = draft[draft.index(after: at)...]
+        if after.contains(" ") || after.contains("\n") { return nil }
+        if at != draft.startIndex, !(draft[draft.index(before: at)].isWhitespace) { return nil }
+        return String(after).lowercased()
+    }
+}
+
+/// The message field on its own: typing redraws only this.
+struct DraftField: View {
+    @ObservedObject var box: DraftBox
+    let placeholder: LocalizedStringKey
+    var focus: FocusState<Bool>.Binding
+    let onType: () -> Void
+
+    var body: some View {
+        TextField(placeholder, text: $box.text, axis: .vertical)
+            .onChange(of: box.text) { v in
+                if !v.trimmingCharacters(in: .whitespaces).isEmpty { onType() }
+            }
+            .font(.system(size: 16))
+            .foregroundStyle(Theme.text)
+            .lineLimit(1...6)
+            .focused(focus)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 4)
+            .accessibilityIdentifier("chat.composer")
     }
 }

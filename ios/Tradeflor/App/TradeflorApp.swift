@@ -36,6 +36,7 @@ struct RootView: View {
     @ObservedObject private var badges = BadgeStore.shared
     @ObservedObject private var notifier = LocalNotifier.shared
     @ObservedObject private var links = DeepLinks.shared
+    @ObservedObject private var chrome = TabChrome.shared
     @ObservedObject private var flash = FlashHub.shared
     @State private var needsSetup = false
     @State private var tab: String = {
@@ -51,25 +52,31 @@ struct RootView: View {
         Group {
             if store.session != nil {
                 // The website's phone tab bar: Chats, Groups, TradeFlor, Calendar, Settings
+                // the web's phone dock (MobileTabBar) instead of the system tab bar
                 TabView(selection: $tab) {
                     ChatListView()
-                        .tabItem { Label("chats.title", systemImage: "bubble.left") }
-                        .badge(badges.chats)
+                        .toolbar(.hidden, for: .tabBar)
                         .tag("chats")
                     GroupsListView()
-                        .tabItem { Label("groups.title", systemImage: "person.2") }
-                        .badge(badges.groups)
+                        .toolbar(.hidden, for: .tabBar)
                         .tag("groups")
                     TradeFlorView()
-                        .tabItem { Label { Text("TradeFlor") } icon: { Image("TabFlower") } }
+                        .toolbar(.hidden, for: .tabBar)
                         .tag("tradeflor")
                     CalendarView()
-                        .tabItem { Label("calendar.title", systemImage: "calendar") }
+                        .toolbar(.hidden, for: .tabBar)
                         .tag("calendar")
                     SettingsView()
-                        .tabItem { Label("settings.title", systemImage: "gearshape") }
+                        .toolbar(.hidden, for: .tabBar)
                         .tag("settings")
                 }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if !chrome.hidden {
+                        MobileTabBar(tab: $tab, chatsBadge: badges.chats, groupsBadge: badges.groups)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .animation(.easeOut(duration: 0.18), value: chrome.hidden)
             } else {
                 LoginView()
             }

@@ -1712,3 +1712,29 @@
 "pc2.signal.above" = "Above entry";
 "pc2.signal.buy" = "Buy";
 "pc2.signal.sell" = "Sell";
+
+"ux2.ago.now" = "just now";
+"ux2.ago.min" = "%d min ago";
+"ux2.ago.h" = "%d h ago";
+"ux2.status.group" = "Group status";
+"ux2.official.learn" = "Learn more";
+"ux2.creator.sub.group" = "Shown for 24 hours to the members of %@.";
+"ux2.creator.foot" = "Videos up to 30 seconds · add music to photos and text";
+
+"ux1.chips.locked" = "Locked";
+"ux1.chips.blocked" = "Blocked";
+"ux1.chats.none" = "No private chats yet.";
+"ux1.chats.start" = "Start a chat";
+"ux1.chats.groupsHint" = "Your groups are in the Groups section.";
+"ux1.chats.nomatch" = "No conversations match \"%@\".";
+"ux1.chats.nolocked" = "No locked private chats. Press and hold a chat and choose Lock chat.";
+"ux1.chats.noblocked" = "No blocked chats.";
+"ux1.chats.noarchived" = "No archived chats.";
+"ux1.chats.nounread" = "No unread chats.";
+"ux1.chats.nofolder" = "No chats in this folder yet. Press and hold the folder and choose Edit folder to add some.";
+"ux1.chats.allarchived" = "All your conversations are archived.";
+"ux1.status.new" = "NEW";
+"ux1.status.watch" = "Watch %@'s status";
+"ux1.verified" = "Verified";
+"ux1.pinned" = "Pinned";
+"ux1.muted" = "Muted";

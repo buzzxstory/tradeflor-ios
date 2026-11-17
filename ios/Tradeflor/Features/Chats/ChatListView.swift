@@ -29,6 +29,12 @@ struct ChatListView: View {
     @State private var removingFolder: ChatFolder?
     @State private var lockSheetFor: ConversationSummary?
     @State private var toast: String?
+    /// contacts' statuses, for the ring on their row's picture (website ChatScreen .avatar-status)
+    @State private var rowStatuses: [StatusGroup] = []
+    @State private var statusOpen: StatusOpen?
+    /// each folder's icon and colour (the chips draw them as the website's FolderTabs)
+    @State private var folderIcons: [String: String] = [:]
+    @State private var folderColors: [String: String] = [:]
 
     /// Live events refresh the list at once; this slow poll only covers a socket that is down.
     private let refreshEvery: UInt64 = 30
@@ -68,21 +74,24 @@ struct ChatListView: View {
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
+                // website phone layout (27-chats-list.css): brand bar, "Chats" + round buttons, search, status row, chips, rows
                 VStack(spacing: 0) {
                     header
-                    SearchPill(placeholder: "chats.search", text: $query)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 4)
+                    ListSearchField(placeholder: "chats.search", text: $query)
                     StatusStrip()
-                        .padding(.top, 12)
                     chipsRow
-                        .padding(.top, 10)
-                        .padding(.bottom, 8)
                     list
+                        .padding(.bottom, 12)
                 }
             }
-            .refreshable { await load() }
+            .refreshable {
+                await load()
+                await loadStatuses()
+            }
             .background(ChatsWallpaper())
+            .fullScreenCover(item: $statusOpen) { o in
+                StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) { Task { await loadStatuses() } }
+            }
             .sheet(isPresented: $showFolderEditor) { FolderEditorView(token: token, chats: chats) { Task { await reloadFolders() } } }
             .sheet(item: $editingFolder) { f in FolderEditorView(token: token, chats: chats, editing: f) { Task { await reloadFolders() } } }
             .sheet(isPresented: $showManageFolders) { ManageFoldersView(token: token, chats: chats) { Task { await reloadFolders() } } }
@@ -134,102 +143,135 @@ struct ChatListView: View {
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             await load()
-            folders = (try? await APIClient.shared.folders(token: token)) ?? folders
+            await reloadFolders()
+            await loadStatuses()
+            var rounds = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: refreshEvery * 1_000_000_000)
                 if Task.isCancelled { break }
                 await load(quiet: true)
+                // the status rings on the rows: every two minutes, as the status row (website StatusBar)
+                rounds += 1
+                if rounds % 4 == 0 { await loadStatuses() }
             }
         }
     }
 
+    /// Website phone header (ChatScreen.tsx .list-brand + .sidebar-head, 27-chats-list.css / 63-chats-polish.css):
+    /// the TRADEFLOR brand bar, then the big "Chats" with the two round glass buttons (Scan QR, Contacts).
     private var header: some View {
-        HStack(spacing: 10) {
-            Text("chats.title").font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.text)
-            Spacer()
-            // straight to Scan & Connect, as on the web (ChatScreen openFlash({view: "scan"}))
-            GlassIconButton(systemName: "qrcode.viewfinder") { ScanTiming.tapped(); showFlash = true }
-                .accessibilityLabel(Text("sc.scan.title"))
-                .fullScreenCover(isPresented: $showFlash) {
-                    ScanFlow { c in
-                        showFlash = false
-                        Task {
-                            await load(quiet: true)
-                            path = [c]
-                        }
-                    }
-                    .environmentObject(store)
-                    .environmentObject(live)
-                }
-            GlassIconButton(systemName: "person.badge.plus") { showContacts = true }
-                .accessibilityLabel(Text("ct.title"))
-                .accessibilityIdentifier("chats.new")
-                .sheet(isPresented: $showContacts, onDismiss: { Task { await load(quiet: true) } }) {
-                    ContactsPanel { c in
-                        Task {
-                            await load(quiet: true)
-                            path = [c]
-                        }
-                    }
-                }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 12)
-    }
-
-    /// All chats / Unread / my Smart Folders (made on the website; the same rules decide what is in them).
-    private var chipsRow: some View {
-        chipsStrip.modifier(EndFade())
-    }
-
-    private var chipsStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 7) {
-                FilterChip(title: NSLocalizedString("folders.all", comment: ""), selected: filter == "all") { filter = "all" }
-                FilterChip(title: NSLocalizedString("folders.unread", comment: ""), selected: filter == "unread") { filter = "unread" }
-                ForEach(folders) { f in
-                    FilterChip(title: f.name, icon: "folder", selected: filter == f.id) { filter = f.id }
-                        .contextMenu {
-                            Button {
-                                Task {
-                                    if let all = try? await FolderStore.load(token: token), let e = all.1.first(where: { $0.id == f.id }) { editingFolder = e }
-                                }
-                            } label: { Label("folder.edit", systemImage: "pencil") }
-                            Button { showManageFolders = true } label: { Label("folder.manage", systemImage: "list.bullet") }
-                            Button {
-                                Task {
-                                    for c in chats where f.contains(id: c.conversation_id, title: c.title, unread: isUnread(c)) {
-                                        await APIClient.shared.markRead(token: token, conversationID: c.conversation_id)
-                                    }
-                                    await load(quiet: true)
-                                }
-                            } label: { Label("chats.markread", systemImage: "envelope.open") }
-                            Button(role: .destructive) { removingFolder = f } label: { Label("folder.remove", systemImage: "trash") }
-                        }
-                }
-                if !lockedIDs.isEmpty {
-                    FilterChip(title: String(format: NSLocalizedString("chips.locked", comment: ""), lockedIDs.count), icon: "lock",
-                               iconColor: Theme.accent, selected: filter == "locked") { filter = "locked" }
-                }
-                if archivedCount > 0 {
-                    FilterChip(title: String(format: NSLocalizedString("chips.archived", comment: ""), archivedCount), icon: "archivebox",
-                               iconColor: Theme.accent, selected: showArchived) { showArchived.toggle() }
-                }
-                if !blockedIDs.isEmpty {
-                    FilterChip(title: String(format: NSLocalizedString("chips.blocked", comment: ""), chats.filter { blockedIDs.contains($0.peer_id) }.count),
-                               icon: "hand.raised", iconColor: Theme.danger, selected: filter == "blocked") { filter = "blocked" }
-                }
-                Button { showFolderEditor = true } label: {
-                    Image(systemName: "folder.badge.plus").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.muted)
-                        .frame(width: 34, height: 30).background(Theme.chip, in: Capsule())
-                        .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(Text("folder.new"))
+        VStack(spacing: 0) {
+            ListBrandBar()
+            HStack(spacing: 12) {
+                ListTitle(key: "chats.title")
+                Spacer(minLength: 8)
+                headerButtons
             }
             .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
         }
+    }
+
+    @ViewBuilder private var headerButtons: some View {
+        // straight to Scan & Connect, as on the web (ChatScreen openFlash({view: "scan"}))
+        ListDiscButton(action: { ScanTiming.tapped(); showFlash = true }) {
+            ScanGlyph().stroke(style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)).frame(width: 22, height: 22)
+        }
+            .accessibilityLabel(Text("sc.scan.title"))
+            .fullScreenCover(isPresented: $showFlash) {
+                ScanFlow { c in
+                    showFlash = false
+                    Task {
+                        await load(quiet: true)
+                        path = [c]
+                    }
+                }
+                .environmentObject(store)
+                .environmentObject(live)
+            }
+        ListDiscButton(action: { showContacts = true }) {
+            UserPlusGlyph().stroke(style: StrokeStyle(lineWidth: 1.8, lineCap: .round, lineJoin: .round)).frame(width: 24, height: 24)
+        }
+            .accessibilityLabel(Text("ct.title"))
+            .accessibilityIdentifier("chats.new")
+            .sheet(isPresented: $showContacts, onDismiss: { Task { await load(quiet: true) } }) {
+                ContactsPanel { c in
+                    Task {
+                        await load(quiet: true)
+                        path = [c]
+                    }
+                }
+            }
+    }
+
+    /// All chats / Unread / my Smart Folders (made on the website; the same rules decide what is in them), then Locked,
+    /// Archived and Blocked when there are some, and "new folder" (website FolderTabs.tsx, 27-chats-list.css .chat-filter-bar).
+    private var chipsRow: some View {
+        ListChipBar(onNewFolder: { showFolderEditor = true }) { chipsContent }
+    }
+
+    /// One tab at a time, as the website's chatTab: picking any chip leaves Archived.
+    private func pick(_ id: String) {
+        showArchived = false
+        filter = id
+    }
+
+    @ViewBuilder private var chipsContent: some View {
+        ListChip(title: NSLocalizedString("folders.all", comment: ""), selected: filter == "all" && !showArchived) { pick("all") }
+        ListChip(title: NSLocalizedString("folders.unread", comment: ""), count: unreadCount,
+                 selected: filter == "unread" && !showArchived) { pick("unread") }
+        ForEach(folders) { f in
+            ListChip(title: f.name, icon: FolderStore.symbol(folderIcons[f.id] ?? "folder"),
+                     iconColor: ListLook.folderColor(folderColors[f.id] ?? ""), count: unreadIn(f),
+                     selected: filter == f.id && !showArchived) { pick(f.id) }
+                .contextMenu {
+                    Button {
+                        Task {
+                            if let all = try? await FolderStore.load(token: token), let e = all.1.first(where: { $0.id == f.id }) { editingFolder = e }
+                        }
+                    } label: { Label("folder.edit", systemImage: "pencil") }
+                    Button { showManageFolders = true } label: { Label("folder.manage", systemImage: "list.bullet") }
+                    Button {
+                        Task {
+                            for c in chats where f.contains(id: c.conversation_id, title: c.title, unread: isUnread(c)) {
+                                await APIClient.shared.markRead(token: token, conversationID: c.conversation_id)
+                            }
+                            await load(quiet: true)
+                        }
+                    } label: { Label("chats.markread", systemImage: "envelope.open") }
+                    Button(role: .destructive) { removingFolder = f } label: { Label("folder.remove", systemImage: "trash") }
+                }
+        }
+        if !lockedIDs.isEmpty {
+            ListChip(title: NSLocalizedString("ux1.chips.locked", comment: ""), icon: "lock", count: lockedIDs.count, plainCount: true,
+                     selected: filter == "locked" && !showArchived) { pick("locked") }
+        }
+        if archivedCount > 0 || showArchived {
+            ListChip(title: NSLocalizedString("chats.archived", comment: ""), count: archivedCount, plainCount: true,
+                     selected: showArchived) {
+                let open = !showArchived
+                filter = "all"
+                showArchived = open
+            }
+        }
+        if !blockedIDs.isEmpty {
+            ListChip(title: NSLocalizedString("ux1.chips.blocked", comment: ""),
+                     count: chats.filter { blockedIDs.contains($0.peer_id) }.count, plainCount: true,
+                     selected: filter == "blocked" && !showArchived) { pick("blocked") }
+        }
+    }
+
+    /// Unread chats outside Archived and Locked (the Unread chip's number, website unreadChats).
+    private var unreadCount: Int {
+        chats.filter { isUnread($0) && !(prefs[$0.conversation_id]?.archived ?? false) && !lockedIDs.contains($0.conversation_id) }.count
+    }
+
+    /// How many of a folder's chats are unread (website folderUnread).
+    private func unreadIn(_ f: ChatFolder) -> Int {
+        chats.filter { c in
+            isUnread(c) && !lockedIDs.contains(c.conversation_id) && f.contains(id: c.conversation_id, title: c.title, unread: true)
+        }.count
     }
 
     @ViewBuilder private var list: some View {
@@ -241,41 +283,37 @@ struct ChatListView: View {
                 Button("chats.retry") { Task { await load() } }.foregroundStyle(Theme.accent)
             }
             .padding(.top, 60)
+        } else if chats.isEmpty {
+            // website .conv-empty-action: the note, "Start a chat" (Contacts) and where the groups are
+            VStack(spacing: 12) {
+                Text("ux1.chats.none").font(.system(size: 13)).foregroundStyle(Theme.faint)
+                Button { showContacts = true } label: {
+                    Text("ux1.chats.start").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.hex(0x03202A))
+                        .padding(.horizontal, 20)
+                        .frame(minWidth: 160, minHeight: 44)
+                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                Text("ux1.chats.groupsHint").font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+            }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 28)
         } else if shown.isEmpty {
-            Text("chats.empty").font(.system(size: 13)).foregroundStyle(Theme.faint).padding(.top, 40)
+            ListEmptyNote(text: emptyNote)
         } else {
+            let rows = shown
+            let ringIndex = statusIndexByUser
             LazyVStack(spacing: 0) {
-                if !showArchived && archivedCount > 0 {
-                    Button { showArchived = true } label: {
-                        HStack(spacing: 16) {
-                            Image(systemName: "archivebox").font(.system(size: 20)).foregroundStyle(Theme.accent)
-                                .frame(width: 54, height: 40)
-                            Text("chats.archived").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text)
-                            Spacer()
-                            Text("\(archivedCount)").font(.system(size: 13)).foregroundStyle(Theme.faint)
-                        }
-                        .padding(.leading, 15).padding(.trailing, 14).frame(height: 56)
-                        .overlay(alignment: .top) { Rectangle().fill(Theme.rowRule).frame(height: 1) }
-                    }
-                    .buttonStyle(.plain)
-                }
-                if showArchived {
-                    Button { showArchived = false } label: {
-                        HStack {
-                            Image(systemName: "chevron.backward")
-                            Text("chats.archived").font(.system(size: 16, weight: .bold))
-                            Spacer()
-                        }
-                        .foregroundStyle(Theme.accent)
-                        .padding(.horizontal, 16).frame(height: 44)
-                    }
-                    .buttonStyle(.plain)
-                }
-                ForEach(shown) { c in
+                ForEach(rows) { c in
                     NavigationLink(value: c) {
                         ChatRow(chat: c, token: token, online: live.online.contains(c.peer_id),
                                 pinned: prefs[c.conversation_id]?.pinned ?? false, muted: prefs[c.conversation_id]?.muted ?? false,
-                                markedUnread: prefs[c.conversation_id]?.marked_unread ?? false)
+                                markedUnread: prefs[c.conversation_id]?.marked_unread ?? false,
+                                first: c.conversation_id == rows.first?.conversation_id,
+                                statusSeen: ringIndex[c.peer_id].map { rowStatuses[$0].all_seen },
+                                onStatus: statusAction(c.peer_id, ringIndex))
                     }
                     .buttonStyle(.plain)
                     .contextMenu { rowMenu(c) }
@@ -340,6 +378,42 @@ struct ChatListView: View {
 
     private func reloadFolders() async {
         folders = (try? await APIClient.shared.folders(token: token)) ?? folders
+        if let all = try? await FolderStore.load(token: token) {
+            folderIcons = Dictionary(all.1.map { ($0.id, $0.icon) }, uniquingKeysWith: { a, _ in a })
+            folderColors = Dictionary(all.1.map { ($0.id, $0.color) }, uniquingKeysWith: { a, _ in a })
+        }
+    }
+
+    /// Contacts with a status to watch (not mine, not a group's), in the feed's order.
+    private func loadStatuses() async {
+        guard !token.isEmpty, let feed = try? await APIClient.shared.statusFeed(token: token) else { return }
+        let list = feed.filter { !$0.isMine && $0.group_id == nil && !$0.posts.isEmpty }
+        if list != rowStatuses { rowStatuses = list }
+    }
+
+    private var statusIndexByUser: [String: Int] {
+        var map: [String: Int] = [:]
+        for (i, g) in rowStatuses.enumerated() where map[g.user_id] == nil { map[g.user_id] = i }
+        return map
+    }
+
+    /// Tapping the ring opens that contact's status, not the chat (website: stopPropagation on .avatar-status).
+    private func statusAction(_ peer: String, _ index: [String: Int]) -> (() -> Void)? {
+        guard let i = index[peer] else { return nil }
+        let groups = rowStatuses
+        return { statusOpen = StatusOpen(groups: groups, index: i) }
+    }
+
+    /// The note of an empty tab (website ChatScreen .conv-empty).
+    private var emptyNote: String {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        if !q.isEmpty { return String(format: NSLocalizedString("ux1.chats.nomatch", comment: ""), q) }
+        if filter == "locked" { return NSLocalizedString("ux1.chats.nolocked", comment: "") }
+        if filter == "blocked" { return NSLocalizedString("ux1.chats.noblocked", comment: "") }
+        if showArchived { return NSLocalizedString("ux1.chats.noarchived", comment: "") }
+        if filter == "unread" { return NSLocalizedString("ux1.chats.nounread", comment: "") }
+        if folders.contains(where: { $0.id == filter }) { return NSLocalizedString("ux1.chats.nofolder", comment: "") }
+        return NSLocalizedString("ux1.chats.allarchived", comment: "")
     }
 
     private func loadLocks() async {
@@ -392,8 +466,9 @@ extension ChatListView {
     }
 }
 
-/// One conversation row (website .conv-row): 54 pt avatar, name 17 semibold, time on the right, a preview line with
-/// the same small icons (call, video, file, ticks) and the unread count.
+/// One conversation row as the website draws it on phones (27-chats-list.css / 63-chats-polish.css .conv-row): 54 pt
+/// picture (with the status ring when the contact has one), 12 pt gap, name 16 bold, time 12, preview 14, the hairline
+/// above the text only (none above the first row), and on the right the pin, muted and unread marks together.
 struct ChatRow: View {
     let chat: ConversationSummary
     let token: String
@@ -401,18 +476,27 @@ struct ChatRow: View {
     var pinned = false
     var muted = false
     var markedUnread = false
+    /// the first row of the list has no hairline above it
+    var first = false
+    /// the contact's status: nil = none, false = something new, true = all watched
+    var statusSeen: Bool? = nil
+    /// tapping the ring opens the status instead of the chat
+    var onStatus: (() -> Void)? = nil
+
+    private var unread: Bool { chat.unread_count > 0 || markedUnread }
 
     var body: some View {
-        HStack(spacing: 16) {
-            Avatar(token: token, userID: chat.peer_id, avatarID: chat.peer_avatar_id, title: chat.title, online: online)
+        HStack(spacing: 12) {
+            avatar
             VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(chat.title).font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
-                    Spacer(minLength: 8)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(chat.title).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
+                    Spacer(minLength: 0)
                     if let d = chat.lastDate {
-                        // teal and bold when unread, unless muted (website 27-chats-list .conv-time.unread)
-                        Text(Self.timeLabel(d)).font(.system(size: 12.5, weight: chat.unread_count > 0 && !muted ? .bold : .medium))
-                            .foregroundStyle(chat.unread_count > 0 && !muted ? Theme.hex(0x08D9D9) : Theme.faint)
+                        // teal and bold when unread (website 27-chats-list .conv-time.unread)
+                        Text(Self.timeLabel(d)).font(.system(size: 12, weight: unread ? .bold : .regular))
+                            .monospacedDigit()
+                            .foregroundStyle(unread ? ListLook.unreadTime : ListLook.rowTime)
                     }
                 }
                 HStack(spacing: 5) {
@@ -420,24 +504,30 @@ struct ChatRow: View {
                     if let icon = previewIcon {
                         Image(systemName: icon).font(.system(size: 12)).foregroundStyle(callMissed ? Theme.danger : Theme.accent)
                     }
-                    Text(preview).font(.system(size: 15)).foregroundStyle(callMissed ? Theme.danger : Theme.muted).lineLimit(1)
-                    Spacer(minLength: 6)
-                    if muted { Image(systemName: "bell.slash.fill").font(.system(size: 11)).foregroundStyle(Theme.faint) }
-                    if chat.unread_count > 0 {
-                        UnreadBadge(count: chat.unread_count, muted: muted)
-                    } else if markedUnread {
-                        Circle().fill(Theme.accent).frame(width: 12, height: 12)
-                    } else if pinned {
-                        Image(systemName: "pin.fill").font(.system(size: 12)).foregroundStyle(Theme.accent).rotationEffect(.degrees(45))
-                    }
+                    Text(preview).font(.system(size: 14)).foregroundStyle(callMissed ? Theme.danger : ListLook.rowPreview).lineLimit(1)
+                    Spacer(minLength: 8)
+                    ListRowMeta(pinned: pinned, muted: muted, unreadCount: chat.unread_count, markedUnread: markedUnread)
                 }
             }
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 68, alignment: .leading)
+            .overlay(alignment: .top) { if !first { ListRowRule() } }
         }
-        .padding(.leading, 15)
-        .padding(.trailing, 14)
-        .frame(height: 83)
-        .overlay(alignment: .top) { Rectangle().fill(Theme.rowRule).frame(height: 1) }
+        .padding(.horizontal, 16)
         .contentShape(Rectangle())
+    }
+
+    @ViewBuilder private var avatar: some View {
+        let face = Avatar(token: token, userID: chat.peer_id, avatarID: chat.peer_avatar_id, title: chat.title, online: online)
+        if let seen = statusSeen {
+            ListAvatarRing(seen: seen) { face }
+                .contentShape(Circle())
+                .highPriorityGesture(TapGesture().onEnded { onStatus?() })
+                .accessibilityLabel(Text(String(format: NSLocalizedString("ux1.status.watch", comment: ""), chat.title)))
+                .accessibilityAddTraits(.isButton)
+        } else {
+            face
+        }
     }
 
     /// My latest message's ticks (sent / delivered / read); shared with the groups list (GroupsListView).

@@ -7,6 +7,7 @@ struct StatusStrip: View {
     @State private var groups: [StatusGroup] = []
     @State private var official: OfficialChannel? = OfficialFeedCache.load()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.layoutDirection) private var layoutDirection
     @State private var officialRetry = 0
     @State private var myAvatar: String?
     @State private var open: StatusOpen?
@@ -21,29 +22,33 @@ struct StatusStrip: View {
             .sorted { ($0.all_seen ? 1 : 0, -$0.latest) < ($1.all_seen ? 1 : 0, -$1.latest) }
     }
 
+    // website phone sizes (63-chats-polish.css .sidebar .status-*): a 52 pt ring (2 pt line, 2.5 pt gap, 43 pt picture),
+    // 60 pt per item, 10 pt apart, the row padded 8 / 14 / 4; names 11 pt on one 15 pt line
+    private let ringSize: CGFloat = 52
+    private let faceSize: CGFloat = 43
+
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 10) {
                 item(name: NSLocalizedString("status.mine", comment: ""), ring: mine.map { $0.posts.isEmpty ? .none : .seen } ?? .none, plus: true) {
-                    Avatar(token: token, userID: me, avatarID: myAvatar, title: store.session?.username ?? "?", size: 47)
+                    Avatar(token: token, userID: me, avatarID: myAvatar, title: store.session?.username ?? "?", size: faceSize)
                 } action: {
                     if let m = mine, !m.posts.isEmpty { open = StatusOpen(groups: [m], index: 0) } else { manage = true }
                 }
                 if let o = official, let posts = o.posts, !posts.isEmpty {
-                    item(name: "TRADEFLOR", sub: "Official", verified: true, ring: o.all_seen ? .seen : .unseen) {
-                        ZStack { Theme.card; Image("BrandFlower").resizable().scaledToFit().padding(7) }
-                            .frame(width: 47, height: 47).clipShape(Circle())
-                    } action: { openOfficial = true }
+                    officialItem(o)
                 }
                 ForEach(others) { g in
                     item(name: g.title, ring: g.all_seen ? .seen : .unseen) {
-                        Avatar(token: token, userID: g.user_id, avatarID: nil, title: g.title, size: 47)
+                        Avatar(token: token, userID: g.user_id, avatarID: nil, title: g.title, size: faceSize)
                     } action: {
                         if let i = others.firstIndex(of: g) { open = StatusOpen(groups: others, index: i) }
                     }
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 14)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
         }
         .task { await load() }
         // the web re-reads every two minutes and when the app comes back to the front
@@ -61,42 +66,88 @@ struct StatusStrip: View {
         .fullScreenCover(isPresented: $openOfficial, onDismiss: { Task { await load() } }) {
             OfficialViewer(token: token, posts: official?.posts ?? [])
         }
-        .sheet(isPresented: $manage, onDismiss: { Task { await load() } }) { StatusCreatorSheet { Task { await load() } } }
+        .fullScreenCover(isPresented: $manage, onDismiss: { Task { await load() } }) { StatusCreatorSheet { Task { await load() } } }
     }
 
     enum Ring { case none, seen, unseen }
 
-    private func item<A: View>(name: String, sub: String? = nil, verified: Bool = false, ring: Ring, plus: Bool = false,
+    private func item<A: View>(name: String, ring: Ring, plus: Bool = false,
                                @ViewBuilder avatar: () -> A, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 4) {
-                ZStack(alignment: .bottomTrailing) {
-                    avatar()
-                        .padding(2.5)
-                        .overlay(
-                            Circle().strokeBorder(style: StrokeStyle(lineWidth: 2, dash: ring == .none ? [4, 3] : []))
-                                .foregroundStyle(ring == .unseen ? Theme.accent : (ring == .seen ? Theme.faint.opacity(0.35) : Theme.hex(0x288CAF, 0.55)))
-                        )
-                        .shadow(color: ring == .unseen ? Theme.accent.opacity(0.3) : .clear, radius: 6)
-                    if plus {
-                        Image(systemName: "plus").font(.system(size: 11, weight: .heavy)).foregroundStyle(Theme.onAccent)
-                            .frame(width: 21, height: 21).background(Theme.accent, in: Circle())
-                            .overlay(Circle().stroke(Theme.panel, lineWidth: 2))
-                            .offset(x: 2, y: 2)
+                avatar()
+                    .frame(width: faceSize, height: faceSize)
+                    .frame(width: ringSize, height: ringSize)
+                    .overlay(
+                        // 18-status.css: accent with a soft glow = new, grey = watched, dashed blue = nothing yet
+                        Circle().strokeBorder(style: StrokeStyle(lineWidth: 2, dash: ring == .none ? [4, 3] : []))
+                            .foregroundStyle(ring == .unseen ? Theme.accent : (ring == .seen ? Theme.hex(0xA9B9C5, 0.35) : Theme.hex(0x288CAF, 0.55)))
+                            .shadow(color: ring == .unseen ? Theme.hex(0x00D4DF, 0.3) : .clear, radius: 5)
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        if plus {
+                            // .status-plus: 21 pt, 37 pt from the top, 1 pt in from the end, a 2 pt ring of the panel colour
+                            Image(systemName: "plus").font(.system(size: 11, weight: .heavy)).foregroundStyle(Theme.onAccent)
+                                .frame(width: 21, height: 21).background(Theme.accent, in: Circle())
+                                .overlay(Circle().stroke(Theme.panel, lineWidth: 2))
+                                .offset(x: layoutDirection == .rightToLeft ? 1 : -1, y: 37)
+                        }
                     }
-                }
-                // one line per name; TRADEFLOR Official on one line with its verified badge (website 63-chats-polish.css)
-                HStack(spacing: 3) {
-                    Text(sub.map { name + " " + $0 } ?? name).font(.system(size: 11, weight: sub == nil ? .regular : .bold))
-                        .foregroundStyle(sub == nil ? Theme.faint : Theme.text)
-                    if verified { Image(systemName: "checkmark.seal.fill").font(.system(size: 9)).foregroundStyle(Theme.verified) }
-                }
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: sub != nil ? 132 : 60)
+                Text(name).font(.system(size: 11)).foregroundStyle(Theme.faint)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(height: 15)
+                    .frame(maxWidth: 60)
             }
+            .frame(width: 60)
         }
         .buttonStyle(.plain)
+    }
+
+    /// TRADEFLOR Official (website OfficialStatus.tsx OfficialCircle, 53-admin.css, 63-chats-polish.css): the orb on a
+    /// dark radial face, a turquoise ring and a "NEW" tag while there is something unwatched, the channel's name on one
+    /// line with the blue verified seal.
+    private func officialItem(_ o: OfficialChannel) -> some View {
+        let fresh = !o.all_seen
+        return Button { openOfficial = true } label: {
+            VStack(spacing: 4) {
+                ZStack {
+                    Circle().fill(RadialGradient(colors: [Theme.hex(0x0F3340), Theme.hex(0x04141B)],
+                                                 center: UnitPoint(x: 0.35, y: 0.3), startRadius: 0, endRadius: 30))
+                    Image("OfficialOrb").resizable().scaledToFit().frame(width: 42 * 0.68, height: 42 * 0.68)
+                }
+                .frame(width: 42, height: 42)
+                .clipShape(Circle())
+                .frame(width: ringSize, height: ringSize)
+                .overlay(Circle().strokeBorder(fresh ? Theme.hex(0x2FD9DC) : Theme.hex(0x44606C), lineWidth: 2))
+                .overlay(alignment: .topTrailing) {
+                    if fresh {
+                        Text("ux1.status.new")
+                            .font(.system(size: 9.5, weight: .heavy)).tracking(0.4)
+                            .foregroundStyle(Theme.hex(0x03222A))
+                            .padding(.horizontal, 6)
+                            .frame(height: 17)
+                            .background(Theme.hex(0x2FD9DC), in: Capsule())
+                            .overlay(Capsule().stroke(Theme.ground, lineWidth: 2))
+                            .fixedSize()
+                            .offset(x: layoutDirection == .rightToLeft ? -10 : 10, y: -5)
+                    }
+                }
+                HStack(spacing: 3) {
+                    Text(o.name.isEmpty ? "TRADEFLOR Official" : o.name)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.dyn(0xE8F2F8, 0x0F2533))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    ListVerifiedSeal(size: 13)
+                }
+                .frame(height: 15)
+                .frame(maxWidth: 132)
+            }
+            .frame(minWidth: 60)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(o.name.isEmpty ? "TRADEFLOR Official" : o.name))
     }
 
     private func load() async {

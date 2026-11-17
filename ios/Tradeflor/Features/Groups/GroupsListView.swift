@@ -23,6 +23,10 @@ struct GroupsListView: View {
     @State private var joining: GrpDiscover?
     @State private var leaving: GroupSummary?
     @State private var problem: String?
+    @State private var showFolderEditor = false
+    /// each folder's icon and colour, for the chips (website FolderTabs)
+    @State private var folderIcons: [String: String] = [:]
+    @State private var folderColors: [String: String] = [:]
 
     private var token: String { store.session?.token ?? "" }
     private var me: String { store.session?.userID ?? "" }
@@ -54,16 +58,23 @@ struct GroupsListView: View {
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
+                // website phone layout (GroupsView.tsx, 27-chats-list.css): big "Groups" + the new-group button, the round
+                // search, the folder chips, "Archived (n)", public groups found by the search, then the group rows
                 VStack(spacing: 0) {
                     header
-                    SearchPill(placeholder: "groups.search", text: $query, soul: true).padding(.horizontal, 16)
-                    chips.padding(.top, 12).padding(.bottom, 8)
-                    content
+                    ListSearchField(placeholder: "groups.search", text: $query)
+                    chips
+                    archivedToggle
                     discover
+                    content
+                        .padding(.bottom, 12)
                 }
             }
             .refreshable { await load() }
-            .background(Theme.soul.ignoresSafeArea())
+            .background(ListAmbientBackground())
+            .sheet(isPresented: $showFolderEditor) {
+                FolderEditorView(token: token, chats: groups.map(\.asConversation)) { Task { await reloadFolders() } }
+            }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: GroupSummary.self) { g in ChatView(chat: g.asConversation, canSend: g.can_send) }
             .fullScreenCover(item: $watchGroup) { st in
@@ -106,54 +117,74 @@ struct GroupsListView: View {
         .onReceive(live.messages) { m in if m.conversation_id.hasPrefix("grp_") { Task { await load() } } }
     }
 
+    /// Website phone header (GroupsView.tsx .sidebar-head): the big "Groups" and the 43 pt square new-group button
+    /// (06-voice.css .sidebar-head-actions .icon-btn); no brand bar on this screen.
     private var header: some View {
-        HStack(spacing: 10) {
-            Text("groups.title").font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.text)
-            Spacer()
+        HStack(spacing: 12) {
+            ListTitle(key: "groups.title")
+            Spacer(minLength: 8)
             Menu {
                 Button { showCreate = true } label: { Label("grp.new", systemImage: "plus") }
                 Button { showJoin = true } label: { Label("group.join", systemImage: "link") }
             } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 18)).foregroundStyle(Theme.text)
-                    .frame(width: 43, height: 43)
-                    .background(Theme.inputGradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.borderStrong, lineWidth: 1))
+                ListSquareFace { GroupPlusGlyph().frame(width: 24, height: 24) }
             }
             .accessibilityLabel(Text("grp.new"))
         }
         .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 12)
     }
 
+    /// The same chip row as Chats (website FolderTabs in GroupsView): All chats, Unread, my folders, new folder.
     private var chips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 7) {
-                FilterChip(title: NSLocalizedString("folders.all", comment: ""), selected: filter == "all") { filter = "all" }
-                FilterChip(title: NSLocalizedString("folders.unread", comment: ""), selected: filter == "unread") { filter = "unread" }
-                ForEach(folders) { f in
-                    FilterChip(title: f.name, icon: "folder", selected: filter == f.id) { filter = f.id }
-                }
-                if archivedCount > 0 || showArchived {
-                    FilterChip(title: showArchived ? NSLocalizedString("grp.back", comment: "")
-                                                   : String(format: NSLocalizedString("grp.archived.n", comment: ""), archivedCount),
-                               icon: showArchived ? "chevron.backward" : "archivebox", iconColor: Theme.accent,
-                               selected: showArchived) { showArchived.toggle() }
-                }
+        ListChipBar(onNewFolder: { showFolderEditor = true }) {
+            ListChip(title: NSLocalizedString("folders.all", comment: ""), selected: filter == "all") { filter = "all" }
+            ListChip(title: NSLocalizedString("folders.unread", comment: ""), count: unreadTotal, selected: filter == "unread") { filter = "unread" }
+            ForEach(folders) { f in
+                ListChip(title: f.name, icon: FolderStore.symbol(folderIcons[f.id] ?? "folder"),
+                         iconColor: ListLook.folderColor(folderColors[f.id] ?? ""), count: unreadIn(f),
+                         selected: filter == f.id) { filter = f.id }
             }
-            .padding(.horizontal, 16)
         }
+    }
+
+    /// "Archived (n)" / "Back to Groups" under the chips (04-app-shell.css .conv-archived-toggle).
+    @ViewBuilder private var archivedToggle: some View {
+        if archivedCount > 0 || showArchived {
+            Button { showArchived.toggle() } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "archivebox").font(.system(size: 14))
+                    Text(showArchived ? NSLocalizedString("grp.back", comment: "")
+                                      : String(format: NSLocalizedString("grp.archived.n", comment: ""), archivedCount))
+                    Spacer(minLength: 0)
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.muted)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .contentShape(Rectangle())
+                .overlay(alignment: .bottom) { Rectangle().fill(ListLook.archivedRule).frame(height: 1) }
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 4)
+        }
+    }
+
+    private var unreadTotal: Int { groups.filter { isUnread($0) }.count }
+
+    private func unreadIn(_ f: ChatFolder) -> Int {
+        groups.filter { isUnread($0) && f.contains(id: $0.conversation_id, title: $0.name, unread: true) }.count
     }
 
     @ViewBuilder private var content: some View {
         if loading && groups.isEmpty {
             ProgressView().tint(Theme.accent).padding(.top, 60)
         } else if shown.isEmpty {
-            Text(LocalizedStringKey(showArchived ? "grp.archived.none" : (filter == "unread" ? "grp.unread.none" : "groups.empty")))
-                .font(.system(size: 13)).foregroundStyle(Theme.faint).padding(.top, 40)
+            ListEmptyNote(text: NSLocalizedString(showArchived ? "grp.archived.none" : (filter == "unread" ? "grp.unread.none" : "groups.empty"), comment: ""))
         } else {
+            let rows = shown
             LazyVStack(spacing: 0) {
-                ForEach(shown) { g in
-                    NavigationLink(value: g) { row(g) }
+                ForEach(rows) { g in
+                    NavigationLink(value: g) { row(g, first: g.conversation_id == rows.first?.conversation_id) }
                         .buttonStyle(.plain)
                         .contextMenu { rowMenu(g) }
                 }
@@ -181,8 +212,8 @@ struct GroupsListView: View {
                             }
                             Spacer()
                         }
-                        .padding(.horizontal, 15).frame(height: 70)
-                        .overlay(alignment: .top) { Rectangle().fill(Theme.soulRule).frame(height: 1) }
+                        .padding(.horizontal, 16).frame(minHeight: 68)
+                        .overlay(alignment: .top) { ListRowRule() }
                     }
                     .buttonStyle(.plain)
                 }
@@ -191,58 +222,55 @@ struct GroupsListView: View {
         }
     }
 
-    private func row(_ g: GroupSummary) -> some View {
+    /// One group row as the website draws it on phones (GroupsView.tsx .conv-row.group-row, 27-chats-list.css): 54 pt
+    /// picture (ring when the group has a status), name 16 bold with the blue seal, time 12, preview 14, the hairline above
+    /// the text only, and pin / muted / yellow "@" / unread count together on the right.
+    private func row(_ g: GroupSummary, first: Bool) -> some View {
         let p = prefs[g.conversation_id]
         let muted = p?.muted ?? false
-        let mentions = extras[g.conversation_id]?.unread_mentions ?? 0
-        return HStack(spacing: 16) {
+        let unread = isUnread(g)
+        let mentions = unread ? (extras[g.conversation_id]?.unread_mentions ?? 0) : 0
+        // teal and bold when there are unread messages, unless muted (website 9ba9f40)
+        let hotTime = g.unread_count > 0 && !muted
+        return HStack(spacing: 12) {
             Group {
                 if let st = groupStatuses[g.conversation_id] {
                     // the group's status: a ring on its picture (accent = new, grey = seen); tap it to watch
-                    Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id, size: 48)
-                        .padding(3)
-                        .overlay(Circle().stroke(st.all_seen ? Theme.faint.opacity(0.4) : Theme.accent, lineWidth: 2.5))
-                        .highPriorityGesture(TapGesture().onEnded { watchGroup = st })
-                        .accessibilityLabel(Text(String(format: NSLocalizedString("gst.watch.named", comment: ""), g.name)))
+                    ListAvatarRing(seen: st.all_seen) {
+                        Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id)
+                    }
+                    .contentShape(Circle())
+                    .highPriorityGesture(TapGesture().onEnded { watchGroup = st })
+                    .accessibilityLabel(Text(String(format: NSLocalizedString("gst.watch.named", comment: ""), g.name)))
                 } else {
                     Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id)
                 }
             }
             VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(g.name).font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
-                    if extras[g.conversation_id]?.verified == true {
-                        Image(systemName: "checkmark.seal.fill").font(.system(size: 13)).foregroundStyle(Theme.verified)
+                HStack(alignment: .center, spacing: 8) {
+                    HStack(spacing: 5) {
+                        Text(g.name).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
+                        if extras[g.conversation_id]?.verified == true { ListVerifiedSeal(size: 15) }
                     }
-                    Spacer(minLength: 8)
+                    Spacer(minLength: 0)
                     if let d = g.lastDate {
-                        // teal and bold when unread, unless muted (website 9ba9f40)
-                        Text(ChatRow.timeLabel(d)).font(.system(size: 12.5, weight: g.unread_count > 0 && !muted ? .bold : .medium))
-                            .foregroundStyle(g.unread_count > 0 && !muted ? Theme.hex(0x08D9D9) : Theme.faint)
+                        Text(ChatRow.timeLabel(d)).font(.system(size: 12, weight: hotTime ? .bold : .regular))
+                            .monospacedDigit()
+                            .foregroundStyle(hotTime ? ListLook.unreadTime : ListLook.rowTime)
                     }
                 }
                 HStack(spacing: 5) {
                     previewLine(g)
-                    Spacer(minLength: 6)
-                    if muted { Image(systemName: "bell.slash.fill").font(.system(size: 11)).foregroundStyle(Theme.faint) }
-                    if mentions > 0 {
-                        Text("@").font(.system(size: 12, weight: .heavy)).foregroundStyle(Theme.onAccent)
-                            .frame(width: 22, height: 22).background(Theme.accent, in: Circle())
-                            .accessibilityLabel(Text(String(format: NSLocalizedString("grp.mentions.n", comment: ""), mentions)))
-                    }
-                    if g.unread_count > 0 {
-                        UnreadBadge(count: g.unread_count, muted: muted)
-                    } else if p?.marked_unread ?? false {
-                        Circle().stroke(Theme.accent, lineWidth: 2).frame(width: 12, height: 12)
-                    } else if p?.pinned ?? false {
-                        Image(systemName: "pin.fill").font(.system(size: 12)).foregroundStyle(Theme.accent).rotationEffect(.degrees(45))
-                    }
+                    Spacer(minLength: 8)
+                    ListRowMeta(pinned: p?.pinned ?? false, muted: muted, mentions: mentions,
+                                unreadCount: g.unread_count, markedUnread: p?.marked_unread ?? false)
                 }
             }
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 68, alignment: .leading)
+            .overlay(alignment: .top) { if !first { ListRowRule() } }
         }
-        .padding(.leading, 15).padding(.trailing, 14)
-        .frame(height: 83)
-        .overlay(alignment: .top) { Rectangle().fill(Theme.soulRule).frame(height: 1) }
+        .padding(.horizontal, 16)
         .contentShape(Rectangle())
     }
 
@@ -289,7 +317,7 @@ struct GroupsListView: View {
     @ViewBuilder private func previewLine(_ g: GroupSummary) -> some View {
         if g.last_message.isEmpty && g.last_message_at <= 0 {
             Text(String(format: NSLocalizedString("groups.members", comment: ""), g.member_count))
-                .font(.system(size: 15)).foregroundStyle(Theme.muted).lineLimit(1)
+                .font(.system(size: 14)).foregroundStyle(ListLook.rowPreview).lineLimit(1)
         } else {
             let c = g.previewConversation(me: me)
             let row = ChatRow(chat: c, token: token)
@@ -299,11 +327,11 @@ struct GroupsListView: View {
             if let st = status { ChatRow.ticks(st) }
             if let icon = row.previewIcon {
                 // the sender's name comes before the glyph (website .conv-preview-who, then PreviewGlyph)
-                if !who.isEmpty { Text(who).font(.system(size: 15)).foregroundStyle(Theme.muted).lineLimit(1).fixedSize() }
+                if !who.isEmpty { Text(who).font(.system(size: 14)).foregroundStyle(ListLook.rowPreview).lineLimit(1).fixedSize() }
                 Image(systemName: icon).font(.system(size: 12)).foregroundStyle(row.callMissed ? Theme.danger : Theme.accent)
-                Text(row.preview).font(.system(size: 15)).foregroundStyle(row.callMissed ? Theme.danger : Theme.muted).lineLimit(1)
+                Text(row.preview).font(.system(size: 14)).foregroundStyle(row.callMissed ? Theme.danger : ListLook.rowPreview).lineLimit(1)
             } else {
-                Text(who + row.preview).font(.system(size: 15)).foregroundStyle(Theme.muted).lineLimit(1)
+                Text(who + row.preview).font(.system(size: 14)).foregroundStyle(ListLook.rowPreview).lineLimit(1)
             }
         }
     }
@@ -366,7 +394,15 @@ struct GroupsListView: View {
             prefs = Dictionary(list.map { ($0.conversation_id, $0) }, uniquingKeysWith: { a, _ in a })
         }
         extras = await APIClient.shared.grpListExtras(token: token)
-        if folders.isEmpty { folders = (try? await APIClient.shared.folders(token: token)) ?? [] }
+        if folders.isEmpty { await reloadFolders() }
+    }
+
+    private func reloadFolders() async {
+        folders = (try? await APIClient.shared.folders(token: token)) ?? folders
+        if let all = try? await FolderStore.load(token: token) {
+            folderIcons = Dictionary(all.1.map { ($0.id, $0.icon) }, uniquingKeysWith: { a, _ in a })
+            folderColors = Dictionary(all.1.map { ($0.id, $0.color) }, uniquingKeysWith: { a, _ in a })
+        }
     }
 }
 

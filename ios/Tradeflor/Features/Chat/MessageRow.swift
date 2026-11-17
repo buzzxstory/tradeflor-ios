@@ -43,8 +43,8 @@ struct MessageRowActions {
 }
 
 /// Wraps any message bubble with what all of them share: sender + role tag (groups), "Forwarded", the quoted
-/// message, reactions, views / comments (group posts), selection, and the website's long-press menu:
-/// quick reactions, Reply, Copy Text, Copy Message Link, Forward, Pin (group admins), Report, Delete, Select.
+/// message, reactions, views / comments (group posts), selection, and the website's long-press menu (MessageMenu.swift):
+/// quick reactions, Reply, Copy Text, Edit, Copy Message Link, Save As, Forward, Pin (group admins), Report, Select, Delete.
 struct MessageRow<Content: View>: View {
     let message: Message
     let mine: Bool
@@ -59,8 +59,9 @@ struct MessageRow<Content: View>: View {
     var options = MessageRowOptions()
     var actions = MessageRowActions()
     @ViewBuilder let content: () -> Content
+    @Environment(\.tfChatThemed) private var chatThemed
 
-    static var quickEmoji: [String] { ["❤️", "🔥", "👏", "👍", "😂", "😮", "😡"] }
+    static var quickEmoji: [String] { MessageMenuStyle.quickEmoji }
 
     static func expiry(_ unix: Int64) -> String {
         let f = DateFormatter()
@@ -110,7 +111,7 @@ struct MessageRow<Content: View>: View {
             content()
                 .environment(\.tfBubbleHead, inside ? head : nil)
                 .environment(\.tfMediaForward, isMedia && !options.restricted && !options.selecting ? onForward : nil)
-                .contextMenu { if !message.isDeleted && message.kind != "notice" && message.kind != "call" && !options.selecting { menu } }
+                .modifier(MessageMenuTrigger(enabled: menuEnabled, menu: menuContent, fallback: { menu }))
                 .allowsHitTesting(!options.selecting)
                 .padding(.bottom, isMedia && hasReactions ? 12 : 0)
             HStack(spacing: 10) {
@@ -246,6 +247,47 @@ struct MessageRow<Content: View>: View {
         })
     }
 
+    private var menuEnabled: Bool {
+        !message.isDeleted && message.kind != "notice" && message.kind != "call" && !options.selecting
+    }
+
+    /// The long-press menu (MessageMenu.swift): the same actions, in the same order and on the same conditions, as the
+    /// system menu below, which is only used when the screen has no menu host.
+    private func menuContent() -> MessageMenuContent {
+        var items = [MessageMenuItem("chat.reply", systemImage: "arrowshape.turn.up.left") { onReply() }]
+        if message.kind == "text" && !options.restricted {
+            items.append(MessageMenuItem("chat.copy.text", systemImage: "doc.on.doc") { onCopy() })
+        }
+        if let edit = actions.edit {
+            items.append(MessageMenuItem("chat.edit", systemImage: "pencil") { edit() })
+        }
+        items.append(MessageMenuItem("chat.copy.link", systemImage: "link") { actions.copyLink() })
+        if let save = actions.save, !options.restricted, !message.isDeleted {
+            items.append(MessageMenuItem("chat.save.as", systemImage: "arrow.down.to.line") { save() })
+        }
+        if !options.restricted {
+            items.append(MessageMenuItem("chat.forward", systemImage: "arrowshape.turn.up.right") { onForward() })
+        }
+        if options.canPin {
+            let pinned = options.pinned
+            items.append(MessageMenuItem(pinned ? "chat.unpin" : "chat.pin", systemImage: pinned ? "pin.slash" : "pin") {
+                actions.pin(!pinned)
+            })
+        }
+        if options.isGroup && !mine {
+            items.append(MessageMenuItem("chat.report", systemImage: "exclamationmark.bubble") { actions.report() })
+        }
+        items.append(MessageMenuItem("chat.select", systemImage: "checkmark") { actions.select() })
+        items.append(MessageMenuItem("chat.delete", systemImage: "trash", destructive: true) { onDelete(false) })
+        let mineReactions = Set(message.reactionList(me: myID).filter(\.mine).map(\.emoji))
+        let preview = content()
+            .environment(\.tfBubbleHead, inside ? head : nil)
+            .environment(\.tfChatThemed, chatThemed)
+        return MessageMenuContent(active: mineReactions, onReact: onReact, moreReactions: actions.moreReactions,
+                                  items: items, preview: AnyView(preview), mine: mine)
+    }
+
+    /// The system context menu, used only when the screen has no menu host (`.messageMenuHost()`).
     @ViewBuilder private var menu: some View {
         ControlGroup {
             ForEach(Self.quickEmoji, id: \.self) { e in

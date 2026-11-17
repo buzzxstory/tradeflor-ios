@@ -174,23 +174,26 @@ struct StatusQuickGrid: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.55)
+            // web .status-quick: rgba(0, 6, 9, .58); 4 columns, 24 pt between rows; 58 pt buttons with a 42 pt emoji on phones
+            Theme.hex(0x000609, 0.58)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { onDismiss() }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 4), spacing: 22) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 18), count: 4), spacing: 24) {
                 ForEach(Array(statusQuickEmojis.enumerated()), id: \.element) { k, e in
                     Button { onPick(e) } label: {
-                        Text(e).font(.system(size: 50)).frame(width: 70, height: 70)
+                        Text(e).font(.system(size: 42)).frame(width: 58, height: 58)
+                            .shadow(color: .black.opacity(0.45), radius: 7, y: 6)
                     }
                     .buttonStyle(.plain)
-                    .scaleEffect(shown ? 1 : 0.4)
+                    .scaleEffect(shown ? 1 : 0.5)
+                    .offset(y: shown ? 0 : 14)
                     .opacity(shown ? 1 : 0)
-                    .animation(.spring(response: 0.32, dampingFraction: 0.62).delay(Double(k) * 0.025), value: shown)
+                    .animation(.spring(response: 0.32, dampingFraction: 0.62).delay(Double(k) * 0.022), value: shown)
                     .accessibilityLabel(Text(String(format: NSLocalizedString("stx.react.with", comment: ""), e)))
                 }
             }
-            .padding(.horizontal, 28)
+            .padding(.horizontal, 18)
         }
         .onAppear { shown = true }
     }
@@ -231,5 +234,206 @@ struct StatusViewerLine: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
+    }
+}
+
+// MARK: the web phone viewer's look (18-status.css, 54-status-instant.css, 60-status-react.css, 53-admin.css)
+
+/// When a status was posted, as the web viewer's head says it: "just now", "12 min ago", "6 h ago".
+func statusAgo(_ d: Date?, now: Date = Date()) -> String {
+    guard let d else { return "" }
+    let s = max(0, Int(now.timeIntervalSince(d)))
+    if s < 60 { return NSLocalizedString("ux2.ago.now", comment: "") }
+    if s < 3600 { return String(format: NSLocalizedString("ux2.ago.min", comment: ""), s / 60) }
+    return String(format: NSLocalizedString("ux2.ago.h", comment: ""), s / 3600)
+}
+
+/// web .status-head .status-icon: a 44 pt round button, dark glass (rgba(0,0,0,.35)), a white line icon.
+struct StatusHeadButton: View {
+    let systemName: String
+    let label: LocalizedStringKey
+    var size: CGFloat = 17
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(Color.black.opacity(0.35), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(label))
+    }
+}
+
+/// web .official-face: the TRADEFLOR mark on a dark round disc; in the viewer's head 38 pt with a turquoise ring.
+struct OfficialFace: View {
+    var size: CGFloat = 38
+    var ring = true
+
+    var body: some View {
+        ZStack {
+            Circle().fill(RadialGradient(colors: [Theme.hex(0x0F3340), Theme.hex(0x04141B)], center: UnitPoint(x: 0.35, y: 0.3),
+                                         startRadius: 0, endRadius: size * 0.75))
+            Image("BrandMark").resizable().scaledToFit().frame(width: size * 0.68, height: size * 0.68)
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay { if ring { Circle().stroke(Theme.hex(0x2FD9DC, 0.7), lineWidth: 1.5) } }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The web's VerifiedBadge: a blue (#1DA1F2) seal with a white tick.
+struct StatusVerifiedSeal: View {
+    var size: CGFloat = 15
+
+    var body: some View {
+        Image(systemName: "checkmark.seal.fill")
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(.white, Theme.hex(0x1DA1F2))
+            .font(.system(size: size))
+            .accessibilityLabel(Text("adm.verified"))
+    }
+}
+
+/// web .status-caption: not a bubble but a full-width band at the bottom, white 16 pt centred words over a dark fade.
+/// With `maxHeight` (Official captions, up to 500 characters) a long text scrolls inside its band.
+struct StatusCaptionBand: View {
+    let text: String
+    var maxHeight: CGFloat? = nil
+
+    var body: some View {
+        Group {
+            if let maxHeight {
+                ViewThatFits(in: .vertical) {
+                    words
+                    ScrollView(showsIndicators: false) { words }
+                }
+                .frame(maxHeight: maxHeight)
+            } else {
+                words
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .background(LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .top, endPoint: .bottom).allowsHitTesting(false))
+    }
+
+    private var words: some View {
+        Text(text)
+            .font(.system(size: 16))
+            .lineSpacing(5)
+            .foregroundStyle(.white)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 12)
+    }
+}
+
+/// web .status-burst: the reaction comes up big (104 pt), overshoots a little, then floats up and fades.
+struct StatusBurstView: View {
+    let emoji: String
+    @State private var phase = 0
+
+    var body: some View {
+        Text(emoji)
+            .font(.system(size: 104))
+            .shadow(color: .black.opacity(0.5), radius: 12, y: 10)
+            .scaleEffect(phase == 0 ? 0.4 : (phase == 1 ? 1.15 : 0.9))
+            .offset(y: phase == 0 ? 30 : (phase == 1 ? 0 : -96))
+            .opacity(phase == 1 ? 1 : 0)
+            .onAppear {
+                withAnimation(.spring(response: 0.26, dampingFraction: 0.62)) { phase = 1 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation(.easeOut(duration: 0.9)) { phase = 2 }
+                }
+            }
+    }
+}
+
+/// web VoiceStatusArt: the speaker's picture in the middle with rings breathing out and a mic badge, a row of bars lit up to
+/// where it has played (moving while it plays), and "0:12 / 0:40"; on the web's deep teal radial backdrop.
+struct StatusVoiceArt<Face: View>: View {
+    let playing: Bool
+    let progress: Double
+    let durationMs: Int64
+    @ViewBuilder let face: () -> Face
+
+    private static var bars: [CGFloat] {
+        [0.35, 0.6, 0.9, 0.55, 0.75, 1, 0.5, 0.8, 0.45, 0.95, 0.65, 0.4, 0.85, 0.6, 0.3, 0.7, 0.95, 0.5, 0.75, 0.4, 0.9, 0.55, 0.7, 0.35]
+    }
+
+    var body: some View {
+        ZStack {
+            RadialGradient(stops: [.init(color: Theme.hex(0x07374A), location: 0), .init(color: Theme.hex(0x031E29), location: 0.55),
+                                   .init(color: Theme.hex(0x011016), location: 1)],
+                           center: UnitPoint(x: 0.5, y: 0.35), startRadius: 0, endRadius: 560)
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !playing)) { tl in
+                art(at: tl.date.timeIntervalSinceReferenceDate)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func art(at t: Double) -> some View {
+        let lit = Int((progress * Double(Self.bars.count)).rounded())
+        return VStack(spacing: 22) {
+            ZStack {
+                ForEach(0..<3, id: \.self) { k in
+                    Circle()
+                        .stroke(Theme.hex(0x00D4DF, 0.55), lineWidth: 2)
+                        .frame(width: 124, height: 124)
+                        .scaleEffect(0.82 + 0.68 * ringPhase(t, k))
+                        .opacity(playing ? 0.75 * (1 - ringPhase(t, k)) : 0)
+                }
+                face()
+                    .frame(width: 108, height: 108)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Theme.hex(0x00D4DF, 0.7), lineWidth: 3))
+                    .shadow(color: Theme.hex(0x00D4DF, 0.28), radius: 14)
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Theme.onAccent)
+                    .frame(width: 32, height: 32)
+                    .background(Theme.accent, in: Circle())
+                    .overlay(Circle().stroke(Theme.hex(0x04151C), lineWidth: 3))
+                    .offset(x: 38, y: 40)
+            }
+            .frame(width: 168, height: 168)
+            HStack(spacing: 4) {
+                ForEach(Array(Self.bars.enumerated()), id: \.offset) { k, h in
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(k < lit ? Theme.accent : Theme.hex(0xA9B9C5, 0.32))
+                        .frame(maxWidth: 6)
+                        .frame(height: max(5, 56 * h * barWave(t, k)))
+                }
+            }
+            .frame(width: 270, height: 56)
+            Text(durationMs > 0 ? "\(Self.clock(progress * Double(durationMs))) / \(Self.clock(Double(durationMs)))"
+                                : NSLocalizedString("stx.tile.voice", comment: ""))
+                .font(.system(size: 13).monospacedDigit())
+                .foregroundStyle(Theme.hex(0xCFE3EE))
+        }
+        .environment(\.layoutDirection, .leftToRight)
+    }
+
+    /// 0…1 through a ring's 2.4 s breath (the three rings 0.8 s apart).
+    private func ringPhase(_ t: Double, _ k: Int) -> CGFloat {
+        CGFloat((t + Double(k) * 0.8).truncatingRemainder(dividingBy: 2.4) / 2.4)
+    }
+
+    /// A bar's height factor while it plays (0.45…1 over 1.05 s); still bars at full height when paused.
+    private func barWave(_ t: Double, _ k: Int) -> CGFloat {
+        guard playing else { return 1 }
+        return CGFloat(0.45 + 0.55 * (0.5 + 0.5 * sin((t + Double(k % 7) * 0.09) * 2 * Double.pi / 1.05)))
+    }
+
+    private static func clock(_ ms: Double) -> String {
+        let s = max(0, Int((ms / 1000).rounded()))
+        return String(format: "%d:%02d", s / 60, s % 60)
     }
 }

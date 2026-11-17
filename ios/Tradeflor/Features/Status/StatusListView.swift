@@ -68,7 +68,7 @@ struct StatusListView: View {
             }
             .refreshable { await load() }
             .overlay { if loading && groups.isEmpty { ProgressView() } }
-            .sheet(isPresented: $showCreator) { StatusCreatorSheet { Task { await load() } } }
+            .fullScreenCover(isPresented: $showCreator) { StatusCreatorSheet { Task { await load() } } }
             .alert(Text(problem ?? ""), isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
                 Button("chat.close", role: .cancel) {}
             }

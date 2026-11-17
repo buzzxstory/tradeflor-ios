@@ -1712,3 +1712,29 @@
 "pc2.signal.above" = "فوق الدخول";
 "pc2.signal.buy" = "شراء";
 "pc2.signal.sell" = "بيع";
+
+"ux2.ago.now" = "الآن";
+"ux2.ago.min" = "قبل %d د";
+"ux2.ago.h" = "قبل %d س";
+"ux2.status.group" = "حالة مجموعة";
+"ux2.official.learn" = "اعرف المزيد";
+"ux2.creator.sub.group" = "تظهر لمدة 24 ساعة لأعضاء %@.";
+"ux2.creator.foot" = "فيديوهات حتى 30 ثانية · أضف موسيقى إلى الصور والنصوص";
+
+"ux1.chips.locked" = "مقفلة";
+"ux1.chips.blocked" = "محظورة";
+"ux1.chats.none" = "لا توجد محادثات خاصة بعد.";
+"ux1.chats.start" = "ابدأ محادثة";
+"ux1.chats.groupsHint" = "مجموعاتك موجودة في قسم المجموعات.";
+"ux1.chats.nomatch" = "لا توجد محادثات تطابق \"%@\".";
+"ux1.chats.nolocked" = "لا توجد محادثات خاصة مقفلة. اضغط مطولًا على محادثة واختر قفل المحادثة.";
+"ux1.chats.noblocked" = "لا توجد محادثات محظورة.";
+"ux1.chats.noarchived" = "لا توجد محادثات مؤرشفة.";
+"ux1.chats.nounread" = "لا توجد محادثات غير مقروءة.";
+"ux1.chats.nofolder" = "لا توجد محادثات في هذا المجلد بعد. اضغط مطولًا على المجلد واختر تعديل المجلد لإضافة بعضها.";
+"ux1.chats.allarchived" = "كل محادثاتك مؤرشفة.";
+"ux1.status.new" = "جديد";
+"ux1.status.watch" = "شاهد حالة %@";
+"ux1.verified" = "موثّق";
+"ux1.pinned" = "مثبّتة";
+"ux1.muted" = "مكتومة";
