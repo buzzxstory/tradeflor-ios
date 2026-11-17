@@ -1630,3 +1630,34 @@
 "civ3.pin.copy" = "TRADEFLOR PIN %@, copy";
 "civ3.picture.view" = "View %@'s picture";
 "civ3.picture.of" = "%@'s picture";
+
+/* Contacts V3: Find → Add & Chat (server 4c784a8) */
+"cv3.subtitle" = "Find, add, and chat with traders";
+"cv3.search.ph" = "Search by name, @username or PIN";
+"cv3.ph.pin" = "Type their TRADEFLOR PIN";
+"cv3.ph.username" = "Type their @username";
+"cv3.clear" = "Clear search";
+"cv3.tile.scan.sub" = "Add instantly";
+"cv3.tile.pin" = "Add by PIN";
+"cv3.tile.pin.sub" = "e.g. 9999";
+"cv3.tile.username" = "Add by Username";
+"cv3.tile.username.sub" = "e.g. @just";
+"cv3.nomatch" = "No TRADEFLOR account matches “%@”.";
+"cv3.pin" = "TRADEFLOR PIN · %@";
+"cv3.you" = "This is you";
+"cv3.add" = "Add & Chat";
+"cv3.adding" = "Adding contact…";
+"cv3.opening" = "Opening chat…";
+"cv3.err.search" = "Couldn't search right now. Check your connection.";
+"cv3.err.search.rate" = "Too many searches. Please wait a minute.";
+"cv3.err.chat" = "The contact is saved, but the chat could not be opened.";
+"cv3.err.blocked" = "You blocked this person. Unblock them first.";
+"cv3.err.rate" = "Too many adds in a short time. Please wait a minute.";
+"cv3.err.add" = "Couldn't add this contact. Check your connection.";
+"cv3.requests" = "Requests";
+"cv3.mycontacts" = "My Contacts";
+"cv3.none" = "No contacts yet. Find people by their TRADEFLOR PIN, @username or QR code.";
+"cv3.nomatch.local" = "None of your contacts match.";
+"cv3.remove" = "Remove from contacts";
+"cv3.remove.confirm" = "Remove %@?";
+"cv3.remove.msg" = "They are removed from your contacts only. Your chat stays, and they are not told.";

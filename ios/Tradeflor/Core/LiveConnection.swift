@@ -31,6 +31,8 @@ final class LiveConnection: ObservableObject {
     let joinRequests = PassthroughSubject<[String: String], Never>()
     /// Something changed in my signed-in sessions (sign-in, sign-out, rename on any device): Linked Devices reloads.
     let sessionsChanged = PassthroughSubject<Void, Never>()
+    /// My contacts changed ("contact" event: saved / unsaved on one of my devices, accepted …): the Contacts list reloads.
+    let contactsChanged = PassthroughSubject<[String: Any], Never>()
     /// Messages gone from my view (hidden for me, or a cleared chat, in batches): conversation id and message ids.
     let hidden = PassthroughSubject<(conversation: String, ids: [String]), Never>()
     /// Scan & Connect (event type "flash"): the raw `data` (action claimed / accepted / declined / decided, session_id, guest, peer).
@@ -199,6 +201,11 @@ final class LiveConnection: ObservableObject {
             return
         }
         if env.type == "sessions" { sessionsChanged.send(()); return }
+        if env.type == "contact" {
+            let d = ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] as? [String: Any]) ?? [:]
+            contactsChanged.send(d)
+            return
+        }
         if env.type == "hidden" {
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let d = obj["data"] as? [String: Any] {
                 let conv = (d["conversation_id"] as? String) ?? env.conversation_id ?? ""

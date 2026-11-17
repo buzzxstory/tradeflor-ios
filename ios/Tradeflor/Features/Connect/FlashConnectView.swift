@@ -120,7 +120,7 @@ struct ScanResultView: View {
     @EnvironmentObject private var store: SessionStore
     @Environment(\.dismiss) private var dismiss
     @State private var person: IdentityDetail?
-    @State private var state = "loading" // loading | person | bad | sent | connected | group | meet
+    @State private var state = "loading" // loading | person | adding | bad | group | meet
     @State private var meet: MeetupPeek?
     @State private var info: String?
 
@@ -178,22 +178,24 @@ struct ScanResultView: View {
                 Avatar(token: token, userID: p.user_id, avatarID: p.avatar_id, title: p.title, size: 80)
                 Text(p.title).font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text)
                 Text("@\(p.username) · \(p.pin)").font(.system(size: 13)).foregroundStyle(Theme.faint)
-                if state == "connected" || p.relation == "contact" {
-                    Text("fc.connected").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.online)
+                // Contacts V3: a public identity (My QR, a PIN, a @username) is saved in MY contacts and its chat opens -- one tap,
+                // no request to wait on (website FlashConnect.tsx PersonResult). Mutual Connect keeps MutualGuestView.
+                if p.relation == "self" {
+                    Text("fc.own").foregroundStyle(Theme.faint)
+                } else if p.relation == "contact" || p.saved == true {
                     Button { Task { await openChat(p.user_id) } } label: {
                         Text("ct.message").bold().foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 44).background(Theme.accent, in: Capsule())
                     }
-                } else if state == "sent" || p.relation == "requested" {
-                    Text("fc.request.sent").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.faint)
-                } else if p.relation == "self" {
-                    Text("fc.own").foregroundStyle(Theme.faint)
                 } else {
-                    Button { Task { await connect(p) } } label: {
-                        Text(LocalizedStringKey(p.relation == "incoming" ? "ct.accept.their" : "fc.connect")).bold().foregroundStyle(Theme.onAccent)
+                    Button { Task { await addAndChat(p) } } label: {
+                        Text(LocalizedStringKey(state == "adding" ? "cv3.adding" : "cv3.add")).bold().foregroundStyle(Theme.onAccent)
                             .frame(maxWidth: .infinity, minHeight: 44).background(Theme.accent, in: Capsule())
+                            .opacity(state == "adding" ? 0.7 : 1)
                     }
+                    .disabled(state == "adding")
+                    .accessibilityIdentifier("fc.addchat")
                 }
-                if let info { Text(info).font(.system(size: 12)).foregroundStyle(Theme.danger) }
+                if let info { Text(info).font(.system(size: 12)).foregroundStyle(Theme.danger).multilineTextAlignment(.center) }
             }
             .padding(16)
             .frame(maxWidth: .infinity)
@@ -228,12 +230,22 @@ struct ScanResultView: View {
         }
     }
 
-    private func connect(_ p: IdentityDetail) async {
-        do {
-            try await APIClient.shared.ctConnect(token: token, userID: p.user_id)
-            state = p.relation == "incoming" ? "connected" : "sent"
-        } catch {
-            info = NSLocalizedString("fc.send.failed", comment: "")
+    /// Add & Chat: the same save-and-open call as the Contacts screen, then the chat opens directly.
+    private func addAndChat(_ p: IdentityDetail) async {
+        guard state != "adding" else { return }
+        info = nil
+        state = "adding"
+        let out = await AddAndChat.run(token: token, userID: p.user_id)
+        state = "person"
+        switch out {
+        case .opened(let s):
+            onOpen(s)
+        case .savedNoChat:
+            // saved: the button becomes Message, which opens the chat again (safe to retry)
+            person?.saved = true
+            info = NSLocalizedString("cv3.err.chat", comment: "")
+        case .failed(let message, _):
+            info = message
         }
     }
 
@@ -247,7 +259,7 @@ struct ScanResultView: View {
     }
 
     private func openChat(_ userID: String) async {
-        if let s = await APIClient.shared.ctOpenChat(token: token, userID: userID) { onOpen(s) }
+        if let s = await APIClient.shared.ctOpenChat(token: token, userID: userID) { onOpen(s) } else { info = NSLocalizedString("ci.failed", comment: "") }
     }
 }
 

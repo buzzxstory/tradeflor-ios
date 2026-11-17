@@ -41,6 +41,33 @@ extension APIClient {
         try await list(SentContactRequest.self, "contacts/requests/sent", token: token)
     }
 
+    /// Contacts V3 "Add & Chat": saves the person in MY contacts (one way, no approval) and opens the one private chat, in one
+    /// idempotent call. Exactly one of userID / pin / username.
+    func ctSaveAndOpen(token: String, userID: String? = nil, pin: String? = nil, username: String? = nil) async throws -> SaveAndOpenResult {
+        var body: [String: Any] = [:]
+        if let userID { body["user_id"] = userID } else if let pin { body["pin"] = pin } else if let username { body["username"] = username }
+        let (data, http) = try await send(request("contacts/save-and-open", method: "POST", token: token, body: body))
+        switch http.statusCode {
+        case 404: throw SaveAndOpenError.notFound
+        case 409: throw SaveAndOpenError.blocked
+        case 400: throw SaveAndOpenError.yourself
+        case 429: throw SaveAndOpenError.rateLimited
+        default: try check(http, data)
+        }
+        return try decode(SaveAndOpenResult.self, data)
+    }
+
+    /// Removes someone I saved (not a mutual contact) from my contacts; the chat stays and they are not told. 204.
+    func ctUnsave(token: String, userID: String) async throws {
+        let (data, http) = try await send(request("contacts/unsave", method: "POST", token: token, body: ["user_id": userID]))
+        try check(http, data)
+    }
+
+    /// The summary of a conversation I am in, for navigation.
+    func ctSummary(token: String, conversationID: String) async -> ConversationSummary? {
+        ((try? await conversations(token: token)) ?? []).first { $0.conversation_id == conversationID }
+    }
+
     func ctConnect(token: String, userID: String) async throws {
         _ = try await postJSON("identity/connect", token: token, body: ["UserID": userID])
     }

@@ -12,6 +12,8 @@ struct IdentityDetail: Decodable, Equatable {
     let country: String?
     let relation: String?
     var pin_class: String? = nil
+    /// Contacts V3: I saved them in my contacts (one way, "Add & Chat"; server contacts.go IsSaved).
+    var saved: Bool? = nil
 
     var title: String { (display_name?.isEmpty == false ? display_name : nil) ?? username }
 }
@@ -20,8 +22,30 @@ struct ContactEntry: Decodable, Identifiable {
     let user_id: String
     let username: String
     let alias: String?
+    /// Contacts V3: both sides accepted; false = saved by me only ("Add & Chat"), which I can remove.
+    var mutual: Bool? = nil
     var id: String { user_id }
     var title: String { (alias?.isEmpty == false ? alias : nil) ?? username }
+}
+
+/// POST contacts/save-and-open (Contacts V3 "Add & Chat"): the contact is saved in MY contacts and the one private chat is given.
+struct SaveAndOpenResult: Decodable {
+    let user_id: String
+    let username: String
+    let conversation_id: String?
+    let already_saved: Bool?
+    let conversation_existed: Bool?
+    let can_message: Bool?
+    /// saved, but the chat could not be opened (Retry is safe: the call is idempotent)
+    let chat_error: String?
+}
+
+/// The refusals of save-and-open that the screen words differently (postJSON would fold them into one `refused`).
+enum SaveAndOpenError: Error {
+    case notFound      // 404: no account, or not visible to me (one neutral message)
+    case blocked       // 409: I blocked them
+    case yourself      // 400
+    case rateLimited   // 429
 }
 
 struct SentContactRequest: Decodable, Identifiable {
