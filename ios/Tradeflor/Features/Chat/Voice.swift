@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import Combine
 import WebKit
 
 // MARK: recording
@@ -9,15 +10,20 @@ import WebKit
 @MainActor
 final class VoiceRecorder: ObservableObject {
     @Published private(set) var recording = false
-    @Published private(set) var elapsed: TimeInterval = 0
-    @Published private(set) var levels: [Double] = []
+    /// The values that change 10 times a second (time, levels, preview position) live in `meter`, so only the views that
+    /// draw them redraw (the whole chat screen redrew 10 times a second while recording). `mirrorsMeter: false` (the chat)
+    /// keeps them out of this object's own changes; a screen that reads them through the recorder keeps the default.
+    let meter = VoiceMeter()
+    var elapsed: TimeInterval { meter.elapsed }
+    var levels: [Double] { meter.levels }
+    var previewProgress: Double { meter.previewProgress }
+    private var meterLink: AnyCancellable?
     @Published var denied = false
     /// Paused mid-recording (the website's VoiceComposer pause / resume).
     @Published private(set) var paused = false
     /// Stopped and waiting for Send or Delete, with a preview to listen to first.
     @Published private(set) var reviewing = false
     @Published private(set) var previewPlaying = false
-    @Published private(set) var previewProgress: Double = 0
 
     private var recorder: AVAudioRecorder?
     private var reviewDuration: TimeInterval = 0
@@ -27,6 +33,12 @@ final class VoiceRecorder: ObservableObject {
     private var url: URL?
 
     nonisolated static let maxDuration: TimeInterval = 15 * 60
+
+    init(mirrorsMeter: Bool = true) {
+        if mirrorsMeter {
+            meterLink = meter.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        }
+    }
 
     func start() async {
         let session = AVAudioSession.sharedInstance()
@@ -52,8 +64,8 @@ final class VoiceRecorder: ObservableObject {
             guard r.record(forDuration: Self.maxDuration) else { return }
             recorder = r
             url = file
-            levels = []
-            elapsed = 0
+            meter.levels = []
+            meter.elapsed = 0
             recording = true
             timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.tick() }
@@ -67,8 +79,8 @@ final class VoiceRecorder: ObservableObject {
         guard let r = recorder else { return }
         r.updateMeters()
         let db = Double(r.averagePower(forChannel: 0)) // -160 ... 0
-        levels.append(max(0, min(1, (db + 50) / 50)))
-        elapsed = r.currentTime
+        meter.levels.append(max(0, min(1, (db + 50) / 50)))
+        meter.elapsed = r.currentTime
         if !r.isRecording && !paused { timer?.invalidate() }
     }
 
@@ -92,7 +104,7 @@ final class VoiceRecorder: ObservableObject {
         timer?.invalidate()
         paused = false
         reviewing = true
-        previewProgress = 0
+        meter.previewProgress = 0
     }
 
     func togglePreview() {
@@ -116,8 +128,8 @@ final class VoiceRecorder: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 100_000_000)
                 guard let self, let p = self.preview else { return }
-                self.previewProgress = p.duration > 0 ? p.currentTime / p.duration : 0
-                if !p.isPlaying { self.previewPlaying = false; if self.previewProgress > 0.97 { self.previewProgress = 1 }; return }
+                self.meter.previewProgress = p.duration > 0 ? p.currentTime / p.duration : 0
+                if !p.isPlaying { self.previewPlaying = false; if self.meter.previewProgress > 0.97 { self.meter.previewProgress = 1 }; return }
             }
         }
     }
@@ -147,7 +159,7 @@ final class VoiceRecorder: ObservableObject {
         preview?.stop()
         preview = nil
         previewPlaying = false
-        previewProgress = 0
+        meter.previewProgress = 0
         paused = false
         reviewing = false
         recorder = nil
@@ -166,6 +178,13 @@ final class VoiceRecorder: ObservableObject {
             return ((slice.max() ?? 0) * 100).rounded() / 100
         }
     }
+}
+
+/// A recording's running time, levels and preview position (see VoiceRecorder.meter).
+final class VoiceMeter: ObservableObject {
+    @Published var elapsed: TimeInterval = 0
+    @Published var levels: [Double] = []
+    @Published var previewProgress: Double = 0
 }
 
 // MARK: playback
@@ -508,12 +527,20 @@ struct VoiceBubble: View {
     private var isCurrent: Bool { player.current == message.audio_id }
     /// Playing or paused part-way: the speed button shows instead of the picture, the time played instead of the length.
     private var started: Bool { isCurrent && (player.playing || player.progress > 0) }
+    /// Decoded once per message (every voice bubble redraws 10 times a second while any note plays).
+    private static var sampleMemo: [String: [Double]] = [:]
     private var samples: [Double] {
-        guard let w = message.waveform, let d = w.data(using: .utf8),
-              let arr = try? JSONDecoder().decode([Double].self, from: d), !arr.isEmpty else {
-            return Array(repeating: 0.3, count: 32)
+        if let hit = Self.sampleMemo[message.id] { return hit }
+        let out: [Double]
+        if let w = message.waveform, let d = w.data(using: .utf8),
+           let arr = try? JSONDecoder().decode([Double].self, from: d), !arr.isEmpty {
+            out = VoiceRecorder.downsample(arr, to: 32)
+        } else {
+            out = Array(repeating: 0.3, count: 32)
         }
-        return VoiceRecorder.downsample(arr, to: 32)
+        if Self.sampleMemo.count > 500 { Self.sampleMemo.removeAll(keepingCapacity: true) }
+        Self.sampleMemo[message.id] = out
+        return out
     }
 
     private static let barColor = Theme.dyn(0xE2F5FA, 0x1E3C46, 0.34, 0.28)
@@ -716,8 +743,17 @@ struct Waveform: View {
 /// Shown in place of the text field while recording: cancel, the running time, live level, send.
 struct RecordingBar: View {
     @ObservedObject var recorder: VoiceRecorder
+    /// The running time and levels (they change 10 times a second): only this bar redraws for them.
+    @ObservedObject private var meter: VoiceMeter
     let onCancel: () -> Void
     let onSend: () -> Void
+
+    init(recorder: VoiceRecorder, onCancel: @escaping () -> Void, onSend: @escaping () -> Void) {
+        _recorder = ObservedObject(wrappedValue: recorder)
+        _meter = ObservedObject(wrappedValue: recorder.meter)
+        self.onCancel = onCancel
+        self.onSend = onSend
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -731,15 +767,15 @@ struct RecordingBar: View {
                         .font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.accent).frame(width: 34, height: 40)
                 }
                 .accessibilityLabel(Text(LocalizedStringKey(recorder.previewPlaying ? "chat.voice.preview.pause" : "chat.voice.preview")))
-                Waveform(samples: VoiceRecorder.downsample(recorder.levels, to: 40), progress: recorder.previewProgress, color: Theme.accent)
+                Waveform(samples: VoiceRecorder.downsample(meter.levels, to: 40), progress: meter.previewProgress, color: Theme.accent)
                     .frame(height: 26)
-                Text(VoiceBubble.length(Int64(recorder.elapsed * 1000))).monospacedDigit().foregroundStyle(Theme.text)
+                Text(VoiceBubble.length(Int64(meter.elapsed * 1000))).monospacedDigit().foregroundStyle(Theme.text)
             } else {
                 Circle().fill(.red).frame(width: 8, height: 8).opacity(recorder.paused ? 0.3 : 1)
-                Text(VoiceBubble.length(Int64(recorder.elapsed * 1000)))
+                Text(VoiceBubble.length(Int64(meter.elapsed * 1000)))
                     .monospacedDigit()
                     .foregroundStyle(Theme.text)
-                Waveform(samples: Array(recorder.levels.suffix(40)), progress: 1, color: Theme.accent)
+                Waveform(samples: Array(meter.levels.suffix(40)), progress: 1, color: Theme.accent)
                     .frame(height: 26)
                 Button { if recorder.paused { recorder.resume() } else { recorder.pause() } } label: {
                     Image(systemName: recorder.paused ? "mic.fill" : "pause.fill")

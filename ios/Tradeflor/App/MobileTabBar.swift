@@ -30,10 +30,12 @@ final class TabChrome: ObservableObject {
                     DispatchQueue.main.async { Self.dismissKeyboard() }
                     return
                 }
-                self.keyboard = true
+                // written only when it changes: this fires on every keyboard frame change (predictions, emoji), and each
+                // write redrew the root view and the dock
+                if !self.keyboard { self.keyboard = true }
             }.store(in: &subs)
         NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
-            .sink { [weak self] _ in self?.keyboard = false }.store(in: &subs)
+            .sink { [weak self] _ in if self?.keyboard == true { self?.keyboard = false } }.store(in: &subs)
         NotificationCenter.default.publisher(for: UIApplication.userDidTakeScreenshotNotification)
             .sink { [weak self] _ in
                 guard let self else { return }

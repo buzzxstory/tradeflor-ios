@@ -99,7 +99,7 @@ enum ListCache {
 
     static func conversations(token: String) -> [ConversationSummary] {
         guard let d = load("conversations", token: token) else { return [] }
-        return ((try? JSONDecoder().decode([ConversationSummary]?.self, from: d)) ?? nil) ?? []
+        return (((try? JSONDecoder().decode([LenientItem<ConversationSummary>]?.self, from: d)) ?? nil) ?? []).compactMap(\.value)
     }
 
     static func groups(token: String) -> [GroupSummary] {

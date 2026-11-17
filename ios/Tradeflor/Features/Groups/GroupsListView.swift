@@ -59,11 +59,16 @@ struct GroupsListView: View {
     /// A burst of group messages is one quiet reload (no spinner, no list redraw per message).
     @State private var pendingReload: Task<Void, Never>?
 
+    @State private var lastReload = Date.distantPast
+
+    /// At most one reload every 3 s: a busy chat used to reload the list (3-4 requests) for nearly every message.
     private func reloadSoon() {
-        pendingReload?.cancel()
+        guard pendingReload == nil else { return } // one is already on its way and will include this
+        let wait = max(0.7, 3 - Date().timeIntervalSince(lastReload))
         pendingReload = Task {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            if Task.isCancelled { return }
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            pendingReload = nil
+            lastReload = Date()
             await load()
         }
     }
@@ -504,22 +509,28 @@ struct LinkAvatar: View {
     let title: String
     let hasAvatar: Bool
     var size: CGFloat = 50
+    @Environment(\.displayScale) private var displayScale
     @State private var image: UIImage?
 
     var body: some View {
-        ZStack {
-            Circle().fill(Theme.avatarGradient)
+        // as Avatar: the picture fills the circle, centred; the letter only while there is none
+        Group {
             if let image {
-                Image(uiImage: image).resizable().scaledToFill()
+                Image(uiImage: image).resizable().scaledToFill().frame(width: size, height: size)
             } else {
-                Text(String(title.prefix(1)).uppercased()).font(.system(size: size * 0.4, weight: .bold)).foregroundStyle(Theme.text)
+                ZStack {
+                    Circle().fill(Theme.avatarGradient)
+                    Text(String(title.prefix(1)).uppercased()).font(.system(size: size * 0.4, weight: .bold)).foregroundStyle(Theme.text)
+                }
             }
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
         .task(id: handle) {
+            image = nil
             guard hasAvatar, let d = await APIClient.shared.grpLinkAvatar(token: token, handle: handle) else { return }
-            image = UIImage(data: d)
+            // decoded off the main thread at the size it is drawn
+            image = await AvatarImages.decode(d, maxPixels: (size * displayScale).rounded(.up))
         }
     }
 }

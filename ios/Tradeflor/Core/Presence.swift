@@ -34,12 +34,23 @@ extension APIClient {
 }
 
 enum LastSeen {
-    private static func clock(_ d: Date) -> String {
+    // made once: the chat's header line read them on every redraw
+    private static let clockFormat: DateFormatter = {
         let f = DateFormatter()
         f.timeStyle = .short
         f.dateStyle = .none
-        return f.string(from: d)
+        return f
+    }()
+    private static func template(_ t: String) -> DateFormatter {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate(t)
+        return f
     }
+    private static let weekday = template("EEEE")
+    private static let monthDay = template("MMMd")
+    private static let monthDayYear = template("yMMMd")
+
+    private static func clock(_ d: Date) -> String { clockFormat.string(from: d) }
 
     /// "last seen today at 4:23 AM", "… yesterday at …", "… Monday at …" (within a week), "… Nov 2 at …" (+ year).
     static func text(_ at: Int64, now: Date = Date()) -> String? {
@@ -50,12 +61,7 @@ enum LastSeen {
         let t = clock(d)
         if days <= 0 { return String(format: NSLocalizedString("ls.today", comment: ""), t) }
         if days == 1 { return String(format: NSLocalizedString("ls.yesterday", comment: ""), t) }
-        let f = DateFormatter()
-        if days < 7 {
-            f.setLocalizedDateFormatFromTemplate("EEEE")
-        } else {
-            f.setLocalizedDateFormatFromTemplate(cal.component(.year, from: d) == cal.component(.year, from: now) ? "MMMd" : "yMMMd")
-        }
+        let f = days < 7 ? weekday : (cal.component(.year, from: d) == cal.component(.year, from: now) ? monthDay : monthDayYear)
         return String(format: NSLocalizedString("ls.on", comment: ""), f.string(from: d), t)
     }
 

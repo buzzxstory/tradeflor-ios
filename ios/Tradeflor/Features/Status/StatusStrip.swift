@@ -30,7 +30,9 @@ struct StatusStrip: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: 10) {
-                item(name: NSLocalizedString("status.mine", comment: ""), ring: mine.map { $0.posts.isEmpty ? .none : .seen } ?? .none, plus: true) {
+                // the ring opens my status (the creator when I have none); the + always adds one (web StatusBar)
+                item(name: NSLocalizedString("status.mine", comment: ""), ring: mine.map { $0.posts.isEmpty ? .none : .seen } ?? .none,
+                     onPlus: { manage = true }) {
                     Avatar(token: token, userID: me, avatarID: myAvatar, title: store.session?.username ?? "?", size: faceSize)
                 } action: {
                     if let m = mine, !m.posts.isEmpty { open = StatusOpen(groups: [m], index: 0) } else { manage = true }
@@ -60,18 +62,23 @@ struct StatusStrip: View {
             }
         }
         .onChange(of: scenePhase) { p in if p == .active { Task { await load() } } }
+        // a status watched, posted or deleted anywhere (the viewers post this once their "seen" calls have arrived): the
+        // rings change at once, not two minutes later
+        .onReceive(NotificationCenter.default.publisher(for: .tfStatusChanged)) { _ in Task { await load() } }
         .fullScreenCover(item: $open) { o in
-            StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) { Task { await load() } }
+            StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) {}
         }
-        .fullScreenCover(isPresented: $openOfficial, onDismiss: { Task { await load() } }) {
+        .fullScreenCover(isPresented: $openOfficial) {
             OfficialViewer(token: token, posts: official?.posts ?? [])
         }
-        .fullScreenCover(isPresented: $manage, onDismiss: { Task { await load() } }) { StatusCreatorSheet { Task { await load() } } }
+        .fullScreenCover(isPresented: $manage) {
+            StatusCreatorSheet { NotificationCenter.default.post(name: .tfStatusChanged, object: nil) }
+        }
     }
 
     enum Ring { case none, seen, unseen }
 
-    private func item<A: View>(name: String, ring: Ring, plus: Bool = false,
+    private func item<A: View>(name: String, ring: Ring, onPlus: (() -> Void)? = nil,
                                @ViewBuilder avatar: () -> A, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 4) {
@@ -84,15 +91,6 @@ struct StatusStrip: View {
                             .foregroundStyle(ring == .unseen ? Theme.accent : (ring == .seen ? Theme.hex(0xA9B9C5, 0.35) : Theme.hex(0x288CAF, 0.55)))
                             .shadow(color: ring == .unseen ? Theme.hex(0x00D4DF, 0.3) : .clear, radius: 5)
                     )
-                    .overlay(alignment: .topTrailing) {
-                        if plus {
-                            // .status-plus: 21 pt, 37 pt from the top, 1 pt in from the end, a 2 pt ring of the panel colour
-                            Image(systemName: "plus").font(.system(size: 11, weight: .heavy)).foregroundStyle(Theme.onAccent)
-                                .frame(width: 21, height: 21).background(Theme.accent, in: Circle())
-                                .overlay(Circle().stroke(Theme.panel, lineWidth: 2))
-                                .offset(x: layoutDirection == .rightToLeft ? 1 : -1, y: 37)
-                        }
-                    }
                 Text(name).font(.system(size: 11)).foregroundStyle(Theme.faint)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -102,6 +100,22 @@ struct StatusStrip: View {
             .frame(width: 60)
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .topTrailing) {
+            if let onPlus {
+                // .status-plus: 21 pt, 37 pt from the top, 1 pt in from the ring's end, a 2 pt ring of the panel colour; its
+                // own button (a 30 pt target), so it adds a status even when I already have one
+                Button(action: onPlus) {
+                    Image(systemName: "plus").font(.system(size: 11, weight: .heavy)).foregroundStyle(Theme.onAccent)
+                        .frame(width: 21, height: 21).background(Theme.accent, in: Circle())
+                        .overlay(Circle().stroke(Theme.panel, lineWidth: 2))
+                        .padding(4.5)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .offset(x: layoutDirection == .rightToLeft ? 0.5 : -0.5, y: 32.5)
+                .accessibilityLabel(Text("tf.add.status"))
+            }
+        }
     }
 
     /// TRADEFLOR Official (website OfficialStatus.tsx OfficialCircle, 53-admin.css, 63-chats-polish.css): the orb on a
@@ -152,6 +166,7 @@ struct StatusStrip: View {
 
     private func load() async {
         guard !token.isEmpty else { return }
+        await StatusSeenQueue.shared.drain() // the statuses just watched are counted as seen in this answer
         async let feed = APIClient.shared.statusFeed(token: token)
         async let off = APIClient.shared.official(token: token)
         async let prof = APIClient.shared.profile(token: token)

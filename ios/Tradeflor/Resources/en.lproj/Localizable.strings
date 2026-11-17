@@ -1859,3 +1859,5 @@
 
 "adm.delete.confirm" = "Delete this official status? This cannot be undone.";
 "set.events.remove" = "Remove from Events";
+
+"stx.pick.failed" = "Could not open that photo or video. Try another one.";

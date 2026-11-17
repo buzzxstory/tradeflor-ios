@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import ImageIO
 
 /// The Chats screen, laid out like the website's phone view: "Chats" with the scan / add-contact buttons, the search
 /// pill, the status row (My status, TRADEFLOR Official, contacts), the filter chips and the conversation rows.
@@ -77,11 +78,16 @@ struct ChatListView: View {
 
     @State private var pendingReload: Task<Void, Never>?
 
+    @State private var lastReload = Date.distantPast
+
+    /// At most one reload every 3 s: a busy chat used to reload the list (3-4 requests) for nearly every message.
     private func reloadSoon() {
-        pendingReload?.cancel()
+        guard pendingReload == nil else { return } // one is already on its way and will include this
+        let wait = max(0.7, 3 - Date().timeIntervalSince(lastReload))
         pendingReload = Task {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            if Task.isCancelled { return }
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            pendingReload = nil
+            lastReload = Date()
             await load(quiet: true)
         }
     }
@@ -106,7 +112,8 @@ struct ChatListView: View {
             .ignoresSafeArea(.keyboard, edges: .bottom)
             .background(ChatsWallpaper())
             .fullScreenCover(item: $statusOpen) { o in
-                StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) { Task { await loadStatuses() } }
+                // the rings are read again through .tfStatusChanged (posted once the "seen" calls have arrived)
+                StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) {}
             }
             .sheet(isPresented: $showFolderEditor) { FolderEditorView(token: token, chats: chats) { Task { await reloadFolders() } } }
             .sheet(item: $editingFolder) { f in FolderEditorView(token: token, chats: chats, editing: f) { Task { await reloadFolders() } } }
@@ -169,8 +176,11 @@ struct ChatListView: View {
             }
         }
         // a burst of new messages (a busy group) is one reload, not one per message: that redrew the list all the time
-        .onReceive(live.messages) { _ in reloadSoon() }
-        .onReceive(live.changes) { _ in reloadSoon() }
+        // groups are not in this list: their messages and receipts never reload it
+        .onReceive(live.messages) { m in if !m.conversation_id.hasPrefix("grp_") { reloadSoon() } }
+        .onReceive(live.changes) { id in if !id.hasPrefix("grp_") { reloadSoon() } }
+        // a status watched (here or in the status row), posted or deleted: the rings on the rows change at once
+        .onReceive(NotificationCenter.default.publisher(for: .tfStatusChanged)) { _ in Task { await loadStatuses() } }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             await load()
@@ -180,6 +190,7 @@ struct ChatListView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: refreshEvery * 1_000_000_000)
                 if Task.isCancelled { break }
+                if !path.isEmpty { continue } // a chat is open on top: the live events keep the list right
                 await load(quiet: true)
                 // the status rings on the rows: every two minutes, as the status row (website StatusBar)
                 rounds += 1
@@ -682,7 +693,88 @@ struct ChatRow: View {
     }
 }
 
+/// The latest known picture of every person (website profileStore.ts): filled from the server's live "profile" events, my
+/// own profile answers, the chat list and the profile pages, so a changed or removed photo shows everywhere at once
+/// (the chat rows, My status, Settings, the status row, the call screen) without reloading anything.
+@MainActor
+final class AvatarBook: ObservableObject {
+    static let shared = AvatarBook()
+    /// The server's answers: user id -> avatar id ("" = no picture). These win over what a list said earlier.
+    @Published private(set) var ids: [String: String] = [:]
+    /// What a list said (a contact row, a member list), used only where nothing better is known; never published, so a
+    /// screen full of rows does not redraw every picture while they fill it.
+    private var filled: [String: String] = [:]
+
+    func note(_ userID: String, _ avatarID: String?) {
+        guard !userID.isEmpty else { return }
+        let v = avatarID ?? ""
+        if ids[userID] != v { ids[userID] = v }
+    }
+
+    func note(_ pairs: [String: String]) {
+        var next = ids
+        for (u, a) in pairs where !u.isEmpty { next[u] = a }
+        if next != ids { ids = next }
+    }
+
+    func fill(_ userID: String, _ avatarID: String) {
+        guard !userID.isEmpty, !avatarID.isEmpty, ids[userID] == nil else { return }
+        filled[userID] = avatarID
+    }
+
+    func filledID(_ userID: String) -> String? { filled[userID] }
+
+    /// Sign-out: the next account never sees this one's pictures.
+    func forget() {
+        ids = [:]
+        filled = [:]
+        AvatarImages.clear()
+    }
+
+    /// From a network answer on any thread.
+    nonisolated static func noteLater(_ pairs: [String: String]) {
+        guard !pairs.isEmpty else { return }
+        Task { @MainActor in AvatarBook.shared.note(pairs) }
+    }
+}
+
+/// Decoded profile pictures, at the size they are drawn (memory only, like the bytes in APIClient.avatarCache).
+enum AvatarImages {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 400
+        return c
+    }()
+
+    static func get(_ key: String) -> UIImage? { cache.object(forKey: key as NSString) }
+    static func put(_ image: UIImage, _ key: String) { cache.setObject(image, forKey: key as NSString) }
+    static func clear() { cache.removeAllObjects() }
+
+    /// Off the main thread and scaled down to `maxPixels` (a 4000 px photo decoded on the main thread for a 54 pt circle
+    /// stalled the list while it scrolled).
+    static func decode(_ data: Data, maxPixels: CGFloat) async -> UIImage? {
+        let limit = max(32, maxPixels)
+        return await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard let src = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else {
+                return nil
+            }
+            let opts: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: limit,
+            ]
+            guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+            return UIImage(cgImage: cg)
+        }.value
+    }
+}
+
 /// Profile picture (website .avatar: radial teal gradient, bold initial), with the online dot when asked.
+/// The picture fills the circle, centred (aspect fill, clipped to the circle); the letter shows only while there is no
+/// picture. A person's picture follows AvatarBook (a new photo replaces the old one everywhere); each picture is fetched
+/// once (shared by every row showing it), decoded off the main thread and kept decoded, so rows scrolling back into view
+/// show it at once instead of the letter.
 struct Avatar: View {
     let token: String
     let userID: String
@@ -691,7 +783,9 @@ struct Avatar: View {
     var groupID: String? = nil
     var size: CGFloat = 54
     var online: Bool? = nil
-    @State private var image: UIImage?
+    @ObservedObject private var book = AvatarBook.shared
+    @Environment(\.displayScale) private var displayScale
+    @State private var loaded: (owner: String, key: String, image: UIImage)?
 
     init(token: String, userID: String, avatarID: String?, title: String, groupID: String? = nil, size: CGFloat = 54, online: Bool? = nil) {
         self.token = token
@@ -703,19 +797,54 @@ struct Avatar: View {
         self.online = online
     }
 
+    private var owner: String { groupID.map { "g/" + $0 } ?? userID }
+
+    /// The picture to show: the server's latest for this person, else what the caller knows, else what a list said.
+    private var shownID: String? {
+        if groupID == nil, !userID.isEmpty, let known = book.ids[userID] { return known.isEmpty ? nil : known }
+        if let a = avatarID, !a.isEmpty { return a }
+        if groupID == nil, !userID.isEmpty, let f = book.filledID(userID) { return f }
+        return nil
+    }
+
+    private var initial: String {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? "?" : String(t.prefix(1)).uppercased()
+    }
+
+    private var pixels: CGFloat { (size * displayScale).rounded(.up) }
+
+    private func picture(for key: String?) -> UIImage? {
+        guard let key else { return nil }
+        if let hit = AvatarImages.get(key) { return hit }
+        if let l = loaded, l.key == key { return l.image }
+        // the same person's picture from before a change stays until the new one is ready (no flash of the letter)
+        if let l = loaded, l.owner == owner { return l.image }
+        return nil
+    }
+
     var body: some View {
-        ZStack {
-            Circle().fill(Theme.avatarGradient)
+        let id = shownID
+        let key = id.map { "\(owner)/\($0)@\(Int(pixels))" }
+        let image = picture(for: key)
+        Group {
             if let image {
-                Image(uiImage: image).resizable().scaledToFill()
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size, height: size)
             } else {
-                Text(String(title.prefix(1)).uppercased())
-                    .font(.system(size: size * 0.4, weight: .bold))
-                    .foregroundStyle(Theme.text)
+                ZStack {
+                    Circle().fill(Theme.avatarGradient)
+                    Text(initial)
+                        .font(.system(size: size * 0.4, weight: .bold))
+                        .foregroundStyle(Theme.text)
+                }
             }
         }
         .frame(width: size, height: size)
         .clipShape(Circle())
+        .contentShape(Circle())
         .overlay(Circle().stroke(Color.white.opacity(0.06), lineWidth: 1))
         .overlay(alignment: .bottomTrailing) {
             if online == true {
@@ -723,12 +852,20 @@ struct Avatar: View {
                     .overlay(Circle().stroke(Theme.ground, lineWidth: 2))
             }
         }
-        .task(id: avatarID) {
-            guard let avatarID, !avatarID.isEmpty, !token.isEmpty else { image = nil; return }
+        .task(id: key ?? "") {
+            if groupID == nil, let a = avatarID, !a.isEmpty { book.fill(userID, a) }
+            guard let key, let id, !token.isEmpty else { return }
+            if let hit = AvatarImages.get(key) {
+                loaded = (owner, key, hit)
+                return
+            }
             let data = groupID != nil
-                ? await APIClient.shared.groupAvatar(token: token, groupID: groupID ?? "", avatarID: avatarID)
-                : await APIClient.shared.avatar(token: token, userID: userID, avatarID: avatarID)
-            if let data { image = UIImage(data: data) }
+                ? await APIClient.shared.groupAvatar(token: token, groupID: groupID ?? "", avatarID: id)
+                : await APIClient.shared.avatar(token: token, userID: userID, avatarID: id)
+            guard let data, !Task.isCancelled else { return }
+            guard let img = await AvatarImages.decode(data, maxPixels: pixels) else { return }
+            AvatarImages.put(img, key)
+            if !Task.isCancelled { loaded = (owner, key, img) }
         }
     }
 }

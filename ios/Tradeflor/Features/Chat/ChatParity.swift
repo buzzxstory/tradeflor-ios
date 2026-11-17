@@ -64,6 +64,7 @@ final class MediaDims: ObservableObject {
     private let key = "tf.imgdims"
     private var map: [String: [Double]]
     private var order: [String]
+    private var saveQueued = false // main thread
 
     private init() {
         let d = UserDefaults.standard.dictionary(forKey: key) as? [String: [Double]] ?? [:]
@@ -84,8 +85,16 @@ final class MediaDims: ObservableObject {
             for old in order.prefix(order.count - 600) { map[old] = nil }
             order = Array(order.suffix(600))
         }
-        UserDefaults.standard.set(map, forKey: key)
-        DispatchQueue.main.async { self.version += 1 }
+        DispatchQueue.main.async {
+            self.version += 1
+            // written at most every 2 s (each new picture rewrote all 600 sizes while scrolling)
+            guard !self.saveQueued else { return }
+            self.saveQueued = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                self.saveQueued = false
+                UserDefaults.standard.set(self.map, forKey: self.key)
+            }
+        }
     }
 
     /// Widest a photo or video is drawn (WhatsApp iOS: about 70% of the screen, 275 pt on a 393 pt iPhone).

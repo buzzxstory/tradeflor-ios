@@ -119,7 +119,7 @@ struct SharedMediaCard: View {
     }
 
     static func firstLink(_ text: String) -> URL? {
-        guard let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
+        guard let det = LinkPreviewCard.linkDetector else { return nil } // made once (a new detector per row lagged)
         return det.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))?.url
     }
 

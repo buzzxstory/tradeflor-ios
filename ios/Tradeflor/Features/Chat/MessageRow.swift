@@ -1,5 +1,14 @@
 import SwiftUI
 
+/// "Disappears …" in a row's timer label: made once (it was a new formatter per message per redraw). File-level, since a
+/// generic type (MessageRow) cannot hold a static stored property.
+private let messageRowExpiryFormat: DateFormatter = {
+    let f = DateFormatter()
+    f.dateStyle = .short
+    f.timeStyle = .short
+    return f
+}()
+
 /// Per-row state from the conversation (the website's message row flags).
 struct MessageRowOptions {
     var isGroup = false
@@ -66,10 +75,7 @@ struct MessageRow<Content: View>: View {
     static var quickEmoji: [String] { MessageMenuStyle.quickEmoji }
 
     static func expiry(_ unix: Int64) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .short
-        f.timeStyle = .short
-        return String(format: NSLocalizedString("chat.disappears", comment: ""), f.string(from: Date(timeIntervalSince1970: Double(unix))))
+        String(format: NSLocalizedString("chat.disappears", comment: ""), messageRowExpiryFormat.string(from: Date(timeIntervalSince1970: Double(unix))))
     }
 
     var body: some View {

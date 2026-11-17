@@ -24,21 +24,99 @@ final class StatusReactCache: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         map[postID] = emoji
     }
+
+    /// Sign-out: the next account never shows this one's likes.
+    func clear() {
+        lock.lock(); defer { lock.unlock() }
+        map = [:]
+    }
+}
+
+/// The "seen" calls still on their way (a status or an Official post just watched). A list read waits for them first, so
+/// a ring read right after the viewer closes is never the stale turquoise one.
+final class StatusSeenQueue: @unchecked Sendable {
+    static let shared = StatusSeenQueue()
+    private var pending: [Task<Void, Never>] = []
+    private let lock = NSLock()
+
+    func add(_ work: @escaping () async -> Void) {
+        let t = Task { await work() }
+        lock.lock(); defer { lock.unlock() }
+        pending.append(t)
+    }
+
+    func drain() async {
+        let list: [Task<Void, Never>] = {
+            lock.lock(); defer { lock.unlock() }
+            let l = pending
+            pending = []
+            return l
+        }()
+        for t in list { await t.value }
+    }
+}
+
+/// How far the story on screen has played (0…1). Kept out of the viewer's own state: the clock moves it 30 times a second,
+/// and only what reads it (the bars, a voice status's art) is redrawn, not the whole viewer with its reply box and sheets.
+final class StatusClock: ObservableObject {
+    @Published var progress: Double = 0
+}
+
+/// Draws `content` with the clock's progress; the only view that follows the clock.
+struct StatusClockReader<Content: View>: View {
+    @ObservedObject var clock: StatusClock
+    @ViewBuilder let content: (Double) -> Content
+
+    var body: some View { content(clock.progress) }
+}
+
+/// The story bars on top (one per post; the ones before full, the one on screen filling with the clock).
+struct StatusBars: View {
+    let count: Int
+    let current: Int
+    @ObservedObject var clock: StatusClock
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(0..<max(0, count), id: \.self) { i in
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(.white.opacity(0.3))
+                        Capsule().fill(.white)
+                            .frame(width: geo.size.width * (i < current ? 1 : (i == current ? clock.progress : 0)))
+                    }
+                }
+                .frame(height: 3)
+            }
+        }
+        .environment(\.layoutDirection, .leftToRight)
+        .accessibilityHidden(true)
+    }
+}
+
+extension Notification.Name {
+    /// A status was watched, posted or deleted: every status list (the row on Chats, the rings on the chat rows, the
+    /// TradeFlor cards) reads the feed again at once (web "tf-status").
+    static let tfStatusChanged = Notification.Name("tf.status.changed")
 }
 
 enum StatusSeenAt {
+    private static func template(_ t: String) -> DateFormatter {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate(t)
+        return f
+    }
+    private static let timeF = template("jmm")
+    private static let dayF = template("dMMM")
+
     /// When a viewer watched a status, as WhatsApp lists it: "today 12:31 AM", "yesterday 8:02 PM", or "16 Nov 8:02 PM".
     static func text(_ d: Date, now: Date = Date()) -> String {
         let cal = Calendar.current
-        let tf = DateFormatter()
-        tf.setLocalizedDateFormatFromTemplate("jmm")
-        let time = tf.string(from: d)
+        let time = timeF.string(from: d)
         let days = cal.dateComponents([.day], from: cal.startOfDay(for: d), to: cal.startOfDay(for: now)).day ?? 0
         if days <= 0 { return String(format: NSLocalizedString("stv.today", comment: ""), time) }
         if days == 1 { return String(format: NSLocalizedString("stv.yesterday", comment: ""), time) }
-        let df = DateFormatter()
-        df.setLocalizedDateFormatFromTemplate("dMMM")
-        return df.string(from: d) + " " + time
+        return dayF.string(from: d) + " " + time
     }
 }
 

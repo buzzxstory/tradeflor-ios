@@ -80,13 +80,27 @@ struct Message: Decodable, Identifiable, Equatable {
     let comments: CommentSummary?
 
     /// {"emoji": [userID, ...]} -> [(emoji, count, mine)] in a stable order.
+    /// Remembered by (me, reactions JSON): every row read it 2-3 times per redraw, each a JSON decode.
     func reactionList(me: String) -> [Reaction] {
-        guard let r = reactions, let d = r.data(using: .utf8),
+        guard let r = reactions, !r.isEmpty else { return [] }
+        let key = me + "|" + r
+        Self.reactionLock.lock()
+        let hit = Self.reactionMemo[key]
+        Self.reactionLock.unlock()
+        if let hit { return hit }
+        guard let d = r.data(using: .utf8),
               let map = try? JSONDecoder().decode([String: [String]].self, from: d) else { return [] }
-        return map.filter { !$0.value.isEmpty }
+        let out = map.filter { !$0.value.isEmpty }
             .map { Reaction(emoji: $0.key, count: $0.value.count, mine: $0.value.contains(me)) }
             .sorted { $0.count != $1.count ? $0.count > $1.count : $0.emoji < $1.emoji }
+        Self.reactionLock.lock()
+        if Self.reactionMemo.count > 1000 { Self.reactionMemo.removeAll(keepingCapacity: true) }
+        Self.reactionMemo[key] = out
+        Self.reactionLock.unlock()
+        return out
     }
+    private static let reactionLock = NSLock()
+    private static var reactionMemo: [String: [Reaction]] = [:]
     let duration_ms: Int64?
     let delivered_at: Int64?
     let read_at: Int64?

@@ -31,7 +31,13 @@ final class CameraModel: NSObject, ObservableObject {
     var hasTorch: Bool { device?.hasTorch ?? false }
     var maxZoom: CGFloat { min(device?.activeFormat.videoMaxZoomFactor ?? 1, 3) }
 
+    /// A camera being set up: a second flip meanwhile is ignored (it found the first one's camera still being added and
+    /// ended in "failed").
+    private var opening = false
+
     func open(video: Bool) async {
+        opening = true
+        defer { opening = false }
         phase = .starting
         guard await AVCaptureDevice.requestAccess(for: .video) else { phase = .denied; return }
         let mic = video ? await AVCaptureDevice.requestAccess(for: .audio) : false
@@ -81,6 +87,7 @@ final class CameraModel: NSObject, ObservableObject {
     }
 
     func flip(video: Bool) async {
+        guard !opening else { return }
         front.toggle()
         await open(video: video)
     }

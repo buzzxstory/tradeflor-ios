@@ -10,6 +10,8 @@ import SwiftUI
 struct MediaDraft: Identifiable {
     let id = UUID()
     var image: UIImage?      // a photo, or a video's first frame
+    /// A small copy for the strip (the strip drew every full-size photo at once: hundreds of MB).
+    var thumb: UIImage? = nil
     var videoURL: URL?
     var caption = ""
     var isVideo: Bool { videoURL != nil }
@@ -24,7 +26,10 @@ enum MediaDrafts {
                     out.append(MediaDraft(image: await poster(movie.url), videoURL: movie.url))
                 }
             } else if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) {
-                out.append(MediaDraft(image: img))
+                let s = img.size, k = 240 / max(s.width, s.height, 1)
+                let t = await img.byPreparingThumbnail(ofSize: CGSize(width: max(1, (s.width * k).rounded()),
+                                                                      height: max(1, (s.height * k).rounded())))
+                out.append(MediaDraft(image: img, thumb: t))
             }
         }
         return out
@@ -338,7 +343,7 @@ struct MediaSendSheet: View {
                     ZStack(alignment: .topTrailing) {
                         Button { index = i } label: {
                             ZStack {
-                                if let img = thumbs[d.id] ?? d.image { Image(uiImage: img).resizable().scaledToFill() } else { Color.gray }
+                                if let img = thumbs[d.id] ?? d.thumb ?? d.image { Image(uiImage: img).resizable().scaledToFill() } else { Color.gray }
                                 if d.isVideo { Image(systemName: "video.fill").font(.system(size: 11)).foregroundStyle(.white).padding(4)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading) }
                             }

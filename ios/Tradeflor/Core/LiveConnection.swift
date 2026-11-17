@@ -107,12 +107,20 @@ final class LiveConnection: ObservableObject {
 
     /// One person's presence read over HTTP (opening a private chat): the same fields as the live event.
     func applyPresence(_ p: PresenceInfo, userID: String) {
-        let on = p.online == true
-        if on { online.insert(userID) } else { online.remove(userID) }
-        if let t = p.last_seen, t > 0 { lastSeen[userID] = t } else if !on { lastSeen[userID] = nil }
-        if let h = p.hidden {
-            if h { hiddenPresence.insert(userID); lastSeen[userID] = nil } else { hiddenPresence.remove(userID) }
+        setPresence(userID, online: p.online == true, lastSeen: p.last_seen, hidden: p.hidden)
+    }
+
+    /// One person's presence. Only what really changed is written: every write of a @Published set or dictionary redrew
+    /// every screen watching this object (the root, the lists, the open chat), even when nothing was different.
+    private func setPresence(_ u: String, online on: Bool, lastSeen t: Int64?, hidden h: Bool?) {
+        if online.contains(u) != on { if on { online.insert(u) } else { online.remove(u) } }
+        var seen = lastSeen[u]
+        if let t, t > 0 { seen = t } else if !on { seen = nil }
+        if let h {
+            if h { seen = nil }
+            if hiddenPresence.contains(u) != h { if h { hiddenPresence.insert(u) } else { hiddenPresence.remove(u) } }
         }
+        if lastSeen[u] != seen { lastSeen[u] = seen }
     }
 
     /// The line under a person's name: "online", "last seen …", or nil.
@@ -188,7 +196,7 @@ final class LiveConnection: ObservableObject {
             }
             if gen != generation { return } // replaced: the new loop owns the state now
             connected = false
-            online = [] // not connected: nobody is shown "online" from an old answer (website liveHub.ts); last seen stays
+            if !online.isEmpty { online = [] } // not connected: nobody is shown "online" from an old answer (website liveHub.ts); last seen stays
             if Task.isCancelled { return }
             // during a call: try again every second (the server ends a call whose device stays away 20 s)
             let delay = callInProgress ? 1.0 : min(30.0, pow(2.0, Double(attempt)))
@@ -250,20 +258,18 @@ final class LiveConnection: ObservableObject {
                 if let c = d["conversation_id"] as? String, let u = d["user_id"] as? String { typing.send((c, u)) }
             case "presence":
                 if let u = d["user_id"] as? String {
-                    let on = (d["online"] as? Bool) == true
-                    if on { online.insert(u) } else { online.remove(u) }
-                    if let t = (d["last_seen"] as? NSNumber)?.int64Value, t > 0 { lastSeen[u] = t } else if !on { lastSeen[u] = nil }
-                    if let h = d["hidden"] as? Bool {
-                        if h { hiddenPresence.insert(u); lastSeen[u] = nil } else { hiddenPresence.remove(u) }
-                    }
+                    setPresence(u, online: (d["online"] as? Bool) == true,
+                                lastSeen: (d["last_seen"] as? NSNumber)?.int64Value, hidden: d["hidden"] as? Bool)
                 }
             default:
-                // the snapshot replaces what I knew
-                online = Set((d["online"] as? [String]) ?? [])
+                // the snapshot replaces what I knew (written only where it differs, see setPresence)
+                let on = Set((d["online"] as? [String]) ?? [])
                 var seen: [String: Int64] = [:]
                 for (k, v) in (d["last_seen"] as? [String: Any]) ?? [:] { if let t = (v as? NSNumber)?.int64Value, t > 0 { seen[k] = t } }
-                lastSeen = seen
-                hiddenPresence = Set((d["hidden"] as? [String]) ?? [])
+                let hid = Set((d["hidden"] as? [String]) ?? [])
+                if on != online { online = on }
+                if seen != lastSeen { lastSeen = seen }
+                if hid != hiddenPresence { hiddenPresence = hid }
             }
             return
         }
@@ -274,6 +280,14 @@ final class LiveConnection: ObservableObject {
             return
         }
         if env.type == "sessions" { sessionsChanged.send(()); return }
+        if env.type == "profile" {
+            // someone I chat with (or I, on another device) changed their picture: it changes everywhere at once (web profileStore)
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let d = obj["data"] as? [String: Any],
+               let u = d["user_id"] as? String, !u.isEmpty {
+                AvatarBook.shared.note(u, (d["avatar_id"] as? String) ?? "")
+            }
+            return
+        }
         if env.type == "contact" {
             let d = ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] as? [String: Any]) ?? [:]
             contactsChanged.send(d)

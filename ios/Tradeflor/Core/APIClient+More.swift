@@ -23,7 +23,8 @@ extension APIClient {
     func list<T: Decodable>(_ t: T.Type, _ path: String, token: String) async throws -> [T] {
         let data = try await getJSON(path, token: token)
         if data.isEmpty || data == Data("null".utf8) { return [] }
-        return (try? JSONDecoder().decode([T].self, from: data)) ?? []
+        // each item on its own: one the app cannot read never empties the list
+        return ((try? JSONDecoder().decode([LenientItem<T>].self, from: data)) ?? []).compactMap(\.value)
     }
 
     // MARK: groups management
@@ -83,7 +84,7 @@ extension APIClient {
     // MARK: contact info and chat settings
 
     func userProfile(token: String, userID: String) async throws -> Profile {
-        try decode(Profile.self, try await getJSON("users/\(userID)/profile", token: token))
+        APIClient.known(try decode(Profile.self, try await getJSON("users/\(userID)/profile", token: token)))
     }
 
     func chatSettings(token: String, conversationID: String) async throws -> ChatSettings {

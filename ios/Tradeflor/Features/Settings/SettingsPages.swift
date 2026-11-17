@@ -92,8 +92,10 @@ struct MyProfilePage: View {
         .confirmationDialog(Text("set.photo.remove.confirm"), isPresented: $confirmRemove, titleVisibility: .visible) {
             Button("set.photo.remove", role: .destructive) {
                 guard !busy else { return }
+                busy = true // set at once: a second tap before the task started removed it twice
+                note = nil
                 Task {
-                    busy = true
+                    // the answer goes to AvatarBook too (APIClient.known): the letter shows everywhere at once
                     if let p = try? await APIClient.shared.deleteAvatar(token: token) { profile = p; onChange() }
                     else { note = NSLocalizedString("settings.failed", comment: "") }
                     busy = false
@@ -103,17 +105,32 @@ struct MyProfilePage: View {
         .onChange(of: picked) { item in
             guard let item else { return }
             picked = nil
+            note = nil
             Task {
-                guard let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) else { return }
+                // a photo that cannot be read (iCloud offline, an unknown format) is said instead of nothing happening
+                guard let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) else {
+                    note = NSLocalizedString("stx.pick.failed", comment: "")
+                    return
+                }
                 cropping = PickedImage(image: img)
             }
         }
         .fullScreenCover(item: $cropping) { p in
             AvatarEditor(image: p.image) { jpeg in
+                guard !busy else { return }
+                busy = true
+                note = nil
                 Task {
-                    busy = true
-                    if let pr = try? await APIClient.shared.uploadAvatar(token: token, jpeg: jpeg) { profile = pr; onChange() }
-                    else { note = NSLocalizedString("settings.failed", comment: "") }
+                    // the new photo shows here, on the Settings card, in My status and everywhere else at once (AvatarBook);
+                    // the server's reason (too large, not a picture) is shown when it refuses
+                    do {
+                        profile = try await APIClient.shared.uploadAvatar(token: token, jpeg: jpeg)
+                        onChange()
+                    } catch APIError.refused(let why) {
+                        note = why.isEmpty ? NSLocalizedString("settings.failed", comment: "") : why
+                    } catch {
+                        note = NSLocalizedString("settings.failed", comment: "")
+                    }
                     busy = false
                 }
             }
@@ -154,10 +171,25 @@ struct AvatarViewer: View {
     let avatarID: String
     @Environment(\.dismiss) private var dismiss
     @State private var image: UIImage?
+    @State private var failed = false
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.ignoresSafeArea()
             if let image { Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: .infinity) }
+            else if failed {
+                // it could not be read: a way to try again instead of a spinner that never ends
+                Button { failed = false; Task { await load() } } label: {
+                    VStack(spacing: 8) {
+                        Image(systemName: "arrow.clockwise").font(.title3)
+                        Text("photo.retry").font(.footnote)
+                    }
+                    .foregroundStyle(.white.opacity(0.8))
+                    .frame(width: 160, height: 120)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
             else { ProgressView().tint(.white).frame(maxWidth: .infinity, maxHeight: .infinity) }
             Button { dismiss() } label: {
                 Image(systemName: "xmark").font(.system(size: 17, weight: .bold)).foregroundStyle(.white).frame(width: 44, height: 44)
@@ -165,9 +197,19 @@ struct AvatarViewer: View {
             .accessibilityLabel(Text("chat.close"))
             .padding()
         }
-        .task {
-            if let d = await APIClient.shared.avatar(token: token, userID: userID, avatarID: avatarID) { image = UIImage(data: d) }
+        .gesture(DragGesture().onEnded { v in
+            if v.translation.height > 120 || v.predictedEndTranslation.height > 320 { dismiss() } // swipe down closes
+        })
+        .task { await load() }
+    }
+
+    private func load() async {
+        guard !avatarID.isEmpty, let d = await APIClient.shared.avatar(token: token, userID: userID, avatarID: avatarID),
+              let img = UIImage(data: d) else {
+            failed = true
+            return
         }
+        image = img
     }
 }
 

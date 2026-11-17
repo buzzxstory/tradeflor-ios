@@ -158,11 +158,12 @@ struct CIV3Spinner: View {
                     .trim(from: 0, to: 0.25)
                     .stroke(Theme.hex(0x35E6F2), style: StrokeStyle(lineWidth: 3, lineCap: .round))
                     .rotationEffect(.degrees(turning ? 360 : 0))
+                    // scoped to the arc's turn: started with withAnimation in onAppear the endless animation also moved the
+                    // ring's position, so it drifted about the screen while the picture loaded
+                    .animation(.linear(duration: 0.8).repeatForever(autoreverses: false), value: turning)
             )
             .frame(width: 38, height: 38)
-            .onAppear {
-                withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) { turning = true }
-            }
+            .onAppear { turning = true }
             .accessibilityElement()
             .accessibilityAddTraits(.updatesFrequently)
     }

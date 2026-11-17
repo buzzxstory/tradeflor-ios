@@ -118,13 +118,18 @@ struct StatusCreatorSheet: View {
             guard !list.isEmpty else { return }
             picked = []
             Task {
+                var missed = false
                 for item in list {
                     if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
-                        if let m = try? await item.loadTransferable(type: PickedMovie.self) { items.append(Item(videoURL: m.url)) }
+                        if let m = try? await item.loadTransferable(type: PickedMovie.self) { items.append(Item(videoURL: m.url)) } else { missed = true }
                     } else if let d = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: d) {
                         items.append(Item(image: img))
+                    } else {
+                        missed = true
                     }
                 }
+                // a photo or video that could not be read (iCloud offline, an unknown format) is said, not skipped silently
+                if missed { problem = NSLocalizedString("stx.pick.failed", comment: "") }
             }
         }
         .onChange(of: layoutPicked) { list in
@@ -357,33 +362,46 @@ struct StatusCreatorSheet: View {
         problem = nil
         defer { posting = false }
         let list = items
+        var posted = 0
+        var skipped = false
         for (i, it) in list.enumerated() {
             progress = "\(i + 1)/\(list.count)"
             do {
                 if let img = it.image {
                     let encoded = await Task.detached(priority: .userInitiated) { ImagePrep.jpeg(from: img) }.value
-                    guard let jpeg = encoded else { continue }
+                    guard let jpeg = encoded else {
+                        // this one could not be prepared: it stays in the queue and the sheet stays open to say so
+                        problem = NSLocalizedString("status.post.failed", comment: "")
+                        skipped = true
+                        continue
+                    }
                     try await APIClient.shared.stPostStatus(token: token, groupID: groupID, file: jpeg, fileName: "status.jpg", mime: "image/jpeg",
                                                             caption: it.caption, music: music)
                 } else if let url = it.videoURL {
                     guard let out = await VideoPrep.mp4(from: url, maxBytes: 29_000_000) else {
                         problem = NSLocalizedString("status.video.toolarge", comment: "")
+                        skipped = true
                         continue
                     }
                     try await APIClient.shared.stPostStatus(token: token, groupID: groupID, file: out.data, fileName: "status.mp4", mime: "video/mp4",
                                                             caption: it.caption, music: nil)
                 }
+                posted += 1
                 items.removeAll { $0.id == it.id }
             } catch APIError.refused(let why) {
                 problem = why.isEmpty ? NSLocalizedString("status.post.failed", comment: "") : why
+                if posted > 0 { onPosted() } // the ones already up show in the status row now
                 return
             } catch {
                 problem = NSLocalizedString("status.post.failed", comment: "")
+                if posted > 0 { onPosted() }
                 return
             }
         }
-        onPosted()
-        dismiss()
+        if posted > 0 { onPosted() }
+        // a video too large (or a photo that could not be prepared) was left in the queue: the sheet stays open with the
+        // reason (it closed at once before, so the message was never seen and the item was silently dropped)
+        if !skipped { dismiss() }
     }
 }
 

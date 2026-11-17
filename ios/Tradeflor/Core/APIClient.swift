@@ -12,6 +12,12 @@ enum AppConfig {
     }
 }
 
+/// One list item decoded on its own: nil when it cannot be read, so the rest of the list still shows.
+struct LenientItem<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws { value = try? T(from: decoder) }
+}
+
 enum APIError: Error, Equatable {
     case badCredentials
     case emailNotVerified(userID: String)
@@ -58,7 +64,13 @@ final class APIClient {
     func request(_ path: String, method: String, token: String?, body: [String: Any]?,
                          rawQuery: Bool = false) -> URLRequest {
         // appendingPathComponent would escape the "?" of a query, so a path with a query is joined as text.
-        let url = rawQuery ? URL(string: base.absoluteString + "/" + path)! : base.appendingPathComponent(path)
+        // never a crash on a value that was not escaped (iOS 16 answers nil for a space or a quote): escaped then, or at worst
+        // the plain path
+        let joined = base.absoluteString + "/" + path
+        let url = rawQuery
+            ? (URL(string: joined) ?? URL(string: joined.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")
+                ?? base.appendingPathComponent(path))
+            : base.appendingPathComponent(path)
         var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -176,8 +188,12 @@ final class APIClient {
         case 200:
             if data.isEmpty || data == Data("null".utf8) { return [] }
             do {
-                let out = try JSONDecoder().decode([ConversationSummary]?.self, from: data) ?? []
+                // one entry the app cannot read never hides every chat
+                let out = (try JSONDecoder().decode([LenientItem<ConversationSummary>]?.self, from: data) ?? []).compactMap(\.value)
                 ListCache.save("conversations", token: token, data)
+                // the server's latest picture of every person I chat with: a changed photo shows everywhere
+                AvatarBook.noteLater(Dictionary(out.filter { !$0.peer_id.isEmpty }.map { ($0.peer_id, $0.peer_avatar_id ?? "") },
+                                                uniquingKeysWith: { a, _ in a }))
                 return out
             } catch { throw APIError.decoding }
         case 401: throw APIError.badCredentials
@@ -189,6 +205,14 @@ final class APIClient {
     /// A user's profile picture (only someone you share a chat with). Kept in memory only: the server marks
     /// conversation content as not-for-disk, and avatars follow the same rule here.
     func avatar(token: String, userID: String, avatarID: String) async -> Data? {
+        let key = "\(userID)/\(avatarID)" as NSString
+        if let hit = avatarCache.object(forKey: key) { return hit as Data }
+        // one request per picture at a time (every row showing the same person shares it), and a picture the server
+        // just refused is not asked for again on every scroll for 20 s
+        return await Self.oneAtATime(key as String) { [self] in await self.fetchAvatar(token: token, userID: userID, avatarID: avatarID) }
+    }
+
+    private func fetchAvatar(token: String, userID: String, avatarID: String) async -> Data? {
         let key = "\(userID)/\(avatarID)" as NSString
         if let hit = avatarCache.object(forKey: key) { return hit as Data }
         guard var comps = URLComponents(url: base.appendingPathComponent("users").appendingPathComponent(userID)
@@ -217,7 +241,7 @@ final class APIClient {
 
     func profile(token: String) async throws -> Profile {
         let data = try await getJSON("profile", token: token)
-        do { return try JSONDecoder().decode(Profile.self, from: data) } catch { throw APIError.decoding }
+        do { return Self.known(try JSONDecoder().decode(Profile.self, from: data)) } catch { throw APIError.decoding }
     }
 
     /// Fields left nil are not changed.
@@ -230,7 +254,14 @@ final class APIClient {
             throw APIError.refused(String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
         }
         try check(http, data)
-        do { return try JSONDecoder().decode(Profile.self, from: data) } catch { throw APIError.decoding }
+        do { return Self.known(try JSONDecoder().decode(Profile.self, from: data)) } catch { throw APIError.decoding }
+    }
+
+    /// A profile the server just sent: its picture becomes the one shown everywhere (AvatarBook).
+    @discardableResult
+    static func known(_ p: Profile) -> Profile {
+        AvatarBook.noteLater([p.user_id: p.avatar_id])
+        return p
     }
 
     func uploadAvatar(token: String, jpeg: Data) async throws -> Profile {
@@ -247,13 +278,13 @@ final class APIClient {
             throw APIError.refused(String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
         }
         try check(http, data)
-        do { return try JSONDecoder().decode(Profile.self, from: data) } catch { throw APIError.decoding }
+        do { return Self.known(try JSONDecoder().decode(Profile.self, from: data)) } catch { throw APIError.decoding }
     }
 
     func deleteAvatar(token: String) async throws -> Profile {
         let (data, http) = try await send(request("profile/avatar/delete", method: "POST", token: token, body: nil))
         try check(http, data)
-        do { return try JSONDecoder().decode(Profile.self, from: data) } catch { throw APIError.decoding }
+        do { return Self.known(try JSONDecoder().decode(Profile.self, from: data)) } catch { throw APIError.decoding }
     }
 
     func devices(token: String) async throws -> [LinkedDevice] {
@@ -338,6 +369,35 @@ final class APIClient {
     func groupAvatar(token: String, groupID: String, avatarID: String) async -> Data? {
         let key = "g/\(groupID)/\(avatarID)" as NSString
         if let hit = avatarCache.object(forKey: key) { return hit as Data }
+        return await Self.oneAtATime(key as String) { [self] in await self.fetchGroupAvatar(token: token, groupID: groupID, avatarID: avatarID) }
+    }
+
+    /// Picture downloads in flight, by cache key, and the ones that just failed (asked again after 20 s).
+    private static let fetchLock = NSLock()
+    private static var fetching: [String: Task<Data?, Never>] = [:]
+    private static var failedAt: [String: Date] = [:]
+
+    static func oneAtATime(_ key: String, _ work: @escaping () async -> Data?) async -> Data? {
+        let (task, recentlyFailed): (Task<Data?, Never>?, Bool) = fetchLock.withLock {
+            if let f = failedAt[key], Date().timeIntervalSince(f) < 20 { return (nil, true) }
+            if let t = fetching[key] { return (t, false) }
+            let t = Task { await work() }
+            fetching[key] = t
+            return (t, false)
+        }
+        if recentlyFailed { return nil }
+        guard let task else { return nil }
+        let out = await task.value
+        fetchLock.withLock {
+            fetching[key] = nil
+            if out == nil { failedAt[key] = Date() } else { failedAt[key] = nil }
+        }
+        return out
+    }
+
+    private func fetchGroupAvatar(token: String, groupID: String, avatarID: String) async -> Data? {
+        let key = "g/\(groupID)/\(avatarID)" as NSString
+        if let hit = avatarCache.object(forKey: key) { return hit as Data }
         guard var comps = URLComponents(url: base.appendingPathComponent("groups").appendingPathComponent(groupID)
                                             .appendingPathComponent("avatar"), resolvingAgainstBaseURL: false) else { return nil }
         comps.queryItems = [URLQueryItem(name: "v", value: avatarID)]
@@ -407,7 +467,14 @@ final class APIClient {
 
     /// The Chat Lock grant for this device session (memory only: a restart, sign-out or going to the background
     /// locks the chats again).
-    private(set) var unlockToken: String?
+    /// Read by requests on any thread and written by unlock / relock: behind a lock (a String read while it is being
+    /// replaced can crash).
+    private(set) var unlockToken: String? {
+        get { unlockLock.lock(); defer { unlockLock.unlock() }; return _unlockToken }
+        set { unlockLock.lock(); _unlockToken = newValue; unlockLock.unlock() }
+    }
+    private let unlockLock = NSLock()
+    private var _unlockToken: String?
 
     func unlockChats(token: String, pin: String) async throws {
         let (data, http) = try await send(request("locks/unlock", method: "POST", token: token, body: ["PIN": pin]))
@@ -444,9 +511,12 @@ final class APIClient {
         }
     }
 
+    /// Each item on its own: one the app cannot read (a field the server changed) never drops the whole list.
     private func decodeList<T: Decodable>(_ type: T.Type, _ data: Data) throws -> [T] {
         if data.isEmpty || data == Data("null".utf8) { return [] }
-        do { return try JSONDecoder().decode([T]?.self, from: data) ?? [] } catch { throw APIError.decoding }
+        do {
+            return (try JSONDecoder().decode([LenientItem<T>]?.self, from: data) ?? []).compactMap(\.value)
+        } catch { throw APIError.decoding }
     }
 
     /// Oldest first. No `before`: the newest page (opening a chat). With `before` (a seq): the page above it.

@@ -19,6 +19,7 @@ struct MemberProfileSheet: View {
     @State private var contact = "unknown" // unknown | yes | no | busy | sent
     @State private var note: String?
     @State private var viewing = false
+    @State private var opening = false // Message / Voice on their way (a double tap opened the chat or rang twice)
 
     private var token: String { store.session?.token ?? "" }
     private var name: String { profile.map { $0.display_name.isEmpty ? $0.username : $0.display_name } ?? card?.title ?? member.username }
@@ -83,8 +84,8 @@ struct MemberProfileSheet: View {
                                     Image(systemName: "person").foregroundStyle(Theme.accent)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text("TRADEFLOR PIN").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
-                                        if let since = c.member_since, since > 0 {
-                                            Text(String(format: NSLocalizedString("ci.member.since", comment: ""), String(since)))
+                                        if let year = Self.year(c.member_since) {
+                                            Text(String(format: NSLocalizedString("ci.member.since", comment: ""), year))
                                                 .font(.system(size: 12)).foregroundStyle(Theme.faint)
                                         }
                                     }
@@ -159,10 +160,8 @@ struct MemberProfileSheet: View {
 
     private func load() async {
         async let c = try? APIClient.shared.ctIdentity(token: token, userID: member.userID)
-        async let p: Profile? = {
-            guard let d = try? await APIClient.shared.getJSON("users/\(member.userID)/profile", token: token) else { return nil }
-            return try? JSONDecoder().decode(Profile.self, from: d)
-        }()
+        // through userProfile: its picture also becomes the one shown everywhere (AvatarBook)
+        async let p = try? APIClient.shared.userProfile(token: token, userID: member.userID)
         async let list = try? APIClient.shared.ctContacts(token: token)
         card = await c
         profile = await p
@@ -171,14 +170,29 @@ struct MemberProfileSheet: View {
         }
     }
 
+    /// "Member since": the server sends a year or a unix time (it showed "since 1714000000" before).
+    static func year(_ v: Int64?) -> String? {
+        guard let v, v > 0 else { return nil }
+        if v < 10_000 { return String(v) }
+        guard let d = serverDate(v) else { return nil }
+        return String(Calendar(identifier: .gregorian).component(.year, from: d))
+    }
+
     private func message() async {
+        guard !opening else { return }
+        opening = true
+        defer { opening = false }
         guard let chat = await APIClient.shared.ctOpenChat(token: token, userID: member.userID) else { flash("ci.failed"); return }
         dismiss()
         LocalNotifier.shared.tappedConversation = chat.conversation_id
     }
 
     private func voice() async {
+        guard !opening else { return }
+        opening = true
+        defer { opening = false }
         guard let chat = await APIClient.shared.ctOpenChat(token: token, userID: member.userID) else { flash("ci.call.failed"); return }
+        dismiss() // the call screen comes up in front, not behind this sheet (as Contact info does)
         calls.start(conversationID: chat.conversation_id, peerName: name, peerID: member.userID)
     }
 

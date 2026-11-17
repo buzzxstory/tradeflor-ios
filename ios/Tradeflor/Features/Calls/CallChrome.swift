@@ -102,14 +102,17 @@ final class CallPhotoCache {
 
     func photo(token: String, userID: String?) async -> UIImage? {
         guard let userID, !userID.isEmpty, !token.isEmpty else { return nil }
-        if let i = images[userID] { return i }
+        // the person's latest picture (AvatarBook) wins: a photo changed since the last call is never the old one again
+        if let known = AvatarBook.shared.ids[userID] { avatarIDs[userID] = known }
         if avatarIDs[userID] == nil, let list = try? await APIClient.shared.conversations(token: token) {
-            for c in list { if let a = c.peer_avatar_id, !a.isEmpty { avatarIDs[c.peer_id] = a } }
+            for c in list { avatarIDs[c.peer_id] = c.peer_avatar_id ?? "" }
         }
-        guard let aid = avatarIDs[userID],
-              let data = await APIClient.shared.avatar(token: token, userID: userID, avatarID: aid),
+        guard let aid = avatarIDs[userID], !aid.isEmpty else { return nil } // no picture (or removed): the letter
+        let key = userID + "/" + aid
+        if let i = images[key] { return i }
+        guard let data = await APIClient.shared.avatar(token: token, userID: userID, avatarID: aid),
               let img = UIImage(data: data) else { return nil }
-        images[userID] = img
+        images[key] = img
         return img
     }
 }

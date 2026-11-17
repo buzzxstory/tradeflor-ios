@@ -29,8 +29,8 @@ extension APIClient {
     }
 
     func stUpdateProfile(token: String, displayName: String, username: String, bio: String) async throws -> Profile {
-        try decode(Profile.self, try await postJSON("profile", token: token,
-                                                    body: ["DisplayName": displayName, "Username": username, "Bio": bio]))
+        APIClient.known(try decode(Profile.self, try await postJSON("profile", token: token,
+                                                                    body: ["DisplayName": displayName, "Username": username, "Bio": bio])))
     }
 
     // MARK: settings switches

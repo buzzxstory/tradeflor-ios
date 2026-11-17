@@ -479,6 +479,7 @@ struct ContactInfoView: View {
     }
 
     private func toggleFavorite() async {
+        guard !busy else { return }
         let on = !favorite
         busy = true
         defer { busy = false }
@@ -515,6 +516,7 @@ struct ContactInfoView: View {
     }
 
     private func exportChat() async {
+        guard !busy else { return }
         if restricted {
             flash(tr("civ3.export.restricted"))
             return
@@ -554,6 +556,9 @@ struct ContactInfoView: View {
     }
 
     private func block() async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
         do {
             try await APIClient.shared.block(token: token, userID: chat.peer_id)
             blocked = true

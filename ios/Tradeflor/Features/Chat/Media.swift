@@ -89,7 +89,25 @@ struct RemoteImage: View {
         self.fileID = fileID
         self.thumb = thumb
         self.contentMode = contentMode
-        _image = State(initialValue: APIClient.shared.cachedFile(fileID: fileID, thumb: thumb).flatMap { UIImage(data: $0) })
+        // a picture decoded before is reused (every chat redraw re-created this view and re-read the bytes)
+        let key = Self.key(fileID, thumb)
+        var hit = Self.decoded.object(forKey: key)
+        if hit == nil, let d = APIClient.shared.cachedFile(fileID: fileID, thumb: thumb), let img = UIImage(data: d) {
+            Self.store(img, key)
+            hit = img
+        }
+        _image = State(initialValue: hit)
+    }
+
+    /// Pictures already made this app session (memory only, as the bytes are), by file id and size.
+    private static let decoded: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.totalCostLimit = 60 << 20
+        return c
+    }()
+    private static func key(_ id: String, _ thumb: Bool) -> NSString { "\(id)/\(thumb ? "t" : "f")" as NSString }
+    private static func store(_ i: UIImage, _ k: NSString) {
+        decoded.setObject(i, forKey: k, cost: max(1, Int(i.size.width * i.size.height * i.scale * i.scale * 4)))
     }
 
     var body: some View {
@@ -116,7 +134,11 @@ struct RemoteImage: View {
             for wait in [0, 1_000_000_000, 3_000_000_000] as [UInt64] {
                 if wait > 0 { try? await Task.sleep(nanoseconds: wait) }
                 if Task.isCancelled { return }
-                if let d = await APIClient.shared.file(token: token, fileID: fileID, thumb: thumb), let img = UIImage(data: d) {
+                if let d = await APIClient.shared.file(token: token, fileID: fileID, thumb: thumb), let raw = UIImage(data: d) {
+                    // decoded off the main thread (a big picture decoded while drawing stalled the scroll)
+                    let img = await raw.byPreparingForDisplay() ?? raw
+                    if Task.isCancelled { return }
+                    Self.store(img, Self.key(fileID, thumb))
                     image = img
                     MediaDims.shared.set(fileID, img.size) // its shape, so the bubble keeps the right box next time
                     return

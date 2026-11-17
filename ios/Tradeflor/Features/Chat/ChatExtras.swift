@@ -22,10 +22,11 @@ struct PollCard: View {
 
     var body: some View {
         if let p = def {
-            let counts = p.o.indices.map { (votes[String($0)] ?? []).count }
-            let mine = p.o.indices.filter { (votes[String($0)] ?? []).contains(me) }
+            let v = votes // decoded once per redraw (it was once per option, twice)
+            let counts = p.o.indices.map { (v[String($0)] ?? []).count }
+            let mine = p.o.indices.filter { (v[String($0)] ?? []).contains(me) }
             let total = counts.reduce(0, +)
-            let voters = Set(votes.values.flatMap { $0 }).count
+            let voters = Set(v.values.flatMap { $0 }).count
             let showResults = !mine.isEmpty || !canVote
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -979,6 +980,16 @@ struct LinkPreviewCard: View {
     let url: String
     @State private var data: LinkPreviewData?
     @State private var image: UIImage?
+    /// Previews already fetched this app session: a row scrolled back into view asks the server nothing and never jumps.
+    private static var memo: [String: (LinkPreviewData?, UIImage?)] = [:]
+
+    init(token: String, url: String) {
+        self.token = token
+        self.url = url
+        let hit = Self.memo[url]
+        _data = State(initialValue: hit?.0)
+        _image = State(initialValue: hit?.1)
+    }
 
     var body: some View {
         Group {
@@ -1001,14 +1012,25 @@ struct LinkPreviewCard: View {
             }
         }
         .task(id: url) {
+            if Self.memo[url] != nil { return }
             data = await APIClient.shared.chLinkPreview(token: token, url: url)
             if let p = data?.image, !p.isEmpty, let d = await APIClient.shared.chLinkImage(token: token, path: p) { image = UIImage(data: d) }
+            if Task.isCancelled { return } // left before the answer came: asked again next time
+            if Self.memo.count > 300 { Self.memo.removeAll() }
+            Self.memo[url] = (data, image)
         }
     }
 
+    /// Made once: a new NSDataDetector for every text message on every chat redraw made scrolling lag.
+    static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    private static var urlMemo: [String: String] = [:] // "" = no link; used from the views (main thread) only
+
     static func firstURL(in text: String) -> String? {
-        guard let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
-        return det.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))?.url?.absoluteString
+        if let hit = urlMemo[text] { return hit.isEmpty ? nil : hit }
+        let out = linkDetector?.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))?.url?.absoluteString
+        if urlMemo.count > 800 { urlMemo.removeAll(keepingCapacity: true) }
+        urlMemo[text] = out ?? ""
+        return out
     }
 }
 
@@ -1220,18 +1242,26 @@ struct ShareLocationSheet: View {
 
 /// "Today", "Yesterday", a weekday within the week, else "16 November 2026" (the website's day separators).
 enum DayLabel {
+    // made once: every day label made a new formatter on every chat redraw
+    private static func template(_ t: String) -> DateFormatter {
+        let f = DateFormatter()
+        f.setLocalizedDateFormatFromTemplate(t)
+        return f
+    }
+    private static let weekday = template("EEEE")
+    private static let dayMonth = template("dMMMM")
+    private static let dayMonthYear = template("dMMMMyyyy")
+
     static func text(_ d: Date) -> String {
         let cal = Calendar.current
         if cal.isDateInToday(d) { return NSLocalizedString("calendar.today", comment: "") }
         if cal.isDateInYesterday(d) { return NSLocalizedString("time.yesterday", comment: "") }
-        let f = DateFormatter()
         if let days = cal.dateComponents([.day], from: cal.startOfDay(for: d), to: cal.startOfDay(for: Date())).day, days < 7 {
-            f.setLocalizedDateFormatFromTemplate("EEEE")
+            return weekday.string(from: d)
         } else if cal.component(.year, from: d) == cal.component(.year, from: Date()) {
-            f.setLocalizedDateFormatFromTemplate("dMMMM")
+            return dayMonth.string(from: d)
         } else {
-            f.setLocalizedDateFormatFromTemplate("dMMMMyyyy")
+            return dayMonthYear.string(from: d)
         }
-        return f.string(from: d)
     }
 }

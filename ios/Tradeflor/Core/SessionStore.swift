@@ -50,5 +50,8 @@ final class SessionStore: ObservableObject {
         ListCache.clear(); ChatMemo.clear()
         SettingsView.forgetCache()
         TradeFlorView.forgetCache()
+        // the pictures known for this account's people, and the likes it sent
+        AvatarBook.shared.forget()
+        StatusReactCache.shared.clear()
     }
 }

@@ -11,8 +11,9 @@ struct StatusViewerScreen: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var g: Int
-    @State private var p = 0
-    @State private var progress: Double = 0
+    @State private var p: Int
+    /// how far the story on screen has played: read only by the bars and a voice status's art (not this whole screen)
+    @State private var clock = StatusClock()
     @State private var paused = false
     @State private var ready = false
     @State private var image: UIImage?
@@ -41,6 +42,10 @@ struct StatusViewerScreen: View {
     @State private var burst: (emoji: String, key: UUID)?
     @State private var reacting = false
     @State private var showEmoji = false // the full emoji panel for the reply (the button in the reply box)
+    @State private var deleting = false
+    /// bumped to start the same story again (a tap back on the very first one: the bar went to 0 but the clock ran on)
+    @State private var round = 0
+    @State private var deleteFailed = false
 
     private let photoSeconds = 5.0
     /// What the viewer shows for an empty list (it closes at once): never an out-of-range read.
@@ -54,7 +59,15 @@ struct StatusViewerScreen: View {
         self.token = token
         self.onClose = onClose
         // never an index past the list (a list that changed between the tap and the cover opening crashed here)
-        _g = State(initialValue: min(max(0, startGroup), max(0, groups.count - 1)))
+        let start = min(max(0, startGroup), max(0, groups.count - 1))
+        _g = State(initialValue: start)
+        // as on the web: it opens on the first status not watched yet
+        _p = State(initialValue: groups.indices.contains(start) ? Self.firstUnseen(groups[start]) : 0)
+    }
+
+    /// The first post of a person not watched yet (else the first).
+    private static func firstUnseen(_ g: StatusGroup) -> Int {
+        g.posts.firstIndex { !$0.seen } ?? 0
     }
 
     private var group: StatusGroup { groups.indices.contains(g) ? groups[g] : (groups.first ?? StatusViewerScreen.emptyGroup) }
@@ -79,7 +92,7 @@ struct StatusViewerScreen: View {
         })
         .modifier(StatusClearCover())
         .statusBarHidden()
-        .task(id: "\(g)-\(p)") { await show() }
+        .task(id: "\(g)-\(p)-\(round)") { await show() }
         .onChange(of: holding) { h in
             if h { setPaused(true) } else { lastGestureAt = Date(); resume() }
         }
@@ -109,6 +122,10 @@ struct StatusViewerScreen: View {
         .confirmationDialog(Text("status.delete.confirm"), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("status.delete", role: .destructive) { Task { await deleteCurrent() } }
         }
+        .alert(Text("chat.action.failed"), isPresented: $deleteFailed) {
+            Button("chat.close", role: .cancel) {}
+        }
+        .onChange(of: deleteFailed) { _ in resume() }
         .overlay {
             // web .status-burst: 104 pt, a little below the middle, floats up and fades
             if let b = burst {
@@ -119,7 +136,20 @@ struct StatusViewerScreen: View {
                     .accessibilityHidden(true)
             }
         }
-        .onDisappear { player?.pause(); musicPlayer?.pause(); musicPlayer = nil; onClose() }
+        .onDisappear {
+            // every player stops and is let go (a music track kept playing after a swipe-down before)
+            player?.pause()
+            player = nil
+            musicPlayer?.pause()
+            musicPlayer = nil
+            // the lists are read again once the "seen" calls have arrived, so no ring stays turquoise after watching
+            let done = onClose
+            Task { @MainActor in
+                await StatusSeenQueue.shared.drain()
+                done()
+                NotificationCenter.default.post(name: .tfStatusChanged, object: nil)
+            }
+        }
     }
 
     /// The story itself (what moves with the finger): the picture / video / text, the tap zones, the bars and controls.
@@ -202,7 +232,7 @@ struct StatusViewerScreen: View {
             if StatusSwipe.shouldClose(v) { closeBySwipe() } else { springBack() }
         case .up:
             guard dy <= -70 else { return }
-            if group.isMine, post != nil {
+            if canManage, post != nil {
                 setPaused(true) // swipe up on my own status: who viewed it (web)
                 showViewers = true
             } else {
@@ -239,7 +269,8 @@ struct StatusViewerScreen: View {
 
     /// Whether something still holds the story (the pause button, the keyboard, a panel, a finger, a drag).
     private var mustHold: Bool {
-        userPaused || replyFocused || showEmoji || showViewers || confirmDelete || holding || dragAxis == .down || closing
+        userPaused || replyFocused || showEmoji || showViewers || confirmDelete || deleteFailed || deleting || holding
+            || dragAxis == .down || closing
     }
 
     private func resume() { setPaused(mustHold) }
@@ -269,8 +300,10 @@ struct StatusViewerScreen: View {
                 if let image { Image(uiImage: image).resizable().scaledToFit() } else { ProgressView().tint(.white) }
             case "voice":
                 // web VoiceStatusArt: the speaker in the middle, breathing rings, lit bars and "0:12 / 0:40"
-                StatusVoiceArt(playing: videoStarted && !paused, progress: progress, durationMs: post.duration_ms ?? 0) {
-                    Avatar(token: token, userID: group.user_id, avatarID: nil, title: group.title, groupID: group.group_id, size: 108)
+                StatusClockReader(clock: clock) { progress in
+                    StatusVoiceArt(playing: videoStarted && !paused, progress: progress, durationMs: post.duration_ms ?? 0) {
+                        Avatar(token: token, userID: group.user_id, avatarID: nil, title: group.title, groupID: group.group_id, size: 108)
+                    }
                 }
             default:
                 Text("status.unsupported").foregroundStyle(.white.opacity(0.8)).padding()
@@ -279,19 +312,7 @@ struct StatusViewerScreen: View {
     }
 
     private var bars: some View {
-        HStack(spacing: 4) {
-            ForEach(group.posts.indices, id: \.self) { i in
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(.white.opacity(0.3))
-                        Capsule().fill(.white)
-                            .frame(width: geo.size.width * (i < p ? 1 : (i == p ? progress : 0)))
-                    }
-                }
-                .frame(height: 3)
-            }
-        }
-        .environment(\.layoutDirection, .leftToRight)
+        StatusBars(count: group.posts.count, current: p, clock: clock)
     }
 
     /// web .status-head (phone): the picture (38 pt), the name (15 pt bold) over "6 h ago" (13 pt), then round 44 pt dark
@@ -320,8 +341,9 @@ struct StatusViewerScreen: View {
                     musicPlayer?.isMuted = muted
                 }
             }
-            if group.isMine, post != nil {
+            if canManage, post != nil {
                 StatusHeadButton(systemName: "trash", label: "stx.delete") {
+                    guard !deleting else { return }
                     setPaused(true)
                     confirmDelete = true
                 }
@@ -356,7 +378,7 @@ struct StatusViewerScreen: View {
                     .padding(.horizontal, -10)
                     .allowsHitTesting(false)
             }
-            if group.isMine, let post {
+            if canManage, let post {
                 // web .status-views-wa: "^" over "eye N" on a small dark glass plate (radius 16); opens the "N views" list
                 Button { setPaused(true); showViewers = true } label: {
                     VStack(spacing: 1) {
@@ -467,10 +489,17 @@ struct StatusViewerScreen: View {
         image = nil
         poster = nil
         videoStarted = false
-        progress = 0
+        clock.progress = 0
         ready = false
-        guard let post else { return }
-        if !group.isMine && !post.seen { Task { await APIClient.shared.statusSeen(token: token, id: post.id) } }
+        guard let post else {
+            // nothing to show (an empty list): the viewer goes instead of staying black
+            if groups.allSatisfy({ $0.posts.isEmpty }) { close() }
+            return
+        }
+        if !group.isMine && !post.seen {
+            let tok = token, id = post.id
+            StatusSeenQueue.shared.add { await APIClient.shared.statusSeen(token: tok, id: id) }
+        }
 
         var seconds = photoSeconds
         var video: AVPlayer?
@@ -532,7 +561,7 @@ struct StatusViewerScreen: View {
             }
             if let pa = pausedAt { pausedFor += Date().timeIntervalSince(pa); pausedAt = nil }
             let t = already + Date().timeIntervalSince(start) - pausedFor
-            progress = min(1, t / seconds)
+            clock.progress = min(1, t / max(0.1, seconds))
             if t >= seconds { next(); return }
         }
     }
@@ -555,7 +584,7 @@ struct StatusViewerScreen: View {
                 if !logged { MediaLog.record(id: post.id, ok: false, ms: Int(Date().timeIntervalSince(opened) * 1000)) }
                 // it cannot play: the story still moves on, on a clock
                 videoStarted = true
-                await runClock(fallback, from: fallback * progress)
+                await runClock(fallback, from: fallback * clock.progress)
                 return
             }
             let t = pl.currentTime().seconds
@@ -570,7 +599,7 @@ struct StatusViewerScreen: View {
             let d = item.duration.seconds
             let total = d.isFinite && d > 0 ? min(d, 60) : 0
             if total > 0, t.isFinite {
-                progress = min(1, max(0, t / total))
+                clock.progress = min(1, max(0, t / total))
                 if end.ended || t >= total - 0.04 { next(); return }
             } else if end.ended {
                 next()
@@ -606,7 +635,7 @@ struct StatusViewerScreen: View {
             p += 1
         } else if g + 1 < groups.count {
             g += 1
-            p = 0
+            p = Self.firstUnseen(groups[g])
         } else {
             close()
         }
@@ -617,7 +646,7 @@ struct StatusViewerScreen: View {
         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { dragY = 0 }
         if g + 1 < groups.count {
             g += 1
-            p = 0
+            p = Self.firstUnseen(groups[g])
         } else {
             close()
         }
@@ -625,13 +654,17 @@ struct StatusViewerScreen: View {
 
     /// Swipe right: the previous person's statuses (on the first person nothing happens).
     private func previousPerson() {
-        guard g > 0 else { return }
+        guard g > 0, groups.indices.contains(g - 1) else { return }
         g -= 1
-        p = 0
+        p = Self.firstUnseen(groups[g])
     }
 
     /// Someone else's personal status: a reply or a quick reaction goes to the owner's chat.
     private var canReply: Bool { !group.isMine && group.group_id == nil }
+
+    /// Who sees the views and may delete (web `mine`): the owner of a personal status; the people who run the group (its
+    /// owner and admins, the server's can_post) for a group's status. Group admins had neither before.
+    private var canManage: Bool { group.group_id != nil ? (group.can_post ?? false) : group.isMine }
 
     /// A tap on the stage: on the dark area around the picture or video it closes the viewer (not while a sheet, the
     /// emoji panel or the keyboard is up); else the left third goes back and the rest forward.
@@ -752,23 +785,32 @@ struct StatusViewerScreen: View {
     private func previous() {
         if p > 0 {
             p -= 1
-        } else if g > 0 {
+        } else if g > 0, groups.indices.contains(g - 1) {
             g -= 1
             p = max(0, groups[g].posts.count - 1)
         } else {
-            progress = 0
+            round += 1
         }
     }
 
     private func close() {
         player?.pause()
+        musicPlayer?.pause()
         dismiss()
     }
 
+    /// Delete my status: once (a second tap while it is on its way does nothing); a refusal is said, and the story stays.
     private func deleteCurrent() async {
-        guard let post else { return }
-        try? await APIClient.shared.statusDelete(token: token, id: post.id)
-        close()
+        guard let post, !deleting else { return }
+        deleting = true
+        defer { deleting = false }
+        do {
+            try await APIClient.shared.statusDelete(token: token, id: post.id)
+            close()
+        } catch {
+            setPaused(true)
+            deleteFailed = true
+        }
     }
 }
 
@@ -779,6 +821,7 @@ struct StatusViewersSheet: View {
     var views: Int = 0
     @State private var viewers: [StatusViewerEntry] = []
     @State private var loading = true
+    @State private var failed = false
 
     var body: some View {
         NavigationStack {
@@ -795,9 +838,10 @@ struct StatusViewersSheet: View {
             .foregroundStyle(Theme.hex(0xE8F2F8))
             .environment(\.colorScheme, .dark)
             .overlay {
-                if loading { ProgressView() } else if viewers.isEmpty { Text("status.noviews").foregroundStyle(.secondary) }
+                if loading { ProgressView() } else if failed { Text("chat.action.failed").foregroundStyle(.secondary) }
+                else if viewers.isEmpty { Text("status.noviews").foregroundStyle(.secondary) }
             }
-            .navigationTitle(Text(statusViewsTitle(loading ? views : viewers.count)))
+            .navigationTitle(Text(statusViewsTitle(loading || failed ? views : viewers.count)))
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Theme.hex(0x06212B), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
@@ -805,7 +849,13 @@ struct StatusViewersSheet: View {
         }
         .presentationDetents([.medium, .large])
         .task {
-            viewers = (try? await APIClient.shared.statusViewers(token: token, id: postID)) ?? []
+            // a failed read says so (it showed "no views yet" before)
+            do {
+                viewers = try await APIClient.shared.statusViewers(token: token, id: postID)
+                failed = false
+            } catch {
+                failed = true
+            }
             loading = false
         }
     }

@@ -9,6 +9,7 @@ struct AvatarEditor: View {
     @State private var lastZoom: CGFloat = 1
     @State private var offset: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
+    @State private var saved = false // a quick double tap on Use uploaded the photo twice
 
     var body: some View {
         GeometryReader { geo in
@@ -81,6 +82,8 @@ struct AvatarEditor: View {
     }
 
     private func save(d: CGFloat, base: CGFloat) {
+        guard !saved else { return }
+        saved = true
         let k = base * zoom // screen points per image point
         let shown = CGSize(width: image.size.width * k, height: image.size.height * k)
         let side = d / k

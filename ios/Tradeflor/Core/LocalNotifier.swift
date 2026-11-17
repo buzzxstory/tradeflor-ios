@@ -3,6 +3,17 @@ import Foundation
 import UIKit
 import UserNotifications
 
+/// A background task that is ended once, whichever comes first: the work finishing or iOS's time running out.
+@MainActor
+private final class BackgroundTaskBox {
+    var id = UIBackgroundTaskIdentifier.invalid
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
+}
+
 /// Message and call notifications while the app is running (the website's shared/lib/notifications.ts decideNotification
 /// rules): banner + sound for new messages, group messages and mentions, following Settings › Notifications and each
 /// chat's mute; "Missed voice call" for a call that rang here unanswered. Grouped per chat (threadIdentifier), with Reply
@@ -402,10 +413,12 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         let text = (response as? UNTextInputNotificationResponse)?.userText
         Task { @MainActor in
             // a Reply sent from the lock screen runs in the background: keep the app awake until it is sent
-            let task = UIApplication.shared.beginBackgroundTask(withName: "tf.notify.action", expirationHandler: nil)
+            // out of time before it is done: the task ends there (one never ended gets the app killed)
+            let bg = BackgroundTaskBox()
+            bg.id = UIApplication.shared.beginBackgroundTask(withName: "tf.notify.action") { bg.end() }
             await self.handle(action: action, info: info, text: text)
             completionHandler()
-            if task != .invalid { UIApplication.shared.endBackgroundTask(task) }
+            bg.end()
         }
     }
 }

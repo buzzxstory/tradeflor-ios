@@ -139,12 +139,15 @@ struct CalendarEvent: Decodable, Identifiable, Equatable {
     let forecast: String?
     let actual: String?
 
-    var date: Date? {
+    /// Made once (a new formatter on every read, inside the calendar's sorts and filters, made the page hang).
+    private static let iso = ISO8601DateFormatter()
+    private static let isoFrac: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
-        if let d = f.date(from: date_time) { return d }
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f.date(from: date_time)
-    }
+        return f
+    }()
+
+    var date: Date? { Self.iso.date(from: date_time) ?? Self.isoFrac.date(from: date_time) }
 }
 
 struct SavedEvent: Decodable, Identifiable {

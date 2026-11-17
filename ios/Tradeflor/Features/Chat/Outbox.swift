@@ -31,6 +31,18 @@ enum OutboxStore {
         return folder.appendingPathComponent("\(safe).json")
     }
 
+    /// Encoding photos and voice notes (base64 in JSON) and writing the file took seconds on the main thread with a few HD
+    /// photos: done on a serial queue, and a burst of changes is one write of the last state.
+    private static let queue = DispatchQueue(label: "tf.outbox", qos: .utility)
+    private static var waiting: [URL: [Entry]] = [:] // touched on `queue` only
+
+    private static func write(_ entries: [Entry], _ url: URL) {
+        if entries.isEmpty { try? FileManager.default.removeItem(at: url); return }
+        if let data = try? JSONEncoder().encode(entries) {
+            try? data.write(to: url, options: [.atomic, .completeFileProtection])
+        }
+    }
+
     static func save(account: String, conversation: String, _ pending: [PendingMessage]) {
         guard let url = file(account, conversation) else { return }
         let entries = pending.filter { $0.video == nil || $0.file != nil }.map {
@@ -39,14 +51,22 @@ enum OutboxStore {
                   isVideo: $0.file != nil ? $0.video != nil : nil, docName: $0.docName.isEmpty ? nil : $0.docName,
                   docMime: $0.docMime.isEmpty ? nil : $0.docMime, poster: $0.poster)
         }
-        if entries.isEmpty { try? FileManager.default.removeItem(at: url); return }
-        if let data = try? JSONEncoder().encode(entries) {
-            try? data.write(to: url, options: [.atomic, .completeFileProtection])
+        queue.async {
+            let first = waiting[url] == nil
+            waiting[url] = entries
+            guard first else { return }
+            queue.asyncAfter(deadline: .now() + 0.3) {
+                if let e = waiting.removeValue(forKey: url) { write(e, url) }
+            }
         }
     }
 
     static func load(account: String, conversation: String) -> [PendingMessage] {
-        guard let url = file(account, conversation), let data = try? Data(contentsOf: url),
+        guard let url = file(account, conversation),
+              let data = queue.sync(execute: { () -> Data? in
+                  if let e = waiting.removeValue(forKey: url) { write(e, url) } // a write still waiting goes first
+                  return try? Data(contentsOf: url)
+              }),
               let entries = try? JSONDecoder().decode([Entry].self, from: data) else { return [] }
         return entries.compactMap { (e: Entry) -> PendingMessage? in
             var p = PendingMessage(id: e.id, body: e.body, date: e.date)

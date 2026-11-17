@@ -687,8 +687,10 @@ struct EditProfileSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     if saving { ProgressView() } else {
                         Button("settings.save") {
+                            // set before the task starts: a quick double tap saved the profile twice
+                            guard !saving else { return }
+                            saving = true
                             Task {
-                                saving = true
                                 problem = await onSave(name.trimmingCharacters(in: .whitespacesAndNewlines),
                                                        username.trimmingCharacters(in: .whitespacesAndNewlines),
                                                        bio.trimmingCharacters(in: .whitespacesAndNewlines))

@@ -60,7 +60,8 @@ struct OfficialViewer: View {
     @State private var index: Int
     /// bumped to start the same post again (a tap back on the first post)
     @State private var round = 0
-    @State private var progress: Double = 0
+    /// how far the post on screen has played: read only by the bars (not this whole screen, 30 times a second)
+    @State private var clock = StatusClock()
     @State private var paused = false
     @State private var userPaused = false
     @State private var muted = false
@@ -131,7 +132,15 @@ struct OfficialViewer: View {
             }
         }
         .onChange(of: muted) { m in player?.isMuted = m }
-        .onDisappear { player?.pause() }
+        .onDisappear {
+            player?.pause()
+            player = nil
+            // the Official ring and every status list are read again once the "seen" calls have arrived
+            Task { @MainActor in
+                await StatusSeenQueue.shared.drain()
+                NotificationCenter.default.post(name: .tfStatusChanged, object: nil)
+            }
+        }
     }
 
     /// The story itself (what moves with the finger).
@@ -186,20 +195,7 @@ struct OfficialViewer: View {
     }
 
     private var bars: some View {
-        HStack(spacing: 4) {
-            ForEach(posts.indices, id: \.self) { i in
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(.white.opacity(0.3))
-                        Capsule().fill(.white)
-                            .frame(width: geo.size.width * (i < index ? 1 : (i == index ? progress : 0)))
-                    }
-                }
-                .frame(height: 3)
-            }
-        }
-        .environment(\.layoutDirection, .leftToRight)
-        .accessibilityHidden(true)
+        StatusBars(count: posts.count, current: index, clock: clock)
     }
 
     /// web .status-head in the Official viewer: the orb (38 pt, turquoise ring), the name with the seal over "2 h ago", then
@@ -375,11 +371,15 @@ struct OfficialViewer: View {
         poster = nil
         videoStarted = false
         loadFailed = false
-        progress = 0
-        guard let post else { return }
+        clock.progress = 0
+        guard let post else {
+            if posts.isEmpty { close() } // nothing to show: the viewer goes instead of staying black
+            return
+        }
         // asked every time it is opened, as on the web (it is idempotent)
         let pid = post.id
-        Task { await APIClient.shared.officialSeen(token: token, id: pid) }
+        let tok = token
+        StatusSeenQueue.shared.add { await APIClient.shared.officialSeen(token: tok, id: pid) }
         let id = "official-" + post.id
         if post.kind == "video" {
             let pl = StatusVideo.player(token: token, id: id, muted: muted)
@@ -420,7 +420,7 @@ struct OfficialViewer: View {
             }
             if let pa = pausedAt { pausedFor += Date().timeIntervalSince(pa); pausedAt = nil }
             let t = already + Date().timeIntervalSince(start) - pausedFor
-            progress = min(1, t / seconds)
+            clock.progress = min(1, t / max(0.1, seconds))
             if t >= seconds { next(); return }
         }
     }
@@ -439,7 +439,7 @@ struct OfficialViewer: View {
             if item.status == .failed {
                 // it cannot play: the story still moves on, on a clock
                 videoStarted = true
-                await runClock(imageSeconds, from: imageSeconds * progress)
+                await runClock(imageSeconds, from: imageSeconds * clock.progress)
                 return
             }
             let t = pl.currentTime().seconds
@@ -447,7 +447,7 @@ struct OfficialViewer: View {
             if paused { continue }
             let d = item.duration.seconds
             if d.isFinite, d > 0, t.isFinite {
-                progress = min(1, max(0, t / d))
+                clock.progress = min(1, max(0, t / d))
                 if end.ended || t >= d - 0.04 { next(); return }
             } else if end.ended {
                 next()

@@ -51,8 +51,9 @@ struct TradeFlorView: View {
     /// Personal statuses only (web: `!g.group_id`).
     private var personal: [StatusGroup] { groups.filter { $0.group_id == nil && !$0.posts.isEmpty } }
     private var mine: StatusGroup? { personal.first { $0.isMine || $0.user_id == myID } }
+    /// In the server's order (web): people with something new first, then the ones already watched, newest first in each.
     private var people: [StatusGroup] {
-        personal.filter { !($0.isMine || $0.user_id == myID) }.sorted { $0.latest > $1.latest }
+        personal.filter { !($0.isMine || $0.user_id == myID) }
     }
     private var shownPeople: [StatusGroup] {
         needle.isEmpty ? people : people.filter { $0.username.localizedCaseInsensitiveContains(needle) }
@@ -116,9 +117,13 @@ struct TradeFlorView: View {
             }
         }
         .fullScreenCover(item: $open) { o in
-            StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) { Task { await load() } }
+            StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) {}
         }
-        .fullScreenCover(isPresented: $manage, onDismiss: { Task { await load() } }) { StatusCreatorSheet { Task { await load() } } }
+        .fullScreenCover(isPresented: $manage) {
+            StatusCreatorSheet { NotificationCenter.default.post(name: .tfStatusChanged, object: nil) }
+        }
+        // a status watched, posted or deleted anywhere: the cards and their rings change at once
+        .onReceive(NotificationCenter.default.publisher(for: .tfStatusChanged)) { _ in Task { await loadStatus() } }
     }
 
     // MARK: pieces
@@ -558,6 +563,16 @@ struct TradeFlorView: View {
             Self.lastGroups = g
         }
         if let s = try? await sv { saved = Set(s.map(\.event_key)) }
+    }
+
+    /// Only the statuses (after one was watched, posted or deleted), not the calendar.
+    private func loadStatus() async {
+        guard !token.isEmpty else { return }
+        await StatusSeenQueue.shared.drain()
+        if let g = try? await APIClient.shared.statusFeed(token: token) {
+            groups = g
+            Self.lastGroups = g
+        }
     }
 
     /// Forgets the cached answers (sign-out): the next account never sees the previous one's statuses.

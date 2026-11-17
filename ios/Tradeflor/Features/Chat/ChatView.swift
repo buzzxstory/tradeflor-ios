@@ -30,7 +30,8 @@ struct ChatView: View {
     @State private var showCamera = false
     @State private var viewing: ViewedPhoto?
     @State private var watching: ViewedPhoto?
-    @StateObject private var recorder = VoiceRecorder()
+    // the running time and levels stay in recorder.meter: only the recording strip redraws 10 times a second, not the chat
+    @StateObject private var recorder = VoiceRecorder(mirrorsMeter: false)
     @State private var locked = false
     @State private var replyingTo: Message?
     @State private var forwarding: Message?
@@ -122,8 +123,14 @@ struct ChatView: View {
     @State private var profileFor: MemberProfileRef?
     @State private var memberAvatars: [String: String] = [:]
     @State private var joinWaiting = 0
-    /// Members whose names look like another member's (website nameSkeleton.ts).
-    private var lookAlike: Set<String> { NameSkeleton.lookAlikeIDs(members) }
+    /// Members whose names look like another member's (website nameSkeleton.ts); worked out when the members load (it folded every name on every redraw).
+    @State private var lookAlike: Set<String> = []
+    /// Photo messages by id (their file), for the small picture in a reply to a photo.
+    private var replyPhotoIDs: [String: String] {
+        var out: [String: String] = [:]
+        for x in messages where x.kind == "image" && !x.isDeleted { if let f = x.file_id { out[x.id] = f } }
+        return out
+    }
     @State private var groupStatus: StatusGroup?
     @State private var watchingGroupStatus = false
     @State private var addingGroupStatus = false
@@ -142,6 +149,9 @@ struct ChatView: View {
     @State private var focusPages: [Message] = []
     @State private var focusShowAll = false
     @State private var showFocus = false
+    /// A burst of incoming messages sends one read receipt, and a burst of changes reloads the page once.
+    @State private var seenTask: Task<Void, Never>?
+    @State private var changeReload: Task<Void, Never>?
     private var focusOn: Bool { isGroup && (focusDoc?.focus.active ?? false) && !focusShowAll }
     /// What the list shows: everything, or (Smart Focus) the server's filtered history plus matching live messages.
     private var shown: [Message] {
@@ -163,382 +173,459 @@ struct ChatView: View {
     private var me: String { store.session?.userID ?? "" }
     private var token: String { store.session?.token ?? "" }
 
+    // `body` is split into small pieces: as one expression (the list, its overlays and every sheet) the compiler could
+    // no longer type-check it in reasonable time. Behaviour is the same as when it was one chain.
     var body: some View {
+        chatTail2(chatTail(chatMiddle2(chatMiddle(chatHead2(chatHead(chatColumn))))))
+    }
+
+    private var chatColumn: some View {
         VStack(spacing: 0) {
-            if selecting { selectHead } else { topBar }
-            if searchOpen { searchBar }
-            if isGroup && (focusDoc?.focus.active ?? false) && !selecting {
-                FocusBanner(showingAll: focusShowAll, onToggle: { focusShowAll.toggle() }, onEdit: { showFocus = true })
-            }
-            if isGroup && !pins.isEmpty && !selecting && !pinsHidden { pinnedBar }
-            if isGroup && isAdmin && joinWaiting > 0 && !selecting {
-                Button { showInfo = true } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "person.badge.plus").foregroundStyle(Theme.accent)
-                        Text(joinWaiting == 1 ? NSLocalizedString("join.waiting.one", comment: "")
-                             : String(format: NSLocalizedString("join.waiting.n", comment: ""), joinWaiting))
-                            .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
-                        Text("· ").foregroundStyle(Theme.faint)
-                        Text("join.review").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 14).frame(height: 40)
-                    .background(barColor)
-                    .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
-                }
-                .buttonStyle(.plain)
-            }
+            chatHeader
             ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        if !reachedStart && !messages.isEmpty {
-                            // reaching the top loads the page before, as WhatsApp does (the button stays for VoiceOver)
-                            Button {
-                                Task { await loadOlder(proxy) }
-                            } label: {
-                                if loadingOlder { ProgressView() } else { Text("chat.older").font(.footnote) }
-                            }
-                            .padding(.vertical, 8)
-                            .onAppear {
-                                guard openedAtEnd, !loadingOlder, !bottomVisible,
-                                      Date().timeIntervalSince(openedAtTime) > 1.5 else { return }
-                                userScrolledUp = true
-                                Task { await loadOlder(proxy) }
-                            }
-                        }
-                        let rows = shown
-                        let lookIDs = lookAlike
-                        let albums = Albums.runs(rows, isGroup: isGroup)
-                        ForEach(Array(rows.enumerated()), id: \.element.id) { i, m in
-                            if i == 0 || !sameDay(rows[i - 1], m) {
-                                DayDivider(date: m.date)
-                            }
-                            if m.id == unreadMarkID && unreadMarkCount > 0 {
-                                UnreadDivider(count: unreadMarkCount).id("unread-mark")
-                            }
-                            if albums.hidden.contains(m.id) {
-                                // drawn inside its album
-                                Color.clear.frame(height: 0).id(m.id).onAppear { if !unseenBelow.isEmpty { seen(m.id) } }
-                            } else {
-                            let asGroup = isGroup && roleOf(m.sender_id) == "owner"
-                            MessageRow(message: m, mine: m.sender_id == me, myID: me, peerName: chat.title,
-                                       senderName: isGroup && (m.sender_id != me || asGroup)
-                                           && newBlock(rows, i)
-                                           ? (asGroup ? chat.title : (memberNames[m.sender_id] ?? "")) : nil,
-                                       onReply: { replyingTo = m; composerFocused = true },
-                                       onReact: { e in Task { await react(m, e) } },
-                                       onCopy: { UIPasteboard.general.string = displayText(m); flash("chat.copied") },
-                                       onForward: { forwarding = m },
-                                       onDelete: { _ in deleteTargets = [m]; showDelete = true },
-                                       options: MessageRowOptions(
-                                           isGroup: isGroup, restricted: restricted, canPin: isGroup && isAdmin,
-                                           pinned: pins.contains { $0.message_id == m.id },
-                                           selecting: selecting, selected: selected.contains(m.id),
-                                           highlighted: searchOpen && searchHits.indices.contains(searchIndex) && searchHits[searchIndex].id == m.id,
-                                           roleTag: isGroup ? roleOf(m.sender_id) : nil,
-                                           asGroup: asGroup,
-                                           senderAvatar: isGroup && !asGroup && m.sender_id != me && newBlock(rows, i)
-                                               ? AnyView(Avatar(token: token, userID: m.sender_id, avatarID: memberAvatars[m.sender_id], title: memberNames[m.sender_id] ?? "?", size: 34))
-                                               : nil,
-                                           avatarSlot: isGroup && !asGroup,
-                                           handle: lookIDs.contains(m.sender_id) ? members.first { $0.user_id == m.sender_id }?.username : nil,
-                                           replySenderName: isGroup ? m.reply_sender_id.flatMap { memberNames[$0] } : nil,
-                                           replyPhotoID: m.reply_to_id.flatMap { rid in messages.first { $0.id == rid && $0.kind == "image" && !$0.isDeleted }?.file_id },
-                                           token: token,
-                                           // an album: each photo opens its own menu (the row's would win the long press)
-                                           ownMenu: albums.at[m.id] == nil),
-                                       actions: MessageRowActions(
-                                           copyLink: {
-                                               UIPasteboard.general.string = "tradeflor://chat/\(chat.conversation_id)/message/\(m.id)"
-                                               flash("chat.link.copied")
-                                           },
-                                           select: { selecting = true; selected = [m.id] },
-                                           toggleSelect: {
-                                               guard m.kind != "call" else { return } // a call entry goes with "Select all" only
-                                               // an album is selected (and unselected) with all its photos
-                                               let ids = albums.at[m.id]?.map(\.id) ?? [m.id]
-                                               if selected.contains(m.id) { ids.forEach { selected.remove($0) } } else { ids.forEach { selected.insert($0) } }
-                                               allPicked = false
-                                           },
-                                           pin: { on in Task { await setPin(m, on) } },
-                                           report: { flash("chat.report.soon") },
-                                           moreReactions: { reactTarget = m; showEmoji = true },
-                                           comments: { commentsFor = m },
-                                           save: m.file_id == nil ? nil : { Task { await saveAttachment(m) } },
-                                           openSender: !isGroup || asGroup || m.sender_id == me ? nil : {
-                                               if let u = members.first(where: { $0.user_id == m.sender_id }) {
-                                                   profileFor = MemberProfileRef(userID: u.user_id, username: u.username)
-                                               }
-                                           },
-                                           openReply: m.reply_to_id == nil ? nil : {
-                                               if let id = m.reply_to_id, messages.contains(where: { $0.id == id }) {
-                                                   searchText = ""
-                                                   jumpTarget = id
-                                               } else {
-                                                   flash("chat.reply.notloaded")
-                                               }
-                                           },
-                                           edit: canEdit(m) ? { startEdit(m) } : nil)) {
-                                if let album = albums.at[m.id] {
-                                    AlbumGrid(token: token, photos: album, mine: m.sender_id == me,
-                                              state: m.sender_id == me ? receipt(album.last ?? m) : nil,
-                                              me: me,
-                                              actions: AlbumTileActions(
-                                                  reply: { p in replyingTo = p; composerFocused = true },
-                                                  react: { p, e in Task { await react(p, e) } },
-                                                  forward: restricted ? nil : { p in forwarding = p },
-                                                  save: restricted ? nil : { p in Task { await saveAttachment(p) } },
-                                                  delete: { p in deleteTargets = [p]; showDelete = true },
-                                                  select: { p in selecting = true; selected = Set(album.map(\.id)) })) { fid in
-                                        viewing = ViewedPhoto(id: fid, messageID: album.first(where: { $0.file_id == fid })?.id)
-                                    }
-                                } else {
-                                    messageContent(m)
-                                }
-                            }
-                            .id(m.id)
-                            .onAppear { if !unseenBelow.isEmpty { seen(m.id) } }
-                            }
-                        }
-                        ForEach(pending) { p in
-                            Group {
-                                if let img = p.image {
-                                    // the picture at once, dimmed, with a ring and an X until it is sent (website bcfeb0a)
-                                    PhotoBubble(mine: true, date: p.date, state: p.failed ? .failed : .sending, caption: "", size: img.size) {
-                                        ZStack {
-                                            Image(uiImage: img).resizable().scaledToFill()
-                                            if !p.failed {
-                                                Color.black.opacity(0.35)
-                                                ZStack {
-                                                    // fills with a chunked upload's progress; turns otherwise (ResumableUpload.swift)
-                                                    UploadRing(key: p.id)
-                                                    Button {
-                                                        cancelledUploads.insert(p.id)
-                                                        uploads[p.id]?.cancel()
-                                                        pending.removeAll { $0.id == p.id }
-                                                    } label: {
-                                                        Image(systemName: "xmark").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
-                                                            .frame(width: 30, height: 30).background(Color.black.opacity(0.35), in: Circle())
-                                                    }
-                                                    .accessibilityLabel(Text("chat.upload.cancel"))
-                                                    .offset(y: 40)
-                                                }
-                                                .frame(width: 52, height: 52)
-                                            }
-                                        }
-                                        .overlay(alignment: .topLeading) {
-                                            // "Uploading video · 42%", "12 MB / 30 MB", "1.2 MB/s · About 15 s left" (4 MB or more)
-                                            if !p.failed {
-                                                UploadStatusLines(key: p.id, what: p.video != nil ? "video" : "photo", boxed: true)
-                                                    .allowsHitTesting(false)
-                                            }
-                                        }
-                                    }
-                                } else if p.video != nil || !p.docName.isEmpty {
-                                    // a video without a cover, or a document: the bubble, then the upload's lines and the X
-                                    VStack(alignment: .trailing, spacing: 4) {
-                                        Bubble(text: p.docName.isEmpty ? "🎬 " + NSLocalizedString("chat.video", comment: "") : "📎 " + p.docName,
-                                               mine: true, date: p.date, state: p.failed ? .failed : .sending, faded: false)
-                                        if !p.failed {
-                                            HStack(alignment: .center, spacing: 8) {
-                                                UploadStatusLines(key: p.id, what: p.docName.isEmpty ? "video" : "file", onDark: false)
-                                                if uploads[p.id] != nil || (p.video?.isEmpty == true && p.file == nil) {
-                                                    Button {
-                                                        cancelledUploads.insert(p.id)
-                                                        uploads[p.id]?.cancel()
-                                                        pending.removeAll { $0.id == p.id }
-                                                    } label: {
-                                                        Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.text)
-                                                            .frame(width: 26, height: 26).background(Theme.text.opacity(0.12), in: Circle())
-                                                    }
-                                                    .accessibilityLabel(Text("chat.upload.cancel"))
-                                                }
-                                            }
-                                            .padding(.trailing, 6)
-                                        }
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .trailing)
-                                } else if let ms = p.durationMs {
-                                    Bubble(text: "🎤 " + VoiceBubble.length(Int64(ms)), mine: true, date: p.date,
-                                           state: p.failed ? .failed : .sending, faded: false)
-                                } else {
-                                    Bubble(text: p.body, mine: true, date: p.date, state: p.failed ? .failed : .sending, faded: false)
-                                }
-                            }
-                            .id(p.id)
-                            .onTapGesture { if p.failed { Task { await deliver(p) } } }
-                            .overlay(alignment: .bottomTrailing) {
-                                if p.failed {
-                                    // "Not sent · Retry" (website FailedBadge), with Delete in the menu
-                                    Text("chat.notsent.retry").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.danger)
-                                        .padding(.horizontal, 8).padding(.vertical, 3).background(Theme.card, in: Capsule())
-                                        .offset(y: 16)
-                                        .allowsHitTesting(false)
-                                }
-                            }
-                            .padding(.bottom, p.failed ? 18 : 0)
-                            .contextMenu {
-                                if p.failed {
-                                    Button { Task { await deliver(p) } } label: { Label("chat.retry", systemImage: "arrow.clockwise") }
-                                    Button(role: .destructive) {
-                                        pending.removeAll { $0.id == p.id }
-                                        if let f = p.file { try? FileManager.default.removeItem(at: f) } // this device's copy of a large file
-                                    } label: { Label("chat.delete", systemImage: "trash") }
-                                }
-                            }
-                        }
-                        Color.clear.frame(height: 1).id("bottom")
-                            .onAppear { bottomVisible = true; userScrolledUp = false; unseenBelow = []; unseenMentions = [] }
-                            .onDisappear { bottomVisible = false }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.top, 8)
-                }
-                .scrollDismissesKeyboard(.interactively)
-                .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })
-                .overlay(alignment: .bottomTrailing) {
-                    // WhatsApp's arrow (website d454d16): dark, light chevron; the count of others' new messages on its upper
-                    // left, counting down as they come into view; in groups the "@" (next mention) stands above it
-                    VStack(spacing: 10) {
-                        if isGroup, let first = unseenMentions.first {
-                            Button { withAnimation { proxy.scrollTo(first, anchor: .center) }; unseenMentions.removeFirst() } label: {
-                                Text("@").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
-                                    .frame(width: 42, height: 42).background(Theme.hex(0x00C6C4), in: Circle())
-                            }
-                            .accessibilityLabel(Text("chat.next.mention"))
-                        }
-                        if !bottomVisible && !messages.isEmpty {
-                            Button {
-                                unseenBelow = []
-                                unseenMentions = []
-                                scrollToBottom(proxy)
-                            } label: {
-                                Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.hex(0xE9EDEF))
-                                    .frame(width: 42, height: 42).background(Theme.hex(0x1B2A30), in: Circle())
-                                    .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
-                                    .overlay(alignment: .topLeading) {
-                                        if !unseenBelow.isEmpty {
-                                            Text(unseenBelow.count > 99 ? "99+" : "\(unseenBelow.count)").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
-                                                .padding(.horizontal, 5).frame(minWidth: 20, minHeight: 20)
-                                                .background(Theme.hex(0x00C6C4), in: Capsule())
-                                                .scaleEffect(badgePop ? 1.2 : 1)
-                                                .offset(x: -7, y: -7)
-                                        }
-                                    }
-                            }
-                            .accessibilityLabel(Text("chat.jump"))
-                            .accessibilityValue(unseenBelow.isEmpty ? Text("") : Text("\(unseenBelow.count)"))
-                        }
-                    }
-                    .padding(14)
-                    .onChange(of: unseenBelow.count) { _ in
-                        withAnimation(.spring(response: 0.2, dampingFraction: 0.5)) { badgePop = true }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { withAnimation { badgePop = false } }
-                    }
-                }
-                .overlay(alignment: .top) {
-                    if let toast {
-                        Text(toast).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
-                            .padding(.horizontal, 14).padding(.vertical, 8).background(Theme.card, in: Capsule())
-                            .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1)).padding(.top, 10)
-                    }
-                }
-                .onChange(of: jumpTarget) { t in
-                    if let t { withAnimation { proxy.scrollTo(t, anchor: .center) }; jumpTarget = nil }
-                }
-                .onChange(of: searchIndex) { _ in
-                    if searchHits.indices.contains(searchIndex) { withAnimation { proxy.scrollTo(searchHits[searchIndex].id, anchor: .center) } }
-                }
-                .onChange(of: searchText) { _ in
-                    searchIndex = max(0, searchHits.count - 1)
-                    if let last = searchHits.last { withAnimation { proxy.scrollTo(last.id, anchor: .center) } }
-                }
-                .overlay {
-                    if loading && messages.isEmpty {
-                        ProgressView()
-                    } else if locked && messages.isEmpty {
-                        VStack(spacing: 14) {
-                            Image(systemName: "lock.fill").font(.system(size: 34)).foregroundStyle(Theme.accent)
-                            Text("lock.chat.locked").foregroundStyle(.secondary).multilineTextAlignment(.center)
-                            Button { showUnlock = true } label: {
-                                Text("lock.unlock").bold().padding(.horizontal, 28).padding(.vertical, 12)
-                                    .foregroundStyle(Theme.onAccent).background(Theme.accent, in: Capsule())
-                            }
-                            .accessibilityIdentifier("lock.open")
-                        }
-                        .padding()
-                    } else if let problem, messages.isEmpty {
-                        Text(problem).foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
-                    } else if !loading && messages.isEmpty && pending.isEmpty && canSend {
-                        VStack(spacing: 10) {
-                            Text("chat.empty.title").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
-                            Text("chat.empty.sub").font(.system(size: 13)).foregroundStyle(Theme.faint).multilineTextAlignment(.center)
-                            Button {
-                                draft = "👋"
-                                Task { await sendDraft() }
-                            } label: { Text("👋").font(.system(size: 54)) }
-                            .accessibilityLabel(Text("chat.greet"))
-                        }
-                        .padding(24)
-                        .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 20))
-                        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Theme.borderStrong, lineWidth: 1))
-                        .padding(30)
-                    }
-                }
-                .onChange(of: messages.last?.id) { _ in
-                    if !openedAtEnd && !messages.isEmpty {
-                        // the chat opens at its end (or at the unread line): again once pictures have taken their room
-                        openedAtEnd = true
-                        openedAtTime = Date()
-                        let hasMark = unreadMarkID != nil && unreadMarkCount > 0
-                        if hasMark { proxy.scrollTo("unread-mark", anchor: .top) } else { proxy.scrollTo("bottom", anchor: .bottom) }
-                        if !hasMark {
-                            for d in [0.35, 0.9, 1.6] {
-                                DispatchQueue.main.asyncAfter(deadline: .now() + d) {
-                                    // pictures took their room: settle on the end again, but only if I haven't scrolled away
-                                    if !userScrolledUp { proxy.scrollTo("bottom", anchor: .bottom) }
-                                }
-                            }
-                        }
-                        return
-                    }
-                    // at the end, new messages are simply followed; up in the history they are counted instead
-                    if bottomVisible || messages.last?.sender_id == me { scrollToBottom(proxy) }
-                }
-                // while the chat is still opening, anything added above (the server's page after the copy kept on this
-                // phone, the unread line, a day label) must not push the end out of view: settle on it again
-                .onChange(of: messages.count) { _ in
-                    guard openedAtEnd, !userScrolledUp, unreadMarkID == nil || unreadMarkCount == 0,
-                          Date().timeIntervalSince(openedAtTime) < 2.5 else { return }
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) { proxy.scrollTo("bottom", anchor: .bottom) }
-                }
-                .onChange(of: unreadMarkID) { id in
-                    if id != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { proxy.scrollTo("unread-mark", anchor: .top) } }
-                }
-                .onChange(of: pending.count) { n in
-                    // something I just sent goes to the end; one that left (sent, cancelled) never moves the list
-                    let added = n > pendingCountSeen
-                    pendingCountSeen = n
-                    if added || bottomVisible { scrollToBottom(proxy) }
-                }
-                .onChange(of: composerFocused) { f in if f { scrollToBottom(proxy) } }
+                messageScroll(proxy)
             }
-            if selecting {
-                selectBar
-            } else if canSend {
-                composer
-                    .background(GeometryReader { g in
-                        Color.clear
-                            .onAppear { composerHeight = g.size.height }
-                            .onChange(of: g.size.height) { composerHeight = $0 }
-                    })
+            chatFooter
+        }
+    }
+
+    @ViewBuilder private var chatHeader: some View {
+        if selecting { selectHead } else { topBar }
+        if searchOpen { searchBar }
+        if isGroup && (focusDoc?.focus.active ?? false) && !selecting {
+            FocusBanner(showingAll: focusShowAll, onToggle: { focusShowAll.toggle() }, onEdit: { showFocus = true })
+        }
+        if isGroup && !pins.isEmpty && !selecting && !pinsHidden { pinnedBar }
+        if isGroup && isAdmin && joinWaiting > 0 && !selecting {
+            Button { showInfo = true } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "person.badge.plus").foregroundStyle(Theme.accent)
+                    Text(joinWaiting == 1 ? NSLocalizedString("join.waiting.one", comment: "")
+                         : String(format: NSLocalizedString("join.waiting.n", comment: ""), joinWaiting))
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
+                    Text("· ").foregroundStyle(Theme.faint)
+                    Text("join.review").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
+                    Spacer()
+                }
+                .padding(.horizontal, 14).frame(height: 40)
+                .background(barColor)
+                .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// The messages: the scroll view, its overlays (arrow, toast, empty / locked states) and how it follows new messages.
+    private func messageScroll(_ proxy: ScrollViewProxy) -> some View {
+        settling(scrollChrome(messageScrollView(proxy), proxy), proxy)
+    }
+
+    private func messageScrollView(_ proxy: ScrollViewProxy) -> some View {
+        ScrollView {
+            messageStack(proxy)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })
+    }
+
+    private func messageStack(_ proxy: ScrollViewProxy) -> some View {
+        LazyVStack(spacing: 6) {
+            if !reachedStart && !messages.isEmpty {
+                // reaching the top loads the page before, as WhatsApp does (the button stays for VoiceOver)
+                Button {
+                    Task { await loadOlder(proxy) }
+                } label: {
+                    if loadingOlder { ProgressView() } else { Text("chat.older").font(.footnote) }
+                }
+                .padding(.vertical, 8)
+                .onAppear {
+                    guard openedAtEnd, !loadingOlder, !bottomVisible,
+                          Date().timeIntervalSince(openedAtTime) > 1.5 else { return }
+                    userScrolledUp = true
+                    Task { await loadOlder(proxy) }
+                }
+            }
+            let rows = shown
+            let lookIDs = lookAlike
+            let albums = Albums.runs(rows, isGroup: isGroup)
+            // worked out once per redraw, not once per row (each was a pass over every message)
+            let hits = searchOpen ? searchHits : []
+            let hitID: String? = hits.indices.contains(searchIndex) ? hits[searchIndex].id : nil
+            let replyPhotos = replyPhotoIDs
+            ForEach(Array(rows.enumerated()), id: \.element.id) { i, m in
+                messageRow(m, i, rows, albums, lookIDs, hitID, replyPhotos)
+            }
+            ForEach(pending) { p in
+                pendingRow(p)
+            }
+            Color.clear.frame(height: 1).id("bottom")
+                .onAppear { bottomVisible = true; userScrolledUp = false; unseenBelow = []; unseenMentions = [] }
+                .onDisappear { bottomVisible = false }
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+    }
+
+    /// One message (with the day label and the unread line above it when they belong there).
+    @ViewBuilder private func messageRow(_ m: Message, _ i: Int, _ rows: [Message], _ albums: Albums.Runs,
+                                         _ lookIDs: Set<String>, _ hitID: String?, _ replyPhotos: [String: String]) -> some View {
+        if i == 0 || !sameDay(rows[i - 1], m) {
+            DayDivider(date: m.date)
+        }
+        if m.id == unreadMarkID && unreadMarkCount > 0 {
+            UnreadDivider(count: unreadMarkCount).id("unread-mark")
+        }
+        if albums.hidden.contains(m.id) {
+            // drawn inside its album
+            Color.clear.frame(height: 0).id(m.id).onAppear { if !unseenBelow.isEmpty { seen(m.id) } }
+        } else {
+            let asGroup = isGroup && roleOf(m.sender_id) == "owner"
+            MessageRow(message: m, mine: m.sender_id == me, myID: me, peerName: chat.title,
+                       senderName: isGroup && (m.sender_id != me || asGroup) && newBlock(rows, i)
+                           ? (asGroup ? chat.title : (memberNames[m.sender_id] ?? "")) : nil,
+                       onReply: { replyingTo = m; composerFocused = true },
+                       onReact: { e in Task { await react(m, e) } },
+                       onCopy: { UIPasteboard.general.string = displayText(m); flash("chat.copied") },
+                       onForward: { forwarding = m },
+                       onDelete: { _ in deleteTargets = [m]; showDelete = true },
+                       options: rowOptions(m, i, rows, albums, lookIDs, hitID, replyPhotos, asGroup: asGroup),
+                       actions: rowActions(m, albums, asGroup: asGroup)) {
+                rowContent(m, albums)
+            }
+            .id(m.id)
+            .onAppear { if !unseenBelow.isEmpty { seen(m.id) } }
+        }
+    }
+
+    private func rowOptions(_ m: Message, _ i: Int, _ rows: [Message], _ albums: Albums.Runs, _ lookIDs: Set<String>,
+                            _ hitID: String?, _ replyPhotos: [String: String], asGroup: Bool) -> MessageRowOptions {
+        let showAvatar = isGroup && !asGroup && m.sender_id != me && newBlock(rows, i)
+        let avatar: AnyView? = showAvatar
+            ? AnyView(Avatar(token: token, userID: m.sender_id, avatarID: memberAvatars[m.sender_id], title: memberNames[m.sender_id] ?? "?", size: 34))
+            : nil
+        let handle: String? = lookIDs.contains(m.sender_id) ? members.first(where: { $0.user_id == m.sender_id })?.username : nil
+        return MessageRowOptions(
+            isGroup: isGroup, restricted: restricted, canPin: isGroup && isAdmin,
+            pinned: pins.contains { $0.message_id == m.id },
+            selecting: selecting, selected: selected.contains(m.id),
+            highlighted: hitID == m.id,
+            roleTag: isGroup ? roleOf(m.sender_id) : nil,
+            asGroup: asGroup,
+            senderAvatar: avatar,
+            avatarSlot: isGroup && !asGroup,
+            handle: handle,
+            replySenderName: isGroup ? m.reply_sender_id.flatMap { memberNames[$0] } : nil,
+            replyPhotoID: m.reply_to_id.flatMap { replyPhotos[$0] },
+            token: token,
+            // an album: each photo opens its own menu (the row's would win the long press)
+            ownMenu: albums.at[m.id] == nil)
+    }
+
+    private func rowActions(_ m: Message, _ albums: Albums.Runs, asGroup: Bool) -> MessageRowActions {
+        MessageRowActions(
+            copyLink: {
+                UIPasteboard.general.string = "tradeflor://chat/\(chat.conversation_id)/message/\(m.id)"
+                flash("chat.link.copied")
+            },
+            select: { selecting = true; selected = [m.id] },
+            toggleSelect: {
+                guard m.kind != "call" else { return } // a call entry goes with "Select all" only
+                // an album is selected (and unselected) with all its photos
+                let ids = albums.at[m.id]?.map(\.id) ?? [m.id]
+                if selected.contains(m.id) { ids.forEach { selected.remove($0) } } else { ids.forEach { selected.insert($0) } }
+                allPicked = false
+            },
+            pin: { on in Task { await setPin(m, on) } },
+            report: { flash("chat.report.soon") },
+            moreReactions: { reactTarget = m; showEmoji = true },
+            comments: { commentsFor = m },
+            save: m.file_id == nil ? nil : { Task { await saveAttachment(m) } },
+            openSender: !isGroup || asGroup || m.sender_id == me ? nil : {
+                if let u = members.first(where: { $0.user_id == m.sender_id }) {
+                    profileFor = MemberProfileRef(userID: u.user_id, username: u.username)
+                }
+            },
+            openReply: m.reply_to_id == nil ? nil : {
+                if let id = m.reply_to_id, messages.contains(where: { $0.id == id }) {
+                    searchText = ""
+                    jumpTarget = id
+                } else {
+                    flash("chat.reply.notloaded")
+                }
+            },
+            edit: canEdit(m) ? { startEdit(m) } : nil)
+    }
+
+    @ViewBuilder private func rowContent(_ m: Message, _ albums: Albums.Runs) -> some View {
+        if let album = albums.at[m.id] {
+            AlbumGrid(token: token, photos: album, mine: m.sender_id == me,
+                      state: m.sender_id == me ? receipt(album.last ?? m) : nil,
+                      me: me,
+                      actions: AlbumTileActions(
+                          reply: { p in replyingTo = p; composerFocused = true },
+                          react: { p, e in Task { await react(p, e) } },
+                          forward: restricted ? nil : { p in forwarding = p },
+                          save: restricted ? nil : { p in Task { await saveAttachment(p) } },
+                          delete: { p in deleteTargets = [p]; showDelete = true },
+                          select: { p in selecting = true; selected = Set(album.map(\.id)) })) { fid in
+                viewing = ViewedPhoto(id: fid, messageID: album.first(where: { $0.file_id == fid })?.id)
+            }
+        } else {
+            messageContent(m)
+        }
+    }
+
+    /// A message on its way (dimmed, with its upload progress and X), or one that failed (Retry / Delete).
+    private func pendingRow(_ p: PendingMessage) -> some View {
+        Group {
+            if let img = p.image {
+                // the picture at once, dimmed, with a ring and an X until it is sent (website bcfeb0a)
+                PhotoBubble(mine: true, date: p.date, state: p.failed ? .failed : .sending, caption: "", size: img.size) {
+                    ZStack {
+                        Image(uiImage: img).resizable().scaledToFill()
+                        if !p.failed {
+                            Color.black.opacity(0.35)
+                            ZStack {
+                                // fills with a chunked upload's progress; turns otherwise (ResumableUpload.swift)
+                                UploadRing(key: p.id)
+                                Button {
+                                    cancelledUploads.insert(p.id)
+                                    uploads[p.id]?.cancel()
+                                    pending.removeAll { $0.id == p.id }
+                                } label: {
+                                    Image(systemName: "xmark").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
+                                        .frame(width: 30, height: 30).background(Color.black.opacity(0.35), in: Circle())
+                                }
+                                .accessibilityLabel(Text("chat.upload.cancel"))
+                                .offset(y: 40)
+                            }
+                            .frame(width: 52, height: 52)
+                        }
+                    }
+                    .overlay(alignment: .topLeading) {
+                        // "Uploading video · 42%", "12 MB / 30 MB", "1.2 MB/s · About 15 s left" (4 MB or more)
+                        if !p.failed {
+                            UploadStatusLines(key: p.id, what: p.video != nil ? "video" : "photo", boxed: true)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                }
+            } else if p.video != nil || !p.docName.isEmpty {
+                // a video without a cover, or a document: the bubble, then the upload's lines and the X
+                VStack(alignment: .trailing, spacing: 4) {
+                    Bubble(text: p.docName.isEmpty ? "🎬 " + NSLocalizedString("chat.video", comment: "") : "📎 " + p.docName,
+                           mine: true, date: p.date, state: p.failed ? .failed : .sending, faded: false)
+                    if !p.failed {
+                        HStack(alignment: .center, spacing: 8) {
+                            UploadStatusLines(key: p.id, what: p.docName.isEmpty ? "video" : "file", onDark: false)
+                            if uploads[p.id] != nil || (p.video?.isEmpty == true && p.file == nil) {
+                                Button {
+                                    cancelledUploads.insert(p.id)
+                                    uploads[p.id]?.cancel()
+                                    pending.removeAll { $0.id == p.id }
+                                } label: {
+                                    Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.text)
+                                        .frame(width: 26, height: 26).background(Theme.text.opacity(0.12), in: Circle())
+                                }
+                                .accessibilityLabel(Text("chat.upload.cancel"))
+                            }
+                        }
+                        .padding(.trailing, 6)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            } else if let ms = p.durationMs {
+                Bubble(text: "🎤 " + VoiceBubble.length(Int64(ms)), mine: true, date: p.date,
+                       state: p.failed ? .failed : .sending, faded: false)
             } else {
-                Text("group.readonly").font(.footnote).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity).padding(.vertical, 14).background(.bar)
+                Bubble(text: p.body, mine: true, date: p.date, state: p.failed ? .failed : .sending, faded: false)
             }
         }
+        .id(p.id)
+        .onTapGesture { if p.failed { Task { await deliver(p) } } }
+        .overlay(alignment: .bottomTrailing) {
+            if p.failed {
+                // "Not sent · Retry" (website FailedBadge), with Delete in the menu
+                Text("chat.notsent.retry").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.danger)
+                    .padding(.horizontal, 8).padding(.vertical, 3).background(Theme.card, in: Capsule())
+                    .offset(y: 16)
+                    .allowsHitTesting(false)
+            }
+        }
+        .padding(.bottom, p.failed ? 18 : 0)
+        .contextMenu {
+            if p.failed {
+                Button { Task { await deliver(p) } } label: { Label("chat.retry", systemImage: "arrow.clockwise") }
+                Button(role: .destructive) {
+                    pending.removeAll { $0.id == p.id }
+                    if let f = p.file { try? FileManager.default.removeItem(at: f) } // this device's copy of a large file
+                } label: { Label("chat.delete", systemImage: "trash") }
+            }
+        }
+    }
+
+    private func scrollChrome<V: View>(_ v: V, _ proxy: ScrollViewProxy) -> some View {
+        v
+            .overlay(alignment: .bottomTrailing) { jumpArrows(proxy) }
+            .overlay(alignment: .top) { toastOverlay }
+            .onChange(of: jumpTarget) { t in
+                if let t { withAnimation { proxy.scrollTo(t, anchor: .center) }; jumpTarget = nil }
+            }
+            .onChange(of: searchIndex) { _ in
+                if searchHits.indices.contains(searchIndex) { withAnimation { proxy.scrollTo(searchHits[searchIndex].id, anchor: .center) } }
+            }
+            .onChange(of: searchText) { _ in
+                searchIndex = max(0, searchHits.count - 1)
+                if let last = searchHits.last { withAnimation { proxy.scrollTo(last.id, anchor: .center) } }
+            }
+            .overlay { emptyOverlay }
+    }
+
+    /// WhatsApp's jump arrow and, in groups, the "@" for the next mention.
+    private func jumpArrows(_ proxy: ScrollViewProxy) -> some View {
+        // WhatsApp's arrow (website d454d16): dark, light chevron; the count of others' new messages on its upper
+        // left, counting down as they come into view; in groups the "@" (next mention) stands above it
+        VStack(spacing: 10) {
+            if isGroup, let first = unseenMentions.first {
+                Button { withAnimation { proxy.scrollTo(first, anchor: .center) }; unseenMentions.removeFirst() } label: {
+                    Text("@").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
+                        .frame(width: 42, height: 42).background(Theme.hex(0x00C6C4), in: Circle())
+                }
+                .accessibilityLabel(Text("chat.next.mention"))
+            }
+            if !bottomVisible && !messages.isEmpty {
+                Button {
+                    unseenBelow = []
+                    unseenMentions = []
+                    scrollToBottom(proxy)
+                } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.hex(0xE9EDEF))
+                        .frame(width: 42, height: 42).background(Theme.hex(0x1B2A30), in: Circle())
+                        .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
+                        .overlay(alignment: .topLeading) {
+                            if !unseenBelow.isEmpty {
+                                Text(unseenBelow.count > 99 ? "99+" : "\(unseenBelow.count)").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
+                                    .padding(.horizontal, 5).frame(minWidth: 20, minHeight: 20)
+                                    .background(Theme.hex(0x00C6C4), in: Capsule())
+                                    .scaleEffect(badgePop ? 1.2 : 1)
+                                    .offset(x: -7, y: -7)
+                            }
+                        }
+                }
+                .accessibilityLabel(Text("chat.jump"))
+                .accessibilityValue(unseenBelow.isEmpty ? Text("") : Text("\(unseenBelow.count)"))
+            }
+        }
+        .padding(14)
+        .onChange(of: unseenBelow.count) { _ in
+            withAnimation(.spring(response: 0.2, dampingFraction: 0.5)) { badgePop = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { withAnimation { badgePop = false } }
+        }
+    }
+
+    @ViewBuilder private var toastOverlay: some View {
+        if let toast {
+            Text(toast).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
+                .padding(.horizontal, 14).padding(.vertical, 8).background(Theme.card, in: Capsule())
+                .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1)).padding(.top, 10)
+        }
+    }
+
+    @ViewBuilder private var emptyOverlay: some View {
+        if loading && messages.isEmpty {
+            ProgressView()
+        } else if locked && messages.isEmpty {
+            VStack(spacing: 14) {
+                Image(systemName: "lock.fill").font(.system(size: 34)).foregroundStyle(Theme.accent)
+                Text("lock.chat.locked").foregroundStyle(.secondary).multilineTextAlignment(.center)
+                Button { showUnlock = true } label: {
+                    Text("lock.unlock").bold().padding(.horizontal, 28).padding(.vertical, 12)
+                        .foregroundStyle(Theme.onAccent).background(Theme.accent, in: Capsule())
+                }
+                .accessibilityIdentifier("lock.open")
+            }
+            .padding()
+        } else if let problem, messages.isEmpty {
+            Text(problem).foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
+        } else if !loading && messages.isEmpty && pending.isEmpty && canSend {
+            VStack(spacing: 10) {
+                Text("chat.empty.title").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
+                Text("chat.empty.sub").font(.system(size: 13)).foregroundStyle(Theme.faint).multilineTextAlignment(.center)
+                Button {
+                    draft = "👋"
+                    Task { await sendDraft() }
+                } label: { Text("👋").font(.system(size: 54)) }
+                .accessibilityLabel(Text("chat.greet"))
+            }
+            .padding(24)
+            .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Theme.borderStrong, lineWidth: 1))
+            .padding(30)
+        }
+    }
+
+    /// Where the list stands when the chat opens, and how it follows new and pending messages.
+    private func settling<V: View>(_ v: V, _ proxy: ScrollViewProxy) -> some View {
+        v
+            .onChange(of: messages.last?.id) { _ in
+                if !openedAtEnd && !messages.isEmpty {
+                    // the chat opens at its end (or at the unread line): again once pictures have taken their room
+                    openedAtEnd = true
+                    openedAtTime = Date()
+                    let hasMark = unreadMarkID != nil && unreadMarkCount > 0
+                    if hasMark { proxy.scrollTo("unread-mark", anchor: .top) } else { proxy.scrollTo("bottom", anchor: .bottom) }
+                    if !hasMark {
+                        for d in [0.35, 0.9, 1.6] {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + d) {
+                                // pictures took their room: settle on the end again, but only if I haven't scrolled away
+                                if !userScrolledUp { proxy.scrollTo("bottom", anchor: .bottom) }
+                            }
+                        }
+                    }
+                    return
+                }
+                // at the end, new messages are simply followed; up in the history they are counted instead
+                if bottomVisible || messages.last?.sender_id == me { scrollToBottom(proxy) }
+            }
+            // while the chat is still opening, anything added above (the server's page after the copy kept on this
+            // phone, the unread line, a day label) must not push the end out of view: settle on it again
+            .onChange(of: messages.count) { _ in
+                guard openedAtEnd, !userScrolledUp, unreadMarkID == nil || unreadMarkCount == 0,
+                      Date().timeIntervalSince(openedAtTime) < 2.5 else { return }
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onChange(of: unreadMarkID) { id in
+                if id != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { proxy.scrollTo("unread-mark", anchor: .top) } }
+            }
+            .onChange(of: pending.count) { n in
+                // something I just sent goes to the end; one that left (sent, cancelled) never moves the list
+                let added = n > pendingCountSeen
+                pendingCountSeen = n
+                if added || bottomVisible { scrollToBottom(proxy) }
+            }
+            .onChange(of: composerFocused) { f in if f { scrollToBottom(proxy) } }
+    }
+
+    @ViewBuilder private var chatFooter: some View {
+        if selecting {
+            selectBar
+        } else if canSend {
+            composer
+                .background(GeometryReader { g in
+                    Color.clear
+                        .onAppear { composerHeight = g.size.height }
+                        .onChange(of: g.size.height) { composerHeight = $0 }
+                })
+        } else {
+            Text("group.readonly").font(.footnote).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity).padding(.vertical, 14).background(.bar)
+        }
+    }
+
+    private func chatHead<V: View>(_ v: V) -> some View {
+        v
         .background(ChatThemeStyle.background(themeID).ignoresSafeArea())
         .environment(\.tfChatThemed, !(themeID.isEmpty || themeID == "tradeflor"))
         .messageMenuHost()
@@ -575,6 +662,10 @@ struct ChatView: View {
                 }
             }
         }
+    }
+
+    private func chatHead2<V: View>(_ v: V) -> some View {
+        v
         .sheet(isPresented: $showInfo, onDismiss: {
             // left or deleted from Group Info: back to the list (the group is no longer mine to read)
             if groupGone { dismissView(); return }
@@ -628,6 +719,10 @@ struct ChatView: View {
             }
         }
         #endif
+    }
+
+    private func chatMiddle<V: View>(_ v: V) -> some View {
+        v
         .fullScreenCover(item: $openDoc) { d in DocumentPreview(url: d.url).ignoresSafeArea() }
         .sheet(isPresented: $showFocus) {
             if let doc = focusDoc {
@@ -681,6 +776,10 @@ struct ChatView: View {
         .fileImporter(isPresented: $showDocPicker, allowedContentTypes: [.item]) { result in
             if case let .success(url) = result { Task { await sendDocument(url) } }
         }
+    }
+
+    private func chatMiddle2<V: View>(_ v: V) -> some View {
+        v
         .confirmationDialog(Text(LocalizedStringKey(deleteTargets.count > 1 ? "chat.delete.many" : "chat.delete.one")),
                             isPresented: $showDelete, titleVisibility: .visible) {
             if deleteTargets.contains(where: { $0.sender_id == me && !$0.isDeleted && $0.kind != "call" }) {
@@ -732,6 +831,10 @@ struct ChatView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar) // full height for the conversation, like other messengers
+    }
+
+    private func chatTail<V: View>(_ v: V) -> some View {
+        v
         .task {
             if isGroup { await loadPeople() }
             await loadMeta()
@@ -768,7 +871,7 @@ struct ChatView: View {
                 unseenBelow.append(m.id)
                 if isGroup && ChatEdit.mentions(m, me: me) { unseenMentions.append(m.id) }
             }
-            if m.sender_id != me { Task { await markSeen() } }
+            if m.sender_id != me { markSeenSoon() }
         }
         .onReceive(live.hidden) { h in
             // hidden for me, or the chat cleared on any of my devices: those messages leave at once
@@ -778,8 +881,18 @@ struct ChatView: View {
         }
         .onReceive(live.changes) { id in
             guard id == chat.conversation_id else { return }
-            Task { await loadNewest(quiet: true) }
+            // a burst of receipts / reactions is one page fetch, not one each
+            changeReload?.cancel()
+            changeReload = Task {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                if Task.isCancelled { return }
+                await loadNewest(quiet: true)
+            }
         }
+    }
+
+    private func chatTail2<V: View>(_ v: V) -> some View {
+        v
         .onChange(of: picked) { items in
             guard !items.isEmpty else { return }
             picked = []
@@ -1121,9 +1234,7 @@ struct ChatView: View {
 
     private var holdStrip: some View {
         HStack(spacing: 10) {
-            Circle().fill(Color.red).frame(width: 9, height: 9)
-                .opacity(Int(recorder.elapsed * 2) % 2 == 0 ? 1 : 0.3)
-            Text(VoiceBubble.length(Int64(recorder.elapsed * 1000))).monospacedDigit().foregroundStyle(Theme.text)
+            HoldClock(meter: recorder.meter)
             Spacer(minLength: 6)
             HStack(spacing: 4) {
                 Image(systemName: "chevron.left")
@@ -1394,6 +1505,7 @@ struct ChatView: View {
         for p in (try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/members", token: token)) ?? [] { all[p.user_id] = p }
         let list = Array(all.values)
         members = list.map { GroupMember(user_id: $0.user_id, username: $0.username, display_name: $0.display_name) }
+        lookAlike = NameSkeleton.lookAlikeIDs(members)
         memberNames = Dictionary(list.map { ($0.user_id, $0.title) }, uniquingKeysWith: { a, _ in a })
         memberRoles = Dictionary(list.filter { $0.role != "member" }.map { ($0.user_id, $0.role) }, uniquingKeysWith: { a, _ in a })
         memberAvatars = Dictionary(list.compactMap { p in (p.avatar_id?.isEmpty == false) ? (p.user_id, p.avatar_id!) : nil }, uniquingKeysWith: { a, _ in a })
@@ -1642,7 +1754,8 @@ struct ChatView: View {
         defer { loadingOlder = false }
         if let page = try? await APIClient.shared.messages(token: token, conversationID: chat.conversation_id,
                                                            before: first.seq, limit: pageSize) {
-            reachedStart = page.count < pageSize
+            // only an empty page above means the start (a page may hold fewer messages when one could not be read)
+            reachedStart = page.isEmpty
             merge(page)
             // the page goes above what I was reading: keep that message where it was (no jump)
             if let proxy, !bottomVisible {
@@ -1822,6 +1935,16 @@ struct ChatView: View {
     }
 
     /// Read receipts: a private chat marks everything read; a group records the newest seq I have seen.
+    /// Read receipts for incoming messages, at most one per 0.8 s burst.
+    private func markSeenSoon() {
+        seenTask?.cancel()
+        seenTask = Task {
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            if Task.isCancelled { return }
+            await markSeen()
+        }
+    }
+
     private func markSeen() async {
         if isGroup {
             if let last = messages.last { await APIClient.shared.markGroupRead(token: token, groupID: chat.conversation_id, seq: last.seq) }
@@ -1941,9 +2064,14 @@ struct ChatView: View {
     /// The photo's pending row, shown at once (dimmed, with its ring), ready to be sent.
     private func preparePhoto(_ img: UIImage, caption: String, hd: Bool) async -> PendingMessage? {
         // Encoding a 12 MP photo takes a moment: off the main thread.
-        let encoded = await Task.detached(priority: .userInitiated) { ImagePrep.jpeg(from: img, hd: hd) }.value
-        guard let jpeg = encoded else { return nil }
-        let preview = UIImage(data: jpeg) ?? img
+        // The bubble shows a copy of at most 1000 px: an HD photo decoded at 4096 px is ~48 MB for each bubble.
+        let encoded = await Task.detached(priority: .userInitiated) { () -> (Data, UIImage?)? in
+            guard let full = ImagePrep.jpeg(from: img, hd: hd) else { return nil }
+            return (full, ImagePrep.jpeg(from: img, maxSide: 1000, startQuality: 0.8).flatMap { UIImage(data: $0) })
+        }.value
+        guard let enc = encoded else { return nil }
+        let jpeg = enc.0
+        let preview = enc.1 ?? img
         let p = PendingMessage(id: UUID().uuidString.lowercased(), body: caption.trimmingCharacters(in: .whitespacesAndNewlines),
                                date: Date(), image: preview, jpeg: jpeg)
         pending.append(p)
@@ -2044,7 +2172,8 @@ struct ChatView: View {
             }
             // a sent photo shows from my own copy at once, at its shape (web seedPhoto)
             if let fid = m.file_id, let jpeg = p.jpeg {
-                APIClient.shared.seedFile(fileID: fid, data: jpeg)
+                // the bubble's copy is the small preview, not the full (HD) JPEG
+                APIClient.shared.seedFile(fileID: fid, data: p.image?.jpegData(compressionQuality: 0.8) ?? jpeg)
                 if let img = p.image { MediaDims.shared.set(fid, img.size) }
             }
             merge([m])
@@ -2120,6 +2249,17 @@ struct ChatView: View {
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
         withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+    }
+}
+
+/// The blinking dot and running time of a hold-to-record note (watches only the recorder's meter).
+private struct HoldClock: View {
+    @ObservedObject var meter: VoiceMeter
+
+    var body: some View {
+        Circle().fill(Color.red).frame(width: 9, height: 9)
+            .opacity(Int(meter.elapsed * 2) % 2 == 0 ? 1 : 0.3)
+        Text(VoiceBubble.length(Int64(meter.elapsed * 1000))).monospacedDigit().foregroundStyle(Theme.text)
     }
 }
 
