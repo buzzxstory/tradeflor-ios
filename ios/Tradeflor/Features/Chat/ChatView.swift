@@ -80,6 +80,9 @@ struct ChatView: View {
     @State private var unreadMarkCount = 0
     @State private var unreadMarkSet = false
     @State private var openedAtEnd = false
+    /// Text and voice waiting to leave, in writing order (one at a time per conversation).
+    @State private var sendQueue: [String] = []
+    @State private var queueRunning = false
     /// "Select all" took the whole chat (every older page loaded first): Delete then also takes the call entries (web b9833d1).
     @State private var allPicked = false
     @State private var pickingAll = false
@@ -665,7 +668,7 @@ struct ChatView: View {
             let saved = OutboxStore.load(account: me, conversation: chat.conversation_id).filter { s in !pending.contains { $0.id == s.id } }
             pending.append(contentsOf: saved)
             outboxLoaded = true
-            for p in saved { await deliver(p) }
+            for p in saved.sorted(by: { $0.date < $1.date }) { await deliver(p) }
         }
         .onReceive(live.messages) { m in
             guard m.conversation_id == chat.conversation_id else { return }
@@ -1726,9 +1729,51 @@ struct ChatView: View {
     }
 
     /// Same idempotency key on every retry, so a message that did reach the server is never stored twice.
+    private enum SendOutcome { case sent, wait, failed }
+
+    /// Text and voice are "lines": they leave one at a time per conversation, in the order they were written, so fast
+    /// typing arrives in order (web 582418a). Photos, videos and documents keep their own uploads.
+    private func isLine(_ p: PendingMessage) -> Bool {
+        p.audio != nil || (p.jpeg == nil && p.video == nil && p.docName.isEmpty && p.file == nil)
+    }
+
     private func deliver(_ p: PendingMessage) async {
-        if let v = p.video, v.isEmpty, p.file == nil { return } // still being re-encoded, or the re-encode failed
-        if uploads[p.id] != nil { return } // already going (a second tap, or the outbox and a retry at once)
+        if isLine(p) {
+            if !sendQueue.contains(p.id) { sendQueue.append(p.id) }
+            // millisecond order of writing, not of tapping Retry
+            let order = Dictionary(pending.map { ($0.id, $0.date) }, uniquingKeysWith: { a, _ in a })
+            sendQueue.sort { (order[$0] ?? .distantFuture) < (order[$1] ?? .distantFuture) }
+            if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = false }
+            await runQueue()
+        } else {
+            _ = await sendOne(p, queued: false)
+        }
+    }
+
+    /// One line for the whole conversation: on a rate limit or no connection everything waits together (back off 1 → 30 s)
+    /// and resumes in order, instead of each message retrying on its own timer.
+    private func runQueue() async {
+        guard !queueRunning else { return }
+        queueRunning = true
+        defer { queueRunning = false }
+        var backoff: UInt64 = 1
+        while let id = sendQueue.first {
+            guard let p = pending.first(where: { $0.id == id }) else { sendQueue.removeFirst(); continue }
+            switch await sendOne(p, queued: true) {
+            case .sent, .failed:
+                sendQueue.removeAll { $0 == id }
+                backoff = 1
+            case .wait:
+                try? await Task.sleep(nanoseconds: backoff * 1_000_000_000)
+                backoff = min(backoff * 2, 30)
+                if Task.isCancelled { return }
+            }
+        }
+    }
+
+    private func sendOne(_ p: PendingMessage, queued: Bool) async -> SendOutcome {
+        if let v = p.video, v.isEmpty, p.file == nil { return .failed } // still being re-encoded, or the re-encode failed
+        if uploads[p.id] != nil { return .failed } // already going (a second tap, or the outbox and a retry at once)
         if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = false }
         do {
             let m: Message
@@ -1765,16 +1810,28 @@ struct ChatView: View {
             merge([m])
             pending.removeAll { $0.id == p.id }
             if let f = p.file { try? FileManager.default.removeItem(at: f) } // sent: this device's copy is no longer needed
+            return .sent
         } catch APIError.badCredentials {
             store.sessionExpired()
+            return .failed
         } catch {
             if cancelledUploads.contains(p.id) { // X: dropped on purpose (the server was told to drop its chunks)
                 cancelledUploads.remove(p.id)
                 if let f = p.file { try? FileManager.default.removeItem(at: f) }
-                return
+                return .failed
             }
+            // a line waits (rate limit, no connection, the server busy) and keeps its place; the same key makes it safe
+            if queued, let a = error as? APIError {
+                switch a {
+                case .rateLimited, .network: return .wait
+                case .server(let status) where status >= 500: return .wait
+                default: break
+                }
+            }
+            if queued, (error as? URLError) != nil { return .wait }
             if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = true }
             if case let .refused(why)? = error as? APIError, !why.isEmpty { problem = why }
+            return .failed
         }
     }
 

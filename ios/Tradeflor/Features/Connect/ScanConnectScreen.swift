@@ -366,6 +366,8 @@ struct ScanConnectScreen: View {
     /// The camera's name (opens the list) + the round button to the next camera + the light when there is one.
     private var camRow: some View {
         HStack(spacing: 12) {
+            // the camera's name and list only when there is a choice (web ea10bd9)
+            if camera.cams.count > 1 {
             Menu {
                 ForEach(camera.cams) { c in
                     Button { camera.select(c.id) } label: {
@@ -389,6 +391,7 @@ struct ScanConnectScreen: View {
             }
             .disabled(camera.cams.count < 2)
             .accessibilityLabel(Text("sc.choose.cam"))
+            }
             if camera.canFlip {
                 roundSmall("arrow.triangle.2.circlepath.camera", "sc.switch") { camera.flip() }
             }
