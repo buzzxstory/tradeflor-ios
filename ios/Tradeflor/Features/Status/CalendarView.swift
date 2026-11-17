@@ -154,7 +154,8 @@ struct CalendarView: View {
         .task(id: tzID) { await loadNext() }
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                // the page needs the minute only; the next-event countdown ticks by itself (TickText)
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
                 now = Date()
             }
         }
@@ -270,7 +271,7 @@ struct CalendarView: View {
                             Text(Self.flag(n.country_code)).font(.system(size: 20))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(n.event).font(.system(size: 15, weight: .bold)).foregroundStyle(P.tx).lineLimit(1)
-                                Text("\(nextTime(d)) · \(Self.nextCountdown(d.timeIntervalSince(now)))")
+                                TickText { "\(nextTime(d)) · \(Self.nextCountdown(d.timeIntervalSince($0)))" }
                                     .font(.system(size: 12.5, design: .monospaced)).foregroundStyle(P.mu).lineLimit(1)
                             }
                         } else if nextList.isEmpty && !loaded {
@@ -614,7 +615,7 @@ struct CalendarView: View {
                 .multilineTextAlignment(.leading)
             if live {
                 HStack(spacing: 5) {
-                    Circle().fill(P.hi).frame(width: 6, height: 6).opacity(Int(now.timeIntervalSince1970) % 2 == 0 ? 1 : 0.3)
+                    Circle().fill(P.hi).frame(width: 6, height: 6)
                     Text("cal.livetag").font(.system(size: 10.5, weight: .heavy)).kerning(0.6)
                 }
                 .foregroundStyle(Theme.dyn(0xFF7C9D, 0xBE0030))

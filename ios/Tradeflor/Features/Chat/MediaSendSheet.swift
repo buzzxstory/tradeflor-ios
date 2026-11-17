@@ -520,7 +520,7 @@ struct MediaSendSheet: View {
             var out = snapshot
             for i in out.indices {
                 guard !out[i].isVideo, let e = allEdits[out[i].id], !e.isEmpty, let img = out[i].image else { continue }
-                let maxSide: CGFloat = quality ? 8192 : 1600
+                let maxSide: CGFloat = quality ? 4096 : 1600
                 let flat = await Task.detached(priority: .userInitiated) { EditRenderer.flattened(img, e, maxSide: maxSide) }.value
                 out[i].image = flat
             }

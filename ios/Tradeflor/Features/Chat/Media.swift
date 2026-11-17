@@ -9,7 +9,8 @@ enum ImagePrep {
 
     /// Standard quality (the website's MediaSendSheet): 1600 px at JPEG 0.85. HD keeps the full size.
     static func jpeg(from image: UIImage, hd: Bool) -> Data? {
-        if hd { return jpeg(from: image, maxSide: 8192, startQuality: 0.92) }
+        // HD: at most 4096 px on the long side, as WhatsApp HD and the website (ff35f69), so a large photo is never refused
+        if hd { return jpeg(from: image, maxSide: 4096, startQuality: 0.92) }
         return jpeg(from: image, maxSide: 1600, startQuality: 0.85)
     }
 

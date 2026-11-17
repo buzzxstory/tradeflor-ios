@@ -71,6 +71,17 @@ struct ChatListView: View {
         }
     }
 
+    @State private var pendingReload: Task<Void, Never>?
+
+    private func reloadSoon() {
+        pendingReload?.cancel()
+        pendingReload = Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            if Task.isCancelled { return }
+            await load(quiet: true)
+        }
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
@@ -140,8 +151,9 @@ struct ChatListView: View {
                 }
             }
         }
-        .onReceive(live.messages) { _ in Task { await load(quiet: true) } }
-        .onReceive(live.changes) { _ in Task { await load(quiet: true) } }
+        // a burst of new messages (a busy group) is one reload, not one per message: that redrew the list all the time
+        .onReceive(live.messages) { _ in reloadSoon() }
+        .onReceive(live.changes) { _ in reloadSoon() }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             await load()

@@ -124,6 +124,27 @@ struct ListDiscButton<Glyph: View>: View {
     }
 }
 
+/// The look of ListDiscButton without the button (a Menu's label).
+struct ListDiscFace<Glyph: View>: View {
+    @ViewBuilder let glyph: () -> Glyph
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        glyph()
+            .foregroundStyle(scheme == .dark ? Theme.hex(0x8FF6F8) : Theme.accent)
+            .frame(width: 44, height: 44)
+            .background(
+                scheme == .dark
+                    ? AnyShapeStyle(LinearGradient(colors: [Theme.hex(0x0E5C68, 0.62), Theme.hex(0x042C36, 0.72)],
+                                                   startPoint: UnitPoint(x: 0.33, y: 0), endPoint: UnitPoint(x: 0.67, y: 1)))
+                    : AnyShapeStyle(Color.white),
+                in: Circle())
+            .overlay(Circle().stroke(scheme == .dark ? Theme.hex(0x40E2EC, 0.5) : Theme.borderStrong, lineWidth: 1))
+            .shadow(color: .black.opacity(scheme == .dark ? 0.28 : 0.08), radius: 5, y: 3)
+            .contentShape(Circle())
+    }
+}
+
 /// The Groups header's 43 pt rounded-square button face (06-voice.css .sidebar-head-actions .icon-btn).
 struct ListSquareFace<Glyph: View>: View {
     @ViewBuilder let glyph: () -> Glyph

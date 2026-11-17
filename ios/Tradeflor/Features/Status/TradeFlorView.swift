@@ -101,7 +101,9 @@ struct TradeFlorView: View {
         .task { await load() }
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                // the page itself only needs the minute (released events, sessions, "5m ago"); the seconds of the
+                // countdown tick inside TickText, so the whole page is not redrawn every second (that made it lag)
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
                 now = Date()
             }
         }
@@ -179,7 +181,7 @@ struct TradeFlorView: View {
                     .font(.system(size: 12.5)).foregroundStyle(Theme.hex(0xF2B3BB)).lineLimit(1)
             }
             Spacer(minLength: 4)
-            Text(Self.countdown(d.timeIntervalSince(now))).font(.system(size: 16, weight: .bold, design: .monospaced))
+            TickText { Self.countdown(d.timeIntervalSince($0)) }.font(.system(size: 16, weight: .bold, design: .monospaced))
                 .foregroundStyle(Theme.hex(0xFFD0D6)).lineLimit(1).fixedSize()
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
@@ -589,5 +591,14 @@ struct QuietSkeleton: View {
                 withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { dim = true }
             }
             .accessibilityHidden(true)
+    }
+}
+
+
+/// Text that changes every second (a countdown, a clock): only this text is redrawn each second, not its page.
+struct TickText: View {
+    let make: (Date) -> String
+    var body: some View {
+        TimelineView(.periodic(from: Date(), by: 1)) { tl in Text(make(tl.date)) }
     }
 }

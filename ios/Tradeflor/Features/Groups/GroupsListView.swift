@@ -16,6 +16,7 @@ struct GroupsListView: View {
     @State private var showArchived = false
     @State private var loading = true
     @State private var path: [GroupSummary] = []
+    @State private var showScan = false
     @State private var showCreate = false
     @State private var showJoin = false
     @State private var query = ""
@@ -55,6 +56,18 @@ struct GroupsListView: View {
         return g
     }
 
+    /// A burst of group messages is one quiet reload (no spinner, no list redraw per message).
+    @State private var pendingReload: Task<Void, Never>?
+
+    private func reloadSoon() {
+        pendingReload?.cancel()
+        pendingReload = Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            if Task.isCancelled { return }
+            await load()
+        }
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
@@ -63,6 +76,7 @@ struct GroupsListView: View {
                 VStack(spacing: 0) {
                     header
                     ListSearchField(placeholder: "groups.search", text: $query)
+                    circles
                     chips
                     archivedToggle
                     discover
@@ -73,7 +87,7 @@ struct GroupsListView: View {
             .scrollDismissesKeyboard(.immediately)
             .ignoresSafeArea(.keyboard, edges: .bottom)
             .refreshable { await load() }
-            .background(ListAmbientBackground())
+            .background(ChatsWallpaper())
             .sheet(isPresented: $showFolderEditor) {
                 FolderEditorView(token: token, chats: groups.map(\.asConversation)) { Task { await reloadFolders() } }
             }
@@ -116,24 +130,93 @@ struct GroupsListView: View {
             let found = await APIClient.shared.grpDiscover(token: token, query: q)
             discovered = found.filter { !($0.already_member ?? false) }
         }
-        .onReceive(live.messages) { m in if m.conversation_id.hasPrefix("grp_") { Task { await load() } } }
+        .onReceive(live.messages) { m in if m.conversation_id.hasPrefix("grp_") { reloadSoon() } }
     }
 
     /// Website phone header (GroupsView.tsx .sidebar-head): the big "Groups" and the 43 pt square new-group button
     /// (06-voice.css .sidebar-head-actions .icon-btn); no brand bar on this screen.
+    /// Organised as Chats (website 01d0586): the TRADEFLOR bar, the big title with two round buttons -- Scan QR (a
+    /// group's or a person's code, the same Scan & Connect as Chats) and New group (also Join with a link).
     private var header: some View {
-        HStack(spacing: 12) {
-            ListTitle(key: "groups.title")
-            Spacer(minLength: 8)
-            Menu {
-                Button { showCreate = true } label: { Label("grp.new", systemImage: "plus") }
-                Button { showJoin = true } label: { Label("group.join", systemImage: "link") }
-            } label: {
-                ListSquareFace { GroupPlusGlyph().frame(width: 24, height: 24) }
+        VStack(spacing: 0) {
+            ListBrandBar()
+            HStack(spacing: 12) {
+                ListTitle(key: "groups.title")
+                Spacer(minLength: 8)
+                ListDiscButton(action: { showScan = true }) {
+                    ScanGlyph().stroke(style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round)).frame(width: 22, height: 22)
+                }
+                .accessibilityLabel(Text("sc.scan.title"))
+                Menu {
+                    Button { showCreate = true } label: { Label("grp.new", systemImage: "plus") }
+                    Button { showJoin = true } label: { Label("group.join", systemImage: "link") }
+                } label: {
+                    ListDiscFace { GroupPlusGlyph().frame(width: 24, height: 24) }
+                }
+                .accessibilityLabel(Text("grp.new"))
             }
-            .accessibilityLabel(Text("grp.new"))
+            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 12)
         }
-        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 12)
+        .fullScreenCover(isPresented: $showScan) {
+            ScanFlow { c in
+                showScan = false
+                Task {
+                    await load()
+                    if let g = groups.first(where: { $0.conversation_id == c.conversation_id }) { path = [g] }
+                    else { LocalNotifier.shared.tappedConversation = c.conversation_id } // a person: their chat
+                }
+            }
+            .environmentObject(store)
+            .environmentObject(live)
+        }
+    }
+
+    /// The circles row, as Chats' status row (website 01d0586): New group first, then pinned groups, then those with
+    /// unread messages, then the most recent; a lit ring when a group has unread messages; a tap opens it.
+    @ViewBuilder private var circles: some View {
+        if query.isEmpty {
+            let open = groups.filter { !(prefs[$0.conversation_id]?.archived ?? false) }
+            let pinned = open.filter { prefs[$0.conversation_id]?.pinned ?? false }
+                .sorted { (prefs[$0.conversation_id]?.pinned_at ?? 0) > (prefs[$1.conversation_id]?.pinned_at ?? 0) }
+            let rest = open.filter { !(prefs[$0.conversation_id]?.pinned ?? false) }
+            let ordered = Array((pinned + rest.filter { isUnread($0) } + rest.filter { !isUnread($0) }).prefix(10))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 10) {
+                    Button { showCreate = true } label: {
+                        VStack(spacing: 4) {
+                            ZStack(alignment: .bottomTrailing) {
+                                GroupPlusGlyph().frame(width: 24, height: 24).foregroundStyle(Theme.hex(0x8FF6F8))
+                                    .frame(width: 48, height: 48)
+                                    .background(Theme.hex(0x0A3440), in: Circle())
+                                    .overlay(Circle().stroke(Theme.hex(0x40E2EC, 0.35), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])))
+                                    .padding(2)
+                                Image(systemName: "plus").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x00181B))
+                                    .frame(width: 20, height: 20).background(Theme.accent, in: Circle())
+                                    .overlay(Circle().stroke(Theme.soul, lineWidth: 2))
+                            }
+                            Text("grp.new").font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
+                        }
+                        .frame(width: 60)
+                    }
+                    .buttonStyle(ListPressStyle())
+                    .accessibilityLabel(Text("grp.new"))
+                    ForEach(ordered) { g in
+                        Button { path = [g] } label: {
+                            VStack(spacing: 4) {
+                                ListAvatarRing(seen: !isUnread(g)) {
+                                    Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id, size: 45)
+                                }
+                                Text(g.name).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                            }
+                            .frame(width: 60)
+                        }
+                        .buttonStyle(ListPressStyle())
+                        .accessibilityLabel(Text(g.name))
+                    }
+                }
+                .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 4)
+            }
+        }
     }
 
     /// The same chip row as Chats (website FolderTabs in GroupsView): All chats, Unread, my folders, new folder.
