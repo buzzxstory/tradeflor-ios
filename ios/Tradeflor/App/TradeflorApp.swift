@@ -8,6 +8,7 @@ struct TradeflorApp: App {
 
     init() {
         Theme.applyAppearance()
+        LocalNotifier.bootstrap()
         #if DEBUG
         // CI screenshots: TF_CI_DAY=1 shows the day look; every other CI launch the night look
         let env = ProcessInfo.processInfo.environment
@@ -92,6 +93,7 @@ struct RootView: View {
             ConnectionRequestSheet(request: r) { chat in LocalNotifier.shared.tappedConversation = chat.conversation_id }
                 .environmentObject(store)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .tfGoTab)) { if let t = $0.object as? String { tab = t } }
         .onChange(of: notifier.tappedConversation) { id in
             // a tapped notification: the right tab; the list there opens the chat
             if let id { tab = id.hasPrefix("grp_") ? "groups" : "chats" }
@@ -107,21 +109,8 @@ struct RootView: View {
         }
         .fullScreenCover(isPresented: $calls.showScreen) { CallScreen(calls: calls).environmentObject(store).preferredColorScheme(.dark) }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if !calls.showScreen && calls.phase != .idle && calls.phase != .ended {
-                Button { calls.showScreen = true } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "phone.fill")
-                        Text(calls.peerName).fontWeight(.semibold)
-                        Spacer()
-                        if calls.phase == .active, let t = calls.connectedAt { Text(t, style: .timer).monospacedDigit() }
-                        else { Text("call.return") }
-                    }
-                    .font(.system(size: 14))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(Color.green.opacity(0.85))
-                }
-                .accessibilityLabel(Text("call.return"))
+            if !calls.showScreen && calls.lineInUse {
+                CallReturnBar(calls: calls)
             } else if !calls.showScreen && calls.phase == .ended {
                 // end-of-call notice (website CallOverlay): a compact card with the person's picture, name and outcome
                 HStack(spacing: 10) {
@@ -156,6 +145,7 @@ struct RootView: View {
             if let me = try? await APIClient.shared.myIdentity(token: token) { needsSetup = me.needs_setup ?? false }
         }
         .onAppear {
+            if let id = notifier.tappedConversation { tab = id.hasPrefix("grp_") ? "groups" : "chats" }
             syncLive()
             #if DEBUG
             // CI only: TF_CI_SIGNOUT=1 ends the test account's session on the server after the screenshots,

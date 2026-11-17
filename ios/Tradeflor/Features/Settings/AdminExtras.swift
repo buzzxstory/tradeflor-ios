@@ -90,7 +90,7 @@ struct AdminBars: View {
     private var data: [AdminBucket] { range == "weekly" ? weekly : (range == "monthly" ? monthly : daily) }
 
     var body: some View {
-        TFCard {
+        SCard {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text("adm.registrations").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.text)
@@ -140,7 +140,7 @@ struct AdminAuditView: View {
             if user.isEmpty { Text("adm.audit.note").font(.system(size: 12)).foregroundStyle(Theme.faint) }
             if let log {
                 if log.isEmpty { Text("adm.audit.none").font(.system(size: 13)).foregroundStyle(Theme.faint) }
-                TFCard {
+                SCard {
                     ForEach(Array(log.enumerated()), id: \.element.id) { i, e in
                         VStack(alignment: .leading, spacing: 3) {
                             HStack {
@@ -186,7 +186,7 @@ struct AdminSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TFCard {
+            SCard {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("adm.access").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.text)
@@ -205,8 +205,8 @@ struct AdminSettingsView: View {
                 .padding(14)
             }
             if me.roles == true {
-                TFSectionLabel(text: NSLocalizedString("adm.admins", comment: ""))
-                TFCard {
+                SSection(text: NSLocalizedString("adm.admins", comment: ""))
+                SCard {
                     ForEach(Array((admins ?? []).enumerated()), id: \.element.id) { i, a in
                         Button { onOpenUser(a.user_id) } label: {
                             HStack {

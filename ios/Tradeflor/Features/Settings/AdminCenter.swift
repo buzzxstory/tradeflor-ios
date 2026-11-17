@@ -84,8 +84,8 @@ private struct AdminOverviewView: View {
                     AdminBars(daily: d, weekly: o.weekly ?? [], monthly: o.monthly ?? [])
                 }
                 if let r = o.recent {
-                    TFSectionLabel(text: NSLocalizedString("adm.recent", comment: ""))
-                    TFCard {
+                    SSection(text: NSLocalizedString("adm.recent", comment: ""))
+                    SCard {
                         if r.isEmpty { Text("adm.recent.none").font(.system(size: 12)).foregroundStyle(Theme.faint).padding(12) }
                         ForEach(Array(r.enumerated()), id: \.element.id) { i, u in
                             Button { onOpenUser(u.id) } label: {
@@ -145,7 +145,7 @@ private struct AdminUsersView: View {
                 .onChange(of: query) { _ in page = 1; Task { try? await Task.sleep(nanoseconds: 400_000_000); await load() } }
             if let d = data {
                 Text(String(format: NSLocalizedString("adm.count", comment: ""), d.total)).font(.system(size: 12)).foregroundStyle(Theme.faint)
-                TFCard {
+                SCard {
                     ForEach(Array((d.users ?? []).enumerated()), id: \.element.id) { i, u in
                         Button { open = u } label: {
                             HStack(spacing: 10) {
@@ -331,7 +331,7 @@ private struct AdminOfficialView: View {
             }
             if loading { ProgressView().tint(Theme.accent).frame(maxWidth: .infinity) }
             else if posts.isEmpty { Text("adm.official.none").font(.system(size: 13)).foregroundStyle(Theme.faint) }
-            TFCard {
+            SCard {
                 ForEach(Array(posts.enumerated()), id: \.element.id) { i, p in
                     // card row (website OfficialAdmin.tsx): a 9:16 thumbnail, a readable name, two lines of caption, the time
                     // that matters, views and type

@@ -60,8 +60,8 @@ struct MyProfilePage: View {
                 }
             }
             if let pin = identity?.pin {
-                TFCard {
-                    TFKeyValue(key: "PIN", value: pin, action: NSLocalizedString("set.copy", comment: "")) { copy(pin, "set.copied.pin") }
+                SCard {
+                    SKeyValue(key: "PIN", value: pin, action: NSLocalizedString("set.copy", comment: "")) { copy(pin, "set.copied.pin") }
                 }
             }
             if let note { Text(note).font(.system(size: 13)).foregroundStyle(Theme.accent) }
@@ -178,7 +178,7 @@ struct AccountPage: View {
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
-        SettingsPage(title: NSLocalizedString("settings.account", comment: ""), subtitle: NSLocalizedString("settings.account.sub", comment: "")) {
+        SettingsPage(title: NSLocalizedString("settings.account", comment: ""), subtitle: NSLocalizedString("settings.account.sub", comment: ""), icon: "person") {
             if let a = account, a.needs_real_name == true || a.needs_email == true {
                 VStack(alignment: .leading, spacing: 4) {
                     Label("acct.complete", systemImage: "exclamationmark.circle").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.gold)
@@ -191,53 +191,66 @@ struct AccountPage: View {
                 .background(Theme.gold.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.gold.opacity(0.4), lineWidth: 1))
             }
-            TFCard {
-                HStack(spacing: 12) {
-                    Image(systemName: "person").foregroundStyle(Theme.accent)
-                        .frame(width: 40, height: 40).background(Theme.card, in: RoundedRectangle(cornerRadius: 10))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("@" + (store.session?.username ?? "")).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
-                        Text("set.signed.here").font(.system(size: 12)).foregroundStyle(Theme.faint)
+            // .s-card-head: "@username", "Signed in on this device"; then Username (copy) and Connection (the green Live pill)
+            SBanner(icon: "person", title: "@" + (store.session?.username ?? ""), subtitle: NSLocalizedString("set.signed.here", comment: ""))
+            SCard {
+                HStack(spacing: 14) {
+                    Image(systemName: "person").font(.system(size: 19)).foregroundStyle(SetUI.accent).frame(width: 24).padding(.horizontal, 4)
+                    Text("signup.username").font(.system(size: 16, weight: .semibold)).foregroundStyle(SetUI.text)
+                    Spacer(minLength: 6)
+                    Text("@" + (store.session?.username ?? "")).font(.system(size: 14.5, weight: .medium)).foregroundStyle(SetUI.sub).lineLimit(1)
+                    Button {
+                        UIPasteboard.general.string = "@" + (store.session?.username ?? "")
+                        note = NSLocalizedString("set.copied.username", comment: "")
+                    } label: {
+                        Image(systemName: "doc.on.doc").font(.system(size: 17)).foregroundStyle(SetUI.sub)
+                            .frame(width: 40, height: 40).contentShape(Rectangle())
                     }
-                    Spacer()
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(Text("set.copy.username"))
                 }
-                .padding(14)
+                .padding(.horizontal, 14).padding(.vertical, 10).frame(minHeight: 64)
+                SDivider()
+                connectionRow
             }
-            TFCard {
-                TFKeyValue(key: NSLocalizedString("signup.username", comment: ""), value: "@" + (store.session?.username ?? ""),
-                           action: NSLocalizedString("set.copy", comment: "")) {
-                    UIPasteboard.general.string = "@" + (store.session?.username ?? "")
-                    note = NSLocalizedString("set.copied.username", comment: "")
-                }
-                TFDivider()
-                TFKeyValue(key: NSLocalizedString("settings.connection", comment: ""),
-                           value: NSLocalizedString(live.steadyConnected ? "settings.live" : "set.reconnecting", comment: ""))
+            VStack(alignment: .leading, spacing: 3) {
+                SSection(text: NSLocalizedString("set.account.info", comment: ""))
+                Text("set.account.private").font(.system(size: 13)).foregroundStyle(SetUI.dim).padding(.horizontal, 4)
             }
-            TFSectionLabel(text: NSLocalizedString("set.account.info", comment: ""))
-            Text("set.account.private").font(.system(size: 12)).foregroundStyle(Theme.faint)
             if let a = account {
-                TFCard {
-                    TFKeyValue(key: NSLocalizedString("set.realname", comment: ""), value: a.full_name.isEmpty ? "—" : a.full_name,
+                SCard {
+                    SKeyValue(key: NSLocalizedString("set.realname", comment: ""), value: a.full_name.isEmpty ? "—" : a.full_name,
                                action: NSLocalizedString("set.edit", comment: "")) { startEdit() }
-                    TFDivider()
-                    TFKeyValue(key: NSLocalizedString("signup.email", comment: ""),
+                    SDivider()
+                    SKeyValue(key: NSLocalizedString("signup.email", comment: ""),
                                value: a.email + " · " + NSLocalizedString(a.email_verified ? "set.verified" : "set.notverified", comment: ""))
-                    TFDivider()
-                    TFKeyValue(key: NSLocalizedString("set.phone", comment: ""),
+                    SDivider()
+                    SKeyValue(key: NSLocalizedString("set.phone", comment: ""),
                                value: a.phone.isEmpty ? NSLocalizedString("set.phone.none", comment: "") : a.phone,
                                action: NSLocalizedString("set.edit", comment: "")) { startEdit() }
-                    TFDivider()
-                    TFKeyValue(key: NSLocalizedString("set.country", comment: ""),
+                    SDivider()
+                    SKeyValue(key: NSLocalizedString("set.country", comment: ""),
                                value: a.country.isEmpty ? NSLocalizedString("set.unknown", comment: "") : CalendarView.flag(a.country) + " " + a.country)
-                    TFDivider()
-                    TFKeyValue(key: NSLocalizedString("set.joined", comment: ""),
+                    SDivider()
+                    SKeyValue(key: NSLocalizedString("set.joined", comment: ""),
                                value: Date(timeIntervalSince1970: Double(a.created_at)).formatted(date: .numeric, time: .omitted))
                 }
             } else {
-                ProgressView().tint(Theme.accent).frame(maxWidth: .infinity)
+                // the private details on their way: the rows' shape, quietly (no spinner)
+                SCard {
+                    ForEach(0..<5, id: \.self) { i in
+                        if i > 0 { SDivider() }
+                        HStack(spacing: 10) {
+                            QuietSkeleton(width: 70, height: 11, radius: 4).frame(width: 96, alignment: .leading)
+                            QuietSkeleton(width: 130, height: 13, radius: 4)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 14).frame(minHeight: 56)
+                    }
+                }
             }
             if editing {
-                TFCard {
+                SCard {
                     VStack(spacing: 10) {
                         TextField("set.realname", text: $fullName).textContentType(.name)
                         Divider()
@@ -262,6 +275,25 @@ struct AccountPage: View {
             if let note { Text(note).font(.system(size: 13)).foregroundStyle(Theme.accent) }
         }
         .task { account = try? await APIClient.shared.stPrivateAccount(token: token) }
+    }
+
+    /// Connection: the green "● Live" pill (13-settings.css .s-live), amber while reconnecting.
+    private var connectionRow: some View {
+        let on = live.steadyConnected
+        return HStack(spacing: 14) {
+            Image(systemName: "antenna.radiowaves.left.and.right").font(.system(size: 18)).foregroundStyle(SetUI.accent).frame(width: 24).padding(.horizontal, 4)
+            Text("settings.connection").font(.system(size: 16, weight: .semibold)).foregroundStyle(SetUI.text)
+            Spacer(minLength: 6)
+            HStack(spacing: 8) {
+                Circle().frame(width: 9, height: 9).shadow(color: on ? Theme.hex(0x14D99A, 0.6) : .clear, radius: 4)
+                Text(LocalizedStringKey(on ? "settings.live" : "set.reconnecting")).font(.system(size: 14, weight: .semibold))
+            }
+            .foregroundStyle(on ? Theme.hex(0x14D99A) : Theme.hex(0xF0B46A))
+            .padding(.horizontal, 12).frame(height: 30)
+            .background(on ? Theme.dyn(0x012F36, 0xE3F7EE) : Theme.hex(0xF0B46A, 0.1), in: Capsule())
+            .overlay(Capsule().stroke(on ? Theme.hex(0x00CC83, 0.25) : Theme.hex(0xF0B46A, 0.3), lineWidth: 1))
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10).frame(minHeight: 64)
     }
 
     private func startEdit() {
@@ -313,12 +345,12 @@ struct MyIdentityPage: View {
     }
 
     var body: some View {
-        SettingsPage(title: NSLocalizedString("settings.identity", comment: "")) {
+        SettingsPage(title: NSLocalizedString("settings.identity", comment: ""), subtitle: NSLocalizedString("settings.identity.sub", comment: ""), icon: "qrcode") {
             if let id {
                 IdentityShowcase(id: id, link: link, token: token)
                     .padding(.vertical, 8)
 
-                TFCard {
+                SCard {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("set.change.username").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
                         if let at = id.username_change_available_at, at > Int64(Date().timeIntervalSince1970) {
@@ -346,7 +378,8 @@ struct MyIdentityPage: View {
                     .padding(14)
                 }
             } else {
-                ProgressView().tint(Theme.accent).frame(maxWidth: .infinity)
+                QuietSkeleton(height: 250, radius: 18)
+                QuietSkeleton(height: 150, radius: 18)
             }
         }
         .task { await load() }
@@ -396,7 +429,7 @@ struct LiveLocationPage: View {
     private var active: [LivePosition] { mine.filter { $0.stopped != true && Double($0.until) > Date().timeIntervalSince1970 } }
 
     var body: some View {
-        SettingsPage(title: NSLocalizedString("location.live", comment: "")) {
+        SettingsPage(title: NSLocalizedString("location.live", comment: ""), icon: "location") {
             if active.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "location.slash").font(.system(size: 30)).foregroundStyle(Theme.faint)
@@ -405,7 +438,7 @@ struct LiveLocationPage: View {
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 30)
             } else {
-                TFCard {
+                SCard {
                     ForEach(Array(active.enumerated()), id: \.element.id) { i, p in
                         HStack {
                             Image(systemName: "location.fill").foregroundStyle(Theme.accent)
@@ -419,7 +452,7 @@ struct LiveLocationPage: View {
                             Button("set.stop") { Task { await stop(p.conversation_id) } }.font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.danger)
                         }
                         .padding(14)
-                        if i < active.count - 1 { TFDivider() }
+                        if i < active.count - 1 { SDivider() }
                     }
                 }
                 Button {
@@ -463,7 +496,7 @@ struct EventsPage: View {
     static let reminders = [0, 5, 15, 30, 60]
 
     var body: some View {
-        SettingsPage(title: NSLocalizedString("settings.events", comment: ""), subtitle: NSLocalizedString("settings.events.sub", comment: "")) {
+        SettingsPage(title: NSLocalizedString("settings.events", comment: ""), subtitle: NSLocalizedString("settings.events.sub", comment: ""), icon: "calendar.badge.clock") {
             if !loading && items.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "calendar.badge.plus").font(.system(size: 30)).foregroundStyle(Theme.faint)
@@ -479,9 +512,9 @@ struct EventsPage: View {
     }
 
     private func section(_ key: String, _ list: [SavedEventFull]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            TFSectionLabel(text: NSLocalizedString(key, comment: ""))
-            TFCard {
+        VStack(alignment: .leading, spacing: 8) {
+            SSection(text: NSLocalizedString(key, comment: ""))
+            SCard {
                 ForEach(Array(list.enumerated()), id: \.element.id) { i, e in
                     HStack(alignment: .top, spacing: 10) {
                         RoundedRectangle(cornerRadius: 2).fill(TradeFlorView.impactColor(e.impact ?? "")).frame(width: 3, height: 34)
@@ -508,7 +541,7 @@ struct EventsPage: View {
                         } label: { Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.faint).frame(width: 28, height: 28) }
                     }
                     .padding(12)
-                    if i < list.count - 1 { TFDivider() }
+                    if i < list.count - 1 { SDivider() }
                 }
             }
         }
@@ -562,26 +595,29 @@ struct NotificationsPage: View {
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
-        SettingsPage(title: NSLocalizedString("set.alerts", comment: "")) {
-            TFCard {
-                TFToggleRow(icon: "bell.badge", title: NSLocalizedString("set.n.enabled", comment: ""), subtitle: NSLocalizedString("set.n.enabled.sub", comment: ""),
+        SettingsPage(title: NSLocalizedString("settings.notifications", comment: ""), subtitle: NSLocalizedString("settings.notifications.sub", comment: ""), icon: "bell") {
+            // .s-card-head "Alerts & Sounds", then ALERTS and GROUPS & MENTIONS: label + switch rows, no icons (as the web)
+            SBanner(icon: "bell", title: NSLocalizedString("set.alerts", comment: ""), subtitle: NSLocalizedString("ux3.set.n.banner", comment: ""))
+            SSection(text: NSLocalizedString("ux3.set.alerts.sec", comment: ""))
+            SCard {
+                SToggleRow(icon: "", title: NSLocalizedString("set.n.enabled", comment: ""), subtitle: NSLocalizedString("set.n.enabled.sub", comment: ""),
                             isOn: sw.binding("notifications.enabled", token: token))
-                TFDivider()
-                TFToggleRow(icon: "speaker.wave.2", title: NSLocalizedString("set.n.sound", comment: ""), isOn: sw.binding("notifications.sound", token: token))
-                TFDivider()
-                TFToggleRow(icon: "text.bubble", title: NSLocalizedString("set.n.previews", comment: ""), isOn: sw.binding("notifications.previews", token: token))
-                TFDivider()
-                TFToggleRow(icon: "app.badge", title: NSLocalizedString("set.n.focused", comment: ""), isOn: sw.binding("notifications.when_focused", token: token))
+                SDivider()
+                SToggleRow(icon: "", title: NSLocalizedString("set.n.sound", comment: ""), isOn: sw.binding("notifications.sound", token: token))
+                SDivider()
+                SToggleRow(icon: "", title: NSLocalizedString("set.n.previews", comment: ""), isOn: sw.binding("notifications.previews", token: token))
+                SDivider()
+                SToggleRow(icon: "", title: NSLocalizedString("set.n.focused", comment: ""), isOn: sw.binding("notifications.when_focused", token: token))
             }
-            TFSectionLabel(text: NSLocalizedString("set.n.groups.sec", comment: ""))
-            TFCard {
-                TFToggleRow(icon: "person.3", title: NSLocalizedString("set.n.groups", comment: ""), isOn: sw.binding("notifications.groups", token: token))
-                TFDivider()
-                TFToggleRow(icon: "at", title: NSLocalizedString("set.n.mentions", comment: ""), isOn: sw.binding("notifications.mentions", token: token))
-                TFDivider()
-                TFToggleRow(icon: "at.badge.plus", title: NSLocalizedString("set.n.mentions.muted", comment: ""), isOn: sw.binding("notifications.mentions_in_muted", token: token))
+            SSection(text: NSLocalizedString("set.n.groups.sec", comment: ""))
+            SCard {
+                SToggleRow(icon: "", title: NSLocalizedString("set.n.groups", comment: ""), isOn: sw.binding("notifications.groups", token: token))
+                SDivider()
+                SToggleRow(icon: "", title: NSLocalizedString("set.n.mentions", comment: ""), isOn: sw.binding("notifications.mentions", token: token))
+                SDivider()
+                SToggleRow(icon: "", title: NSLocalizedString("set.n.mentions.muted", comment: ""), isOn: sw.binding("notifications.mentions_in_muted", token: token))
             }
-            Text("settings.notifications.text").font(.system(size: 12)).foregroundStyle(Theme.faint)
+            Text("settings.notifications.text").font(.system(size: 13)).foregroundStyle(SetUI.dim).padding(.horizontal, 4)
             if let p = sw.problem { Text(p).font(.system(size: 12)).foregroundStyle(Theme.danger) }
         }
         .task { await sw.load(token) }
@@ -601,40 +637,55 @@ struct PrivacyPage: View {
     @State private var problem: String?
     @State private var pinSaved = BiometricPIN.isSaved
     @State private var presence: PresencePrivacy?
+    @ObservedObject private var calls = CallManager.shared
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
-        SettingsPage(title: NSLocalizedString("settings.privacy", comment: "")) {
+        SettingsPage(title: NSLocalizedString("settings.privacy", comment: ""), subtitle: NSLocalizedString("settings.privacy.sub", comment: ""), icon: "checkmark.shield") {
+            SBanner(icon: "checkmark.shield", title: NSLocalizedString("ux3.set.p.title", comment: ""), subtitle: NSLocalizedString("ux3.set.p.banner", comment: ""))
             // Who can see my personal info: Last seen and online (website LastSeenPrivacy.tsx, server d4d2e77)
-            TFSectionLabel(text: NSLocalizedString("ls.section", comment: ""))
-            TFCard {
+            SSection(text: NSLocalizedString("ls.section", comment: ""))
+            SCard {
                 NavigationLink { LastSeenPrivacyView() } label: {
-                    TFRow(icon: "eye", title: NSLocalizedString("ls.row", comment: ""), subtitle: LastSeenPrivacyView.summary(presence))
+                    SRow(icon: "eye", title: NSLocalizedString("ls.row", comment: ""), subtitle: LastSeenPrivacyView.summary(presence))
                 }
                 .buttonStyle(.plain)
             }
             .task { presence = try? await APIClient.shared.presencePrivacy(token: token) }
-            TFCard {
-                TFToggleRow(icon: "checkmark.message", title: NSLocalizedString("set.p.receipts", comment: ""), subtitle: NSLocalizedString("set.p.receipts.sub", comment: ""),
+            SSection(text: NSLocalizedString("ux3.set.p.messages", comment: ""))
+            SCard {
+                SToggleRow(icon: "", title: NSLocalizedString("set.p.receipts", comment: ""), subtitle: NSLocalizedString("set.p.receipts.sub", comment: ""),
                             isOn: sw.binding("privacy.read_receipts", token: token))
             }
-            TFSectionLabel(text: NSLocalizedString("settings.calls", comment: ""))
-            TFCard {
-                TFToggleRow(icon: "phone", title: NSLocalizedString("set.p.calls", comment: ""), isOn: sw.binding("privacy.calls_enabled", token: token))
-                TFDivider()
-                TFToggleRow(icon: "person.crop.circle.badge.checkmark", title: NSLocalizedString("set.p.contactsonly", comment: ""),
-                            isOn: sw.binding("privacy.calls_contacts_only", token: token))
-            }
-            TFSectionLabel(text: NSLocalizedString("set.chatlock", comment: ""))
-            TFCard {
-                HStack {
-                    Image(systemName: "lock").foregroundStyle(Theme.accent).frame(width: 24)
-                    Text("lock.pin").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
-                    Spacer()
-                    Button(LocalizedStringKey(hasPIN ? "set.change" : "set.set")) { pinForm.toggle() }
-                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+            // Calls: only while calls are on for the account; "Only my contacts" only while audio calls are allowed (web)
+            if calls.enabled {
+                SSection(text: NSLocalizedString("settings.calls", comment: ""))
+                SCard {
+                    SToggleRow(icon: "", title: NSLocalizedString("set.p.calls", comment: ""), isOn: sw.binding("privacy.calls_enabled", token: token))
+                    if sw.values["privacy.calls_enabled"] ?? true {
+                        SDivider()
+                        SToggleRow(icon: "", title: NSLocalizedString("set.p.contactsonly", comment: ""),
+                                    isOn: sw.binding("privacy.calls_contacts_only", token: token))
+                    }
                 }
-                .padding(14)
+            }
+            SSection(text: NSLocalizedString("set.chatlock", comment: ""))
+            SCard {
+                HStack(spacing: 14) {
+                    Image(systemName: "lock").font(.system(size: 19)).foregroundStyle(SetUI.accent).frame(width: 24).padding(.horizontal, 4)
+                    Text("lock.pin").font(.system(size: 16, weight: .semibold)).foregroundStyle(SetUI.text)
+                    Spacer()
+                    // .chip-btn: the Calls pill button
+                    Button { pinForm.toggle() } label: {
+                        Text(LocalizedStringKey(hasPIN ? "set.change" : "set.set")).font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Theme.dyn(0xE6F2F5, 0x0E2A3A))
+                            .padding(.horizontal, 16).frame(minHeight: 40)
+                            .background(Theme.dyn(0x08D9D9, 0xF2F8FA, 0.06, 1), in: Capsule())
+                            .overlay(Capsule().stroke(Theme.dyn(0x288CAA, 0x0A8FA0, 0.45, 0.4), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10).frame(minHeight: 64)
                 if pinForm {
                     VStack(spacing: 10) {
                         SecureField("set.password.account", text: $password).textContentType(.password)
@@ -651,17 +702,17 @@ struct PrivacyPage: View {
                     .padding(.horizontal, 14).padding(.bottom, 14)
                 }
                 if BiometricPIN.biometryAvailable && pinSaved {
-                    TFDivider()
+                    SDivider()
                     Button {
                         BiometricPIN.delete()
                         pinSaved = false
                     } label: {
-                        TFRow(icon: "faceid", title: String(format: NSLocalizedString("settings.lock.forget", comment: ""), BiometricPIN.biometryName),
+                        SRow(icon: "faceid", title: String(format: NSLocalizedString("settings.lock.forget", comment: ""), BiometricPIN.biometryName),
                               tint: Theme.danger, showChevron: false)
                     }
                 }
                 if unlocked {
-                    TFDivider()
+                    SDivider()
                     HStack {
                         Text("set.lock.open").font(.system(size: 13)).foregroundStyle(Theme.muted)
                         Spacer()
@@ -719,63 +770,141 @@ struct CallsPage: View {
     @State private var history: [CallHistoryItem] = []
     @State private var names: [String: ConversationSummary] = [:]
     @State private var confirmClear = false
+    @State private var loaded = false
     @ObservedObject private var calls = CallManager.shared
     private var token: String { store.session?.token ?? "" }
 
-    var body: some View {
-        SettingsPage(title: NSLocalizedString("settings.calls", comment: "")) {
-            HStack(spacing: 12) {
-                Image(systemName: "phone.fill").font(.system(size: 20)).foregroundStyle(Theme.onAccent)
-                    .frame(width: 46, height: 46).background(Theme.sendGradient, in: Circle())
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("set.c.hero").font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.text)
-                    Text("set.c.hero.sub").font(.system(size: 12)).foregroundStyle(Theme.faint)
+    /// .cs-row: a 40 pt icon tile (radius 12; bare in the "This Device" list), the label 16 and its 13 note, the control.
+    private func csRow<Control: View>(icon: String, title: String, note: String? = nil, plain: Bool = false,
+                                      @ViewBuilder _ control: () -> Control) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon).font(.system(size: 19)).foregroundStyle(SetUI.accent)
+                .frame(width: plain ? 32 : 40, height: 40)
+                .background(plain ? Color.clear : SetUI.tileFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(plain ? Color.clear : SetUI.tileEdge, lineWidth: 1))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(LocalizedStringKey(title)).font(.system(size: 16, weight: .semibold)).foregroundStyle(SetUI.text)
+                if let note { Text(LocalizedStringKey(note)).font(.system(size: 13)).foregroundStyle(SetUI.sub).fixedSize(horizontal: false, vertical: true) }
+            }
+            Spacer(minLength: 8)
+            control()
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .frame(minHeight: 64)
+    }
+
+    /// .cs-call: face 46, name 16, the direction arrow (green answered, red missed) with "Outgoing · 4:47", the time, a 44 pt
+    /// call-back circle.
+    private func callRow(_ c: CallHistoryItem) -> some View {
+        let chat = names[c.conversation_id]
+        let ok = c.status == "completed" || c.duration_ms > 0
+        let bad = !ok && (c.status == "missed" || c.status == "declined" || c.status == "failed")
+        let name = chat?.title ?? "—"
+        let when = Date(timeIntervalSince1970: Double(c.created_at > 100_000_000_000 ? c.created_at / 1000 : c.created_at))
+        return HStack(spacing: 12) {
+            Avatar(token: token, userID: c.peer_id, avatarID: nil, title: name, size: 46)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(name).font(.system(size: 16, weight: .semibold)).foregroundStyle(SetUI.text).lineLimit(1)
+                HStack(spacing: 6) {
+                    Image(systemName: c.direction == "outgoing" ? "arrow.up.right" : "arrow.down.left")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(ok ? Theme.hex(0x14D99A) : (bad ? Theme.hex(0xFF5E6E) : Theme.hex(0x8FA8B3)))
+                    Text(Self.label(c)).font(.system(size: 13.5))
+                        .foregroundStyle(bad ? Theme.dyn(0xC9A0A6, 0xA4505C) : Theme.dyn(0xA9BCC6, 0x46657A)).lineLimit(1)
                 }
             }
-            TFCard {
-                TFToggleRow(icon: "questionmark.circle", title: NSLocalizedString("set.c.confirm", comment: ""), isOn: sw.binding("calls.confirm", token: token))
+            Spacer(minLength: 6)
+            Text(ChatRow.timeLabel(when)).font(.system(size: 13)).monospacedDigit().foregroundStyle(Theme.dyn(0xA9BCC6, 0x46657A))
+            Button { if let chat { calls.start(conversationID: chat.conversation_id, peerName: chat.title, peerID: chat.peer_id) } } label: {
+                Image(systemName: "phone").font(.system(size: 17)).foregroundStyle(Theme.dyn(0xE6F2F5, 0x0E2A3A))
+                    .frame(width: 44, height: 44)
+                    .background(Theme.dyn(0x031E28, 0xF2F8FA, 0.7, 1), in: Circle())
+                    .overlay(Circle().stroke(Theme.dyn(0x288CAA, 0x0A8FA0, 0.45, 0.4), lineWidth: 1))
             }
-            TFSectionLabel(text: NSLocalizedString("set.c.device", comment: ""))
-            TFCard {
-                TFToggleRow(icon: "bell.and.waves.left.and.right", title: NSLocalizedString("set.c.ring", comment: ""), isOn: $ring)
-                    .onChange(of: ring) { _ in CallManager.shared.applyRingSetting() }
-                TFDivider()
-                TFKeyValue(key: NSLocalizedString("set.c.mic", comment: ""), value: NSLocalizedString("set.c.bydevice", comment: ""))
-                TFDivider()
-                TFKeyValue(key: NSLocalizedString("set.c.speaker", comment: ""), value: NSLocalizedString("set.c.bydevice", comment: ""))
+            .buttonStyle(.plain)
+            .disabled(chat == nil || calls.phase != .idle)
+            .opacity(chat == nil || calls.phase != .idle ? 0.45 : 1)
+            .accessibilityLabel(Text("call.voice"))
+        }
+        .padding(.leading, 14).padding(.trailing, 12).padding(.vertical, 8)
+        .frame(minHeight: 68)
+    }
+
+    /// "Outgoing", "Incoming" or "Missed", with the length when there was one.
+    static func label(_ c: CallHistoryItem) -> String {
+        let dir: String
+        switch (c.direction, c.status) {
+        case ("incoming", "missed"): dir = NSLocalizedString("set.c.missed", comment: "")
+        case ("incoming", _): dir = NSLocalizedString("set.c.incoming", comment: "")
+        default: dir = NSLocalizedString("set.c.outgoing", comment: "")
+        }
+        return c.duration_ms > 0 ? dir + " · " + VoiceBubble.length(c.duration_ms) : dir
+    }
+
+    var body: some View {
+        // 43-calls-settings.css: the "Voice Calls" banner, the confirmation row, THIS DEVICE (ring, microphone, speaker),
+        // RECENT CALLS with Clear All, each call with the face, name, direction and length, time, and a call-back button
+        SettingsPage(title: NSLocalizedString("settings.calls", comment: ""), subtitle: NSLocalizedString("settings.calls.sub", comment: ""), icon: "phone") {
+            SBanner(icon: "phone", title: NSLocalizedString("set.c.hero", comment: ""), subtitle: NSLocalizedString("set.c.hero.sub", comment: ""))
+            SCard {
+                csRow(icon: "questionmark.circle", title: "set.c.confirm", note: "ux3.set.c.confirm.sub") {
+                    Toggle(NSLocalizedString("set.c.confirm", comment: ""), isOn: sw.binding("calls.confirm", token: token))
+                        .labelsHidden().toggleStyle(TFSwitchStyle())
+                }
+            }
+            SSection(text: NSLocalizedString("set.c.device", comment: ""))
+            SCard {
+                csRow(icon: "bell.and.waves.left.and.right", title: "set.c.ring", plain: true) {
+                    Toggle(NSLocalizedString("set.c.ring", comment: ""), isOn: $ring).labelsHidden().toggleStyle(TFSwitchStyle())
+                }
+                .onChange(of: ring) { _ in CallManager.shared.applyRingSetting() }
+                SDivider()
+                csRow(icon: "mic", title: "set.c.mic", plain: true) {
+                    Text("set.c.bydevice").font(.system(size: 14)).foregroundStyle(SetUI.sub)
+                }
+                SDivider()
+                csRow(icon: "speaker.wave.2", title: "set.c.speaker", plain: true) {
+                    Text("set.c.bydevice").font(.system(size: 14)).foregroundStyle(SetUI.sub)
+                }
             }
             HStack {
-                TFSectionLabel(text: NSLocalizedString("set.c.recent", comment: ""))
+                SSection(text: NSLocalizedString("set.c.recent", comment: ""))
+                Spacer()
                 if !history.isEmpty {
-                    Button("set.c.clear") { confirmClear = true }.font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.danger)
+                    Button { confirmClear = true } label: {
+                        Label("set.c.clear", systemImage: "trash").font(.system(size: 14, weight: .semibold)).foregroundStyle(SetUI.accent)
+                            .padding(.horizontal, 10).frame(minHeight: 40)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(calls.phase != .idle)
+                    .opacity(calls.phase != .idle ? 0.45 : 1)
+                    .padding(.top, 8)
                 }
             }
-            if history.isEmpty {
-                Text("set.c.none").font(.system(size: 13)).foregroundStyle(Theme.faint)
-            } else {
-                TFCard {
-                    ForEach(Array(history.enumerated()), id: \.element.id) { i, c in
-                        let chat = names[c.conversation_id]
-                        let missed = c.direction == "incoming" && (c.status == "missed" || c.status == "declined")
+            if !loaded {
+                SCard {
+                    ForEach(0..<3, id: \.self) { i in
+                        if i > 0 { SDivider() }
                         HStack(spacing: 12) {
-                            Image(systemName: c.direction == "incoming" ? "phone.arrow.down.left" : "phone.arrow.up.right")
-                                .foregroundStyle(missed ? Theme.danger : Theme.accent).frame(width: 24)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(chat?.title ?? "—").font(.system(size: 15, weight: .semibold)).foregroundStyle(missed ? Theme.danger : Theme.text)
-                                Text(Self.line(c)).font(.system(size: 12)).foregroundStyle(Theme.faint)
+                            QuietSkeleton(width: 46, height: 46, radius: 23)
+                            VStack(alignment: .leading, spacing: 6) {
+                                QuietSkeleton(width: 110, height: 13, radius: 4)
+                                QuietSkeleton(width: 150, height: 10, radius: 4)
                             }
                             Spacer()
-                            if let chat {
-                                Button { calls.start(conversationID: chat.conversation_id, peerName: chat.title, peerID: chat.peer_id) } label: {
-                                    Image(systemName: "phone").foregroundStyle(Theme.accent).frame(width: 34, height: 34)
-                                        .overlay(Circle().stroke(Theme.borderStrong, lineWidth: 1))
-                                }
-                                .disabled(calls.phase != .idle)
-                                .accessibilityLabel(Text("call.voice"))
-                            }
                         }
-                        .padding(.horizontal, 14).padding(.vertical, 10)
-                        if i < history.count - 1 { TFDivider() }
+                        .padding(.horizontal, 14).frame(minHeight: 68)
+                    }
+                }
+            } else if history.isEmpty {
+                Text("set.c.none").font(.system(size: 14)).foregroundStyle(Theme.dyn(0xA9BCC6, 0x46657A))
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+                    .sCardChrome()
+            } else {
+                SCard {
+                    ForEach(Array(history.enumerated()), id: \.element.id) { i, c in
+                        if i > 0 { SDivider() }
+                        callRow(c)
                     }
                 }
             }
@@ -804,6 +933,7 @@ struct CallsPage: View {
     private func load() async {
         await sw.load(token)
         history = (try? await APIClient.shared.stCallHistory(token: token)) ?? history
+        loaded = true
         let chats = (try? await APIClient.shared.conversations(token: token)) ?? []
         names = Dictionary(chats.map { ($0.conversation_id, $0) }, uniquingKeysWith: { a, _ in a })
     }
@@ -814,11 +944,14 @@ struct CallsPage: View {
 struct AppearancePage: View {
     @AppStorage("tf.night") private var night = true
     var body: some View {
-        SettingsPage(title: NSLocalizedString("settings.appearance", comment: "")) {
-            TFCard {
-                TFToggleRow(icon: "moon", title: NSLocalizedString("set.night", comment: ""), subtitle: NSLocalizedString("set.night.sub", comment: ""), isOn: $night)
+        SettingsPage(title: NSLocalizedString("settings.appearance", comment: ""),
+                     subtitle: NSLocalizedString(night ? "ux3.set.night" : "ux3.set.day", comment: ""), icon: "paintpalette") {
+            SBanner(icon: "moon", title: NSLocalizedString("ux3.set.theme", comment: ""), subtitle: NSLocalizedString("ux3.set.theme.sub", comment: ""))
+            SCard {
+                SToggleRow(icon: "", title: NSLocalizedString("set.night", comment: ""),
+                            subtitle: NSLocalizedString(night ? "ux3.set.night.on" : "ux3.set.night.off", comment: ""), isOn: $night)
             }
-            Text("set.night.note").font(.system(size: 12)).foregroundStyle(Theme.faint)
+            Text("set.night.note").font(.system(size: 13)).foregroundStyle(SetUI.dim).padding(.horizontal, 4)
         }
     }
 }
@@ -829,26 +962,23 @@ struct AboutPage: View {
     @State private var mediaLog = MediaLog.read()
     @State private var showLog = false
     var body: some View {
-        SettingsPage(title: NSLocalizedString("settings.about", comment: "")) {
-            VStack(spacing: 10) {
-                Image("BrandFlower").resizable().scaledToFit().frame(width: 80, height: 80)
-                BrandWordmark(size: 24)
-            }
-            .frame(maxWidth: .infinity).padding(.vertical, 10)
-            TFCard {
-                TFKeyValue(key: NSLocalizedString("set.version", comment: ""), value: AppConfig.version, action: NSLocalizedString("set.copy", comment: "")) {
+        SettingsPage(title: NSLocalizedString("settings.about", comment: ""),
+                     subtitle: String(format: NSLocalizedString("ux3.set.version.n", comment: ""), AppConfig.version), icon: "info.circle") {
+            SBanner(icon: "info.circle", title: "Tradeflor", subtitle: NSLocalizedString("ux3.set.about.sub", comment: ""), image: "BrandFlower")
+            SCard {
+                SKeyValue(key: NSLocalizedString("set.version", comment: ""), value: AppConfig.version, action: NSLocalizedString("set.copy", comment: "")) {
                     UIPasteboard.general.string = "Tradeflor iOS \(AppConfig.version)"
                     note = NSLocalizedString("set.copied", comment: "")
                 }
-                TFDivider()
-                TFKeyValue(key: NSLocalizedString("set.server", comment: ""), value: AppConfig.apiBase.host ?? "")
-                TFDivider()
+                SDivider()
+                SKeyValue(key: NSLocalizedString("set.server", comment: ""), value: AppConfig.apiBase.host ?? "")
+                SDivider()
                 VStack(alignment: .leading, spacing: 3) {
                     Text("about.live").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
                     Text(stats.summary).font(.system(size: 12)).foregroundStyle(Theme.faint)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.vertical, 10)
-                TFDivider()
+                SDivider()
                 VStack(alignment: .leading, spacing: 6) {
                     Text("about.medialog").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
                     Text(mediaLog.last.map(MediaLog.diagnose) ?? NSLocalizedString("about.medialog.none", comment: ""))

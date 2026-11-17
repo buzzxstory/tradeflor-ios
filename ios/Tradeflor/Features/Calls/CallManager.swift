@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import AVFoundation
 import CallKit
+import UIKit
 import WebRTC
 
 /// 1-to-1 voice calls, interoperable with the website's call engine (desktop/src/features/calls/callEngine.ts) and the
@@ -53,6 +54,8 @@ final class CallManager: NSObject, ObservableObject {
 
     private var callID: String?
     private var conversationID: String?
+    /// The chat this call belongs to (the call screen's "Message" button).
+    var conversation: String? { conversationID }
     private var role: Role = .caller
     private var acknowledged = false
     private var uuid = UUID()
@@ -93,10 +96,14 @@ final class CallManager: NSObject, ObservableObject {
         cfg.maximumCallGroups = 1
         cfg.maximumCallsPerCallGroup = 1
         cfg.supportedHandleTypes = [.generic]
+        // not in the Phone app's Recents: tapping one there would open the app without placing the call (no call intents)
         cfg.includesCallsInRecents = false
+        // the flower on the system call screen (CallKit uses the image's alpha only)
+        cfg.iconTemplateImageData = UIImage(named: "TabFlower")?.pngData()
         provider = CXProvider(configuration: cfg)
         super.init()
         provider.setDelegate(self, queue: nil)
+        CallDeviceGuard.shared.watch(self) // proximity sensor and no auto-lock during a call
         RTCAudioSession.sharedInstance().useManualAudio = true
         RTCAudioSession.sharedInstance().isAudioEnabled = false
     }
@@ -370,7 +377,17 @@ final class CallManager: NSObject, ObservableObject {
         let update = callCapabilities()
         update.remoteHandle = CXHandle(type: .generic, value: peerName)
         update.localizedCallerName = peerName
-        provider.reportNewIncomingCall(with: uuid, update: update) { _ in }
+        let ringUUID = uuid, name = peerName, conv = conversationID
+        provider.reportNewIncomingCall(with: uuid, update: update) { err in
+            // CallKit refused to ring (not because of Do Not Disturb or a block): a plain notification instead
+            guard let err else { return }
+            let code = (err as? CXErrorCodeIncomingCallError)?.code
+            guard code != .filteredByDoNotDisturb, code != .filteredByBlockList else { return }
+            Task { @MainActor in
+                guard self.uuid == ringUUID, self.phase == .incoming else { return }
+                LocalNotifier.shared.incomingCallFallback(name: self.peerName.isEmpty ? name : self.peerName, callID: id, conversationID: conv)
+            }
+        }
         showScreen = true
         arm(seconds: 50) { [weak self] in
             guard let self, self.phase == .incoming else { return }
@@ -651,6 +668,12 @@ final class CallManager: NSObject, ObservableObject {
     private func finish() {
         guard phase != .ended else { return }
         let hadCall = callID != nil
+        // rang here and nobody answered on this phone: "Missed voice call" (not when declined or answered elsewhere)
+        if hadCall, phase == .incoming, role == .callee, endReason != "declined", endReason != "answered_elsewhere",
+           endReason != "mic_denied" {
+            LocalNotifier.shared.missedCall(name: peerName, peerID: peerID, conversationID: conversationID, callID: callID ?? "")
+        }
+        if let id = callID { LocalNotifier.shared.clearIncomingCall(callID: id) }
         CallTones.shared.ringback(false)
         if hadCall { if endReason == "busy" { CallTones.shared.busy() } else { CallTones.shared.end() } }
         safetyTimer?.cancel()
