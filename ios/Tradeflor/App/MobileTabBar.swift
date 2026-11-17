@@ -16,11 +16,35 @@ final class TabChrome: ObservableObject {
 
     var hidden: Bool { conversations > 0 || keyboard }
 
+    /// A screenshot taken while no keyboard was up: iOS gives the last text field its focus back when the screenshot
+    /// preview goes, and the keyboard would pop up by itself. Within a few seconds of the shot it is sent away again.
+    private var shotAt: Date?
+    private var keyboardAtShot = false
+
     private init() {
         NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)
-            .sink { [weak self] _ in self?.keyboard = true }.store(in: &subs)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                if let t = self.shotAt, Date().timeIntervalSince(t) < 6, !self.keyboardAtShot {
+                    self.shotAt = nil
+                    DispatchQueue.main.async { Self.dismissKeyboard() }
+                    return
+                }
+                self.keyboard = true
+            }.store(in: &subs)
         NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
             .sink { [weak self] _ in self?.keyboard = false }.store(in: &subs)
+        NotificationCenter.default.publisher(for: UIApplication.userDidTakeScreenshotNotification)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.shotAt = Date()
+                self.keyboardAtShot = self.keyboard
+            }.store(in: &subs)
+    }
+
+    /// Sends the keyboard away (whatever field has it).
+    static func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
     func conversationOpened() { conversations += 1 }

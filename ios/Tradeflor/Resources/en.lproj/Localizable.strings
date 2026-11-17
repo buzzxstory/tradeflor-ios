@@ -1810,3 +1810,36 @@
 "emoji.recent" = "Recent";
 
 "emoji.title" = "Emoji";
+
+"ed.crop" = "Crop and rotate";
+"ed.sticker" = "Add a sticker";
+"ed.text" = "Add text";
+"ed.draw" = "Draw";
+"ed.undo" = "Undo";
+"ed.done" = "Done";
+"ed.cancel" = "Cancel";
+"ed.rotate" = "Rotate 90°";
+"ed.reset" = "Reset";
+"ed.aspect.free" = "Free";
+"ed.aspect.original" = "Original";
+"ed.aspect.square" = "Square";
+"ed.crop.corner" = "Crop corner";
+"ed.crop.area" = "Crop area, drag to move";
+"ed.text.placeholder" = "Type something";
+"ed.text.bg" = "Text background";
+"ed.delete" = "Delete";
+"ed.trash" = "Drop here to delete";
+"ed.overlay.text" = "Text: %@";
+"ed.overlay.sticker" = "Sticker %@";
+"ed.draw.area" = "Drawing area";
+"ed.preparing" = "Preparing…";
+"ed.color.white" = "White";
+"ed.color.black" = "Black";
+"ed.color.red" = "Red";
+"ed.color.orange" = "Orange";
+"ed.color.yellow" = "Yellow";
+"ed.color.green" = "Green";
+"ed.color.teal" = "Teal";
+"ed.color.blue" = "Blue";
+"ed.color.purple" = "Purple";
+"ed.color.pink" = "Pink";

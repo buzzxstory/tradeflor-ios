@@ -1810,3 +1810,36 @@
 "emoji.recent" = "الأخيرة";
 
 "emoji.title" = "الإيموجي";
+
+"ed.crop" = "قص وتدوير";
+"ed.sticker" = "إضافة ملصق";
+"ed.text" = "إضافة نص";
+"ed.draw" = "رسم";
+"ed.undo" = "تراجع";
+"ed.done" = "تم";
+"ed.cancel" = "إلغاء";
+"ed.rotate" = "تدوير 90°";
+"ed.reset" = "إعادة ضبط";
+"ed.aspect.free" = "حر";
+"ed.aspect.original" = "الأصلي";
+"ed.aspect.square" = "مربع";
+"ed.crop.corner" = "زاوية القص";
+"ed.crop.area" = "منطقة القص، اسحب للتحريك";
+"ed.text.placeholder" = "اكتب شيئاً";
+"ed.text.bg" = "خلفية النص";
+"ed.delete" = "حذف";
+"ed.trash" = "أفلت هنا للحذف";
+"ed.overlay.text" = "نص: %@";
+"ed.overlay.sticker" = "ملصق %@";
+"ed.draw.area" = "منطقة الرسم";
+"ed.preparing" = "جارٍ التحضير…";
+"ed.color.white" = "أبيض";
+"ed.color.black" = "أسود";
+"ed.color.red" = "أحمر";
+"ed.color.orange" = "برتقالي";
+"ed.color.yellow" = "أصفر";
+"ed.color.green" = "أخضر";
+"ed.color.teal" = "فيروزي";
+"ed.color.blue" = "أزرق";
+"ed.color.purple" = "بنفسجي";
+"ed.color.pink" = "وردي";

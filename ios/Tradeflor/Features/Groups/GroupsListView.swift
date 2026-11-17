@@ -70,6 +70,8 @@ struct GroupsListView: View {
                         .padding(.bottom, 12)
                 }
             }
+            .scrollDismissesKeyboard(.immediately)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .refreshable { await load() }
             .background(ListAmbientBackground())
             .sheet(isPresented: $showFolderEditor) {

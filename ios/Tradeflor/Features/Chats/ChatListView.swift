@@ -84,6 +84,8 @@ struct ChatListView: View {
                         .padding(.bottom, 12)
                 }
             }
+            .scrollDismissesKeyboard(.immediately)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
             .refreshable {
                 await load()
                 await loadStatuses()
