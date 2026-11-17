@@ -211,7 +211,7 @@ struct AccountPage: View {
                 }
                 TFDivider()
                 TFKeyValue(key: NSLocalizedString("settings.connection", comment: ""),
-                           value: NSLocalizedString(live.connected ? "settings.live" : "set.reconnecting", comment: ""))
+                           value: NSLocalizedString(live.steadyConnected ? "settings.live" : "set.reconnecting", comment: ""))
             }
             TFSectionLabel(text: NSLocalizedString("set.account.info", comment: ""))
             Text("set.account.private").font(.system(size: 12)).foregroundStyle(Theme.faint)

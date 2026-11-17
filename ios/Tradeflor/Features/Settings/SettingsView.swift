@@ -10,7 +10,9 @@ struct SettingsView: View {
     @EnvironmentObject private var live: LiveConnection
     @State private var profile: Profile?
     @State private var identity: StIdentity?
-    @State private var adminRole = ""
+    /// The last role answer for this account, kept on the device and shown at once (the server still checks every admin
+    /// request): Admin Center no longer vanishes on a fast refresh or a refused check (web 5106e98).
+    @State private var adminRole = UserDefaults.standard.string(forKey: "tf.admin.role") ?? ""
     @State private var confirmSignOut = false
     @State private var sharingCount = 0
     @ObservedObject private var calls = CallManager.shared
@@ -133,14 +135,14 @@ struct SettingsView: View {
     private var profileCard: some View {
         HStack(spacing: 12) {
             Avatar(token: token, userID: profile?.user_id ?? (store.session?.userID ?? ""),
-                   avatarID: (profile?.avatar_id.isEmpty ?? true) ? nil : profile?.avatar_id, title: name, size: 50, online: live.connected)
+                   avatarID: (profile?.avatar_id.isEmpty ?? true) ? nil : profile?.avatar_id, title: name, size: 50, online: live.steadyConnected)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
                 Text("@" + (profile?.username ?? store.session?.username ?? "")).font(.system(size: 12)).foregroundStyle(Theme.faint)
                 HStack(spacing: 4) {
-                    Circle().fill(live.connected ? Theme.online : Theme.gold).frame(width: 6, height: 6)
-                    Text(LocalizedStringKey(live.connected ? "settings.online" : "set.reconnecting")).font(.system(size: 11.5))
-                        .foregroundStyle(live.connected ? Theme.online : Theme.gold)
+                    Circle().fill(live.steadyConnected ? Theme.online : Theme.gold).frame(width: 6, height: 6)
+                    Text(LocalizedStringKey(live.steadyConnected ? "settings.online" : "set.reconnecting")).font(.system(size: 11.5))
+                        .foregroundStyle(live.steadyConnected ? Theme.online : Theme.gold)
                 }
             }
             Spacer()
@@ -166,7 +168,22 @@ struct SettingsView: View {
             return
         } catch {}
         sharingCount = await APIClient.shared.stMyLocations(token: token).filter { $0.stopped != true }.count
-        adminRole = await APIClient.shared.stAdminMe(token: token)?.role ?? ""
+        for n in 0..<6 {
+            switch await APIClient.shared.stAdminCheck(token: token) {
+            case .role(let r):
+                adminRole = r
+                UserDefaults.standard.set(r, forKey: "tf.admin.role")
+                return
+            case .none:
+                adminRole = ""
+                UserDefaults.standard.removeObject(forKey: "tf.admin.role")
+                return
+            case .unknown:
+                // refused for now (429 after many refreshes, network): keep it and ask again in 2 … 30 s
+                try? await Task.sleep(nanoseconds: UInt64(min(30, 2 << n)) * 1_000_000_000)
+                if Task.isCancelled { return }
+            }
+        }
     }
 }
 

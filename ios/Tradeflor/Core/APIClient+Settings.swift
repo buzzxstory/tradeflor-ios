@@ -86,6 +86,26 @@ extension APIClient {
         return try? JSONDecoder().decode(AdminMe.self, from: d)
     }
 
+    /// The admin role check with its answer kind (web 5106e98): .role / .none (401 / 403 / 404: no access) / .unknown
+    /// (too many requests, network…: keep what is shown and ask again soon).
+    enum AdminCheck { case role(String), none, unknown }
+
+    func stAdminCheck(token: String) async -> AdminCheck {
+        do {
+            let d = try await getJSON("admin/me", token: token)
+            if let me = try? JSONDecoder().decode(AdminMe.self, from: d) { return me.role.isEmpty ? .none : .role(me.role) }
+            return .none
+        } catch APIError.badCredentials {
+            return .none
+        } catch APIError.refused {
+            return .none
+        } catch APIError.server(let status) where status == 403 || status == 404 {
+            return .none
+        } catch {
+            return .unknown
+        }
+    }
+
     func stAdminOverview(token: String) async throws -> AdminOverview {
         // the website sends the offset from UTC in seconds
         return try decode(AdminOverview.self, try await getJSON("admin/overview?tz=\(TimeZone.current.secondsFromGMT())", token: token))

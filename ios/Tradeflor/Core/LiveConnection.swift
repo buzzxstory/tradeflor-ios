@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Network
 
 /// The app-wide live connection to /ws (same socket the website uses). New messages arrive here the moment the
 /// server sends them; screens subscribe to `messages` and `changes`.
@@ -8,7 +9,26 @@ import Combine
 /// - reconnects with backoff (1, 2, 4 ... 30 s), and immediately when the app comes back to the foreground
 @MainActor
 final class LiveConnection: ObservableObject {
-    @Published private(set) var connected = false
+    @Published private(set) var connected = false {
+        didSet { connectedChanged() }
+    }
+    /// What the screen says about the connection: it waits 4 s before saying it is missing, so a quick reconnect (a
+    /// refresh, back from the background) never flashes "Reconnecting…" (web 96d0f8b). Sending and calls use `connected`.
+    @Published private(set) var steadyConnected = true
+    private var steadyTask: Task<Void, Never>?
+    private let path = NWPathMonitor()
+    private var offline = false
+
+    private func connectedChanged() {
+        steadyTask?.cancel()
+        if connected { steadyConnected = true; return }
+        if offline { steadyConnected = false; return } // the phone is offline: say so at once
+        steadyTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard let self, !Task.isCancelled, !self.connected else { return }
+            self.steadyConnected = false
+        }
+    }
 
     /// A new message in any conversation.
     let messages = PassthroughSubject<Message, Never>()
@@ -44,6 +64,17 @@ final class LiveConnection: ObservableObject {
     private var loop: Task<Void, Never>?
     private var lastPong = Date()
     private var attempt = 0
+
+    init() {
+        path.pathUpdateHandler = { [weak self] p in
+            Task { @MainActor in
+                guard let self else { return }
+                self.offline = p.status != .satisfied
+                if self.offline && !self.connected { self.steadyConnected = false }
+            }
+        }
+        path.start(queue: DispatchQueue(label: "tf.live.path"))
+    }
 
     func start(token: String) {
         guard self.token != token || loop == nil else { return }
