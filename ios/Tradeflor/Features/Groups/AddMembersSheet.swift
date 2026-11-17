@@ -99,6 +99,7 @@ struct AddMembersSheet: View {
                 HStack(spacing: 6) {
                     (Text("PIN ").foregroundColor(Theme.gold.opacity(0.8)) + Text(c.pin).foregroundColor(Theme.gold).bold())
                         .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+                        .lineLimit(1).fixedSize()
                         .padding(.horizontal, 8).padding(.vertical, 2)
                         .background(Theme.gold.opacity(0.12), in: Capsule())
                         .overlay(Capsule().stroke(Theme.gold.opacity(0.4), lineWidth: 1))
