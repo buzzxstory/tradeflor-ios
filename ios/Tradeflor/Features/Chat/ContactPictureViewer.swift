@@ -22,7 +22,7 @@ struct ContactPictureViewer: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                Color.black.opacity(1 - min(0.6, abs(pull) / 600))
+                Color.black.opacity(Double(1 - min(CGFloat(0.6), abs(pull) / CGFloat(600))))
                 if let image {
                     Image(uiImage: image)
                         .resizable()
