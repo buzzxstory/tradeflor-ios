@@ -27,6 +27,7 @@ final class SessionStore: ObservableObject {
             await APIClient.shared.logout(token: token)
         }
         Keychain.delete()
+        ListCache.clear() // this account's lists leave the phone with it
         session = nil
     }
 

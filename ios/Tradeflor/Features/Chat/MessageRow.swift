@@ -115,7 +115,8 @@ struct MessageRow<Content: View>: View {
                 .padding(.bottom, isMedia && hasReactions ? 12 : 0)
             HStack(spacing: 10) {
                 if let exp = message.expires_at, exp > 0 {
-                    Label(Self.expiry(exp), systemImage: "timer").font(.caption2).foregroundStyle(Theme.faint)
+                    Image(systemName: "timer").font(.system(size: 9)).foregroundStyle(Theme.faint)
+                        .accessibilityLabel(Text(Self.expiry(exp)))
                 }
                 if options.isGroup, let v = message.views, v > 0 {
                     Label("\(v)", systemImage: "eye").font(.caption2).foregroundStyle(Theme.faint)
@@ -251,6 +252,7 @@ struct MessageRow<Content: View>: View {
                 Button(e) { onReact(e) }
             }
         }
+        .tfReactionRow()
         Button { actions.moreReactions() } label: { Label("chat.more.reactions", systemImage: "face.smiling") }
         Button { onReply() } label: { Label("chat.reply", systemImage: "arrowshape.turn.up.left") }
         if message.kind == "text" && !options.restricted {

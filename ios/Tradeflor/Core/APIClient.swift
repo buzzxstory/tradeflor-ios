@@ -175,8 +175,11 @@ final class APIClient {
         switch http.statusCode {
         case 200:
             if data.isEmpty || data == Data("null".utf8) { return [] }
-            do { return try JSONDecoder().decode([ConversationSummary]?.self, from: data) ?? [] }
-            catch { throw APIError.decoding }
+            do {
+                let out = try JSONDecoder().decode([ConversationSummary]?.self, from: data) ?? []
+                ListCache.save("conversations", token: token, data)
+                return out
+            } catch { throw APIError.decoding }
         case 401: throw APIError.badCredentials
         case 429: throw APIError.rateLimited
         default: throw APIError.server(status: http.statusCode)
@@ -299,6 +302,7 @@ final class APIClient {
     func groups(token: String) async throws -> [GroupSummary] {
         let data = try await getJSON("groups", token: token)
         if data.isEmpty || data == Data("null".utf8) { return [] }
+        ListCache.save("groups", token: token, data)
         // one entry the app cannot read must never hide every group: read each on its own and say what was skipped
         struct Lenient: Decodable {
             let value: GroupSummary?

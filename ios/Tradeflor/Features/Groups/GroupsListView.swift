@@ -336,6 +336,10 @@ struct GroupsListView: View {
     }
 
     private func load() async {
+        if groups.isEmpty {
+            let cached = ListCache.groups(token: token)
+            if !cached.isEmpty { groups = cached }
+        }
         loading = true
         defer { loading = false }
         do {

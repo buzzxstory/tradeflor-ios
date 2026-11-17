@@ -255,6 +255,7 @@ struct AlbumGrid: View {
             ControlGroup {
                 ForEach(["❤️", "🔥", "👏", "👍", "😂", "😮", "😡"], id: \.self) { e in Button(e) { actions.react(m, e) } }
             }
+        .tfReactionRow()
             Button { actions.reply(m) } label: { Label("chat.reply", systemImage: "arrowshape.turn.up.left") }
             if let f = actions.forward { Button { f(m) } label: { Label("chat.forward", systemImage: "arrowshape.turn.up.right") } }
             if let s = actions.save { Button { s(m) } label: { Label("chat.save.as", systemImage: "square.and.arrow.down") } }
@@ -348,5 +349,15 @@ struct UnreadBadge: View {
             .frame(minWidth: 22, minHeight: 22)
             .background(muted ? AnyShapeStyle(Theme.faint) : AnyShapeStyle(Theme.hex(0x00C6C4)), in: Capsule())
             .accessibilityLabel(Text(String(format: NSLocalizedString("chat.unread.n", comment: ""), count)))
+    }
+}
+
+
+extension View {
+    /// The quick reactions of a long-press menu as one horizontal row of emoji (WhatsApp), where iOS allows it.
+    @ViewBuilder func tfReactionRow() -> some View {
+        if #available(iOS 17.0, *) { self.controlGroupStyle(.palette) }
+        else if #available(iOS 16.4, *) { self.controlGroupStyle(.compactMenu) }
+        else { self }
     }
 }

@@ -64,3 +64,54 @@ enum MentionsBuilder {
         return out
     }
 }
+
+
+/// The last Chats and Groups lists of this account, kept on this phone (Caches) and shown at once on the next launch or
+/// tab visit, then refreshed from the server -- as WhatsApp does. Only for the signed-in session (a hash of its token
+/// names the file); another session's copy is never read, and a sign-out leaves it unreadable.
+enum ListCache {
+    private static var dir: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tf-lists", isDirectory: true)
+    }
+
+    private static func tag(_ token: String) -> String {
+        var h: UInt64 = 1469598103934665603
+        for b in token.utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
+        return String(h, radix: 36)
+    }
+
+    static func save(_ kind: String, token: String, _ data: Data) {
+        guard let dir else { return }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // one copy per kind: an older session's file goes
+        if let old = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
+            for f in old where f.hasPrefix(kind + "-") && f != "\(kind)-\(tag(token)).json" {
+                try? FileManager.default.removeItem(at: dir.appendingPathComponent(f))
+            }
+        }
+        try? data.write(to: dir.appendingPathComponent("\(kind)-\(tag(token)).json"), options: [.atomic, .completeFileProtection])
+    }
+
+    static func load(_ kind: String, token: String) -> Data? {
+        guard let dir, !token.isEmpty else { return nil }
+        return try? Data(contentsOf: dir.appendingPathComponent("\(kind)-\(tag(token)).json"))
+    }
+
+    static func conversations(token: String) -> [ConversationSummary] {
+        guard let d = load("conversations", token: token) else { return [] }
+        return ((try? JSONDecoder().decode([ConversationSummary]?.self, from: d)) ?? nil) ?? []
+    }
+
+    static func groups(token: String) -> [GroupSummary] {
+        guard let d = load("groups", token: token) else { return [] }
+        struct Lenient: Decodable {
+            let value: GroupSummary?
+            init(from decoder: Decoder) throws { value = try? GroupSummary(from: decoder) }
+        }
+        return ((try? JSONDecoder().decode([Lenient].self, from: d)) ?? []).compactMap(\.value)
+    }
+
+    static func clear() {
+        if let dir { try? FileManager.default.removeItem(at: dir) }
+    }
+}

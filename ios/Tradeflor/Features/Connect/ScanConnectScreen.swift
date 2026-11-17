@@ -280,6 +280,7 @@ struct ScanConnectScreen: View {
     private func scanTab(width: CGFloat, height: CGFloat, small: Bool) -> some View {
         let side = camSide(width: width, height: height, small: small)
         return VStack(spacing: 0) {
+            if pasteFocused { Spacer(minLength: 12) } else {
             ZStack {
                 ZStack {
                     RadialGradient(colors: [Theme.hex(0x0B2A38), Theme.hex(0x03101A)], center: UnitPoint(x: 0.5, y: 0.4), startRadius: 0, endRadius: side * 0.8)
@@ -296,6 +297,7 @@ struct ScanConnectScreen: View {
             .frame(maxHeight: .infinity)
 
             if camera.cams.count > 1 || camera.canFlip || camera.hasTorch { camRow }
+            }
             Text(note ?? " ").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.hex(0x7FF3F3))
                 .lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.8)
                 .frame(minHeight: 20).padding(.top, 8)

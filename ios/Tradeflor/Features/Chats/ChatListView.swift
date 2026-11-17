@@ -356,6 +356,11 @@ struct ChatListView: View {
 
     private func load(quiet: Bool = false) async {
         guard !token.isEmpty else { return }
+        if chats.isEmpty {
+            // the last list this phone saw, at once; the server's answer replaces it a moment later
+            let cached = ListCache.conversations(token: token).sorted { $0.last_message_at > $1.last_message_at }
+            if !cached.isEmpty { chats = cached }
+        }
         await loadPrefs()
         await loadLocks()
         if !quiet { loading = true }
