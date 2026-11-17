@@ -45,6 +45,7 @@ final class QRCamera: NSObject, ObservableObject, AVCaptureMetadataOutputObjects
         super.init()
         let nc = NotificationCenter.default
         observers.append(nc.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: .main) { [weak self] n in
+            guard self?.state != .unsupported, self?.state != .denied else { return } // no camera stays "no camera"
             let raw = (n.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber)?.intValue ?? -1
             switch AVCaptureSession.InterruptionReason(rawValue: raw) {
             case .videoDeviceInUseByAnotherClient?: self?.state = .busy
@@ -56,6 +57,7 @@ final class QRCamera: NSObject, ObservableObject, AVCaptureMetadataOutputObjects
             if self?.session.isRunning == true { self?.state = .live }
         })
         observers.append(nc.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: .main) { [weak self] _ in
+            guard self?.state != .unsupported, self?.state != .denied else { return }
             self?.state = .lost
         })
     }

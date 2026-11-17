@@ -138,7 +138,7 @@ struct ScanConnectScreen: View {
     // MARK: sizes (73-scan-tabs.css: the camera / the code take what is left, within limits)
 
     private func camSide(width: CGFloat, height: CGFloat, small: Bool) -> CGFloat {
-        let fixed: CGFloat = small ? 466 : 500
+        let fixed: CGFloat = small ? 530 : 560
         return max(150, min(width * 0.78, height - fixed, small ? 300 : 360))
     }
 

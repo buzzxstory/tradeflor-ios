@@ -79,6 +79,7 @@ struct ChatView: View {
     @State private var unreadMarkID: String?
     @State private var unreadMarkCount = 0
     @State private var unreadMarkSet = false
+    @State private var openedAtEnd = false
     @State private var confirmLeave = false
     @State private var confirmDeleteGroup = false
     @State private var exportURL: URL?
@@ -397,6 +398,17 @@ struct ChatView: View {
                     }
                 }
                 .onChange(of: messages.last?.id) { _ in
+                    if !openedAtEnd && !messages.isEmpty {
+                        // the chat opens at its end (or at the unread line): again once pictures have taken their room
+                        openedAtEnd = true
+                        for d in [0.0, 0.35, 0.9] {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + d) {
+                                if unreadMarkID != nil && unreadMarkCount > 0 { proxy.scrollTo("unread-mark", anchor: .top) }
+                                else { proxy.scrollTo("bottom", anchor: .bottom) }
+                            }
+                        }
+                        return
+                    }
                     // at the end, new messages are simply followed; up in the history they are counted instead
                     if bottomVisible || messages.last?.sender_id == me { scrollToBottom(proxy) }
                 }
