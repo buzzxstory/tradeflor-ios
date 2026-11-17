@@ -1428,3 +1428,33 @@
 "sc.help.3" = "يضغط صاحب الرمز «قبول»، فتصبحان متصلين.";
 "sc.help.note" = "يعمل الرمز مرة واحدة ويتجدد كل دقيقة. لا أحد يتصل دون أن يوافق.";
 "sc.help.ok" = "فهمت";
+
+/* WhatsApp parity: chats and groups */
+"chat.edited" = "معدّلة";
+"chat.readmore" = "اقرأ المزيد";
+"chat.edit" = "تعديل";
+"chat.edit.title" = "تعديل الرسالة";
+"chat.edit.cancel" = "إلغاء التعديل";
+"chat.edit.failed" = "تعذّر تعديل الرسالة.";
+"chat.edit.late" = "يمكن تعديل الرسالة خلال 15 دقيقة.";
+"chat.typing.name" = "%@ يكتب…";
+"chat.unread.one" = "رسالة واحدة غير مقروءة";
+"chat.unread.n" = "%d رسائل غير مقروءة";
+"chat.next.mention" = "الإشارة التالية";
+/* status viewer */
+"stv.views" = "%d مشاهدة";
+"stv.view.one" = "مشاهدة واحدة";
+"stv.today" = "اليوم %@";
+"stv.yesterday" = "أمس %@";
+"stv.emoji" = "الرموز التعبيرية";
+"stv.liked" = "أُعجب بها";
+
+/* video player */
+"vp.play" = "تشغيل";
+"vp.pause" = "إيقاف مؤقت";
+"vp.replay" = "تشغيل مرة أخرى";
+"vp.mute" = "كتم الصوت";
+"vp.unmute" = "تشغيل الصوت";
+"vp.seek" = "الموضع في الفيديو";
+"qx.focus.former" = "عضو سابق";
+"chat.upload.cancel" = "إلغاء الإرسال";

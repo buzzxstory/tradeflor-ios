@@ -107,6 +107,7 @@ struct RemoteImage: View {
                 if Task.isCancelled { return }
                 if let d = await APIClient.shared.file(token: token, fileID: fileID, thumb: thumb), let img = UIImage(data: d) {
                     image = img
+                    MediaDims.shared.set(fileID, img.size) // its shape, so the bubble keeps the right box next time
                     return
                 }
             }

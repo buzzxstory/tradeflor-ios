@@ -449,8 +449,10 @@ final class APIClient {
 
     /// Sends a photo (already JPEG) as an image message: multipart, fields first, the file last (the server checks
     /// permission before it stores a byte). `key` makes a retry safe, like text.
+    /// `poster`: a video's cover picture (one small JPEG frame, at most 512 KB), sent after the file so everyone sees the
+    /// video's picture at once (website e0f0b7a). Only sent with a video/ MIME; the server ignores it otherwise.
     func sendImage(token: String, conversationID: String, jpeg: Data, caption: String, key: String,
-                   fileName: String = "photo.jpg", mime: String = "image/jpeg") async throws -> Message {
+                   fileName: String = "photo.jpg", mime: String = "image/jpeg", poster: Data? = nil) async throws -> Message {
         let boundary = "tf-\(UUID().uuidString)"
         var body = Data()
         func field(_ name: String, _ value: String) {
@@ -460,6 +462,10 @@ final class APIClient {
         if !caption.isEmpty { field("caption", caption) }
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\nContent-Type: \(mime)\r\n\r\n".utf8))
         body.append(jpeg)
+        if let poster, !poster.isEmpty, poster.count <= 512 * 1024, mime.hasPrefix("video/") {
+            body.append(Data("\r\n--\(boundary)\r\nContent-Disposition: form-data; name=\"poster\"; filename=\"poster.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".utf8))
+            body.append(poster)
+        }
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
 
         var req = request("messages/file", method: "POST", token: token, body: nil)
@@ -472,7 +478,8 @@ final class APIClient {
         do { return try JSONDecoder().decode(Message.self, from: data) } catch { throw APIError.decoding }
     }
 
-    /// An attachment's bytes (`thumb`: the server's small JPEG of an image). Memory-only cache.
+    /// An attachment's bytes (`thumb`: the server's small JPEG of an image, or a video's cover picture; a video without
+    /// a cover answers 404, which returns nil and is not cached). Memory-only cache.
     func file(token: String, fileID: String, thumb: Bool) async -> Data? {
         let key = "\(fileID)/\(thumb ? "t" : "f")" as NSString
         if let hit = avatarCache.object(forKey: key) { return hit as Data }

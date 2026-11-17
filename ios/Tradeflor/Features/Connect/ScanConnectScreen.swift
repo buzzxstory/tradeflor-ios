@@ -517,10 +517,10 @@ struct MyCodePanel: View {
                 .frame(width: side * 1.5, height: side * 1.5)
                 .allowsHitTesting(false)
             Group {
-                if let link, let qr = TFQR.image(link) {
-                    Image(uiImage: qr).interpolation(.none).resizable().padding(side * 0.052)
-                        .overlay(Image("BrandFlower").resizable().scaledToFit().frame(width: side * 0.16)
-                            .padding(5).background(.white, in: RoundedRectangle(cornerRadius: 8)))
+                if let link {
+                    // the branded code (mark in the middle, correction Q, scan beam); its own tile carries the quiet zone
+                    BrandedQR(text: link, side: side)
+                        .clipShape(RoundedRectangle(cornerRadius: side * 0.082))
                         .accessibilityLabel(Text("mc.qr"))
                 } else if expired {
                     VStack(spacing: 6) {
@@ -539,7 +539,7 @@ struct MyCodePanel: View {
                 }
             }
             .frame(width: side, height: side)
-            .background(.white, in: RoundedRectangle(cornerRadius: side * 0.082))
+            .background(BrandedQR.paper, in: RoundedRectangle(cornerRadius: side * 0.082))
             .opacity(expired ? 0.92 : 1)
             ScanLook.corners(side)
         }

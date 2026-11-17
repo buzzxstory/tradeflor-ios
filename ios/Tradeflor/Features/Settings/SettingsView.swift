@@ -243,6 +243,7 @@ enum TFQR {
     static func image(_ s: String) -> UIImage? {
         let f = CIFilter.qrCodeGenerator()
         f.message = Data(s.utf8)
+        f.correctionLevel = "Q" // as every QR in the app (BrandedQR); the branded picture itself is BrandedQR.image(text:side:)
         guard let out = f.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)),
               let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
         return UIImage(cgImage: cg)

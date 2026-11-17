@@ -96,6 +96,7 @@ struct SmartFocusSheet: View {
     @State private var query = ""
     @State private var saving = false
     @State private var error: String?
+    @FocusState private var searching: Bool
 
     init(groupID: String, members: [GroupMember], me: String, initial: FocusDoc, onSaved: @escaping (FocusDoc) -> Void) {
         self.groupID = groupID
@@ -112,66 +113,203 @@ struct SmartFocusSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Toggle(isOn: $f.on) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("focus.on").foregroundStyle(Theme.text)
-                            Text("focus.on.note").font(.footnote).foregroundStyle(Theme.muted)
-                        }
-                    }
-                    .tint(Theme.accent)
-                }
-                .listRowBackground(Theme.card)
-                Section {
-                    Toggle("focus.admins", isOn: $f.admins).tint(Theme.accent)
-                    Toggle("focus.mentions", isOn: $f.mentions).tint(Theme.accent)
-                    Toggle("focus.replies", isOn: $f.replies).tint(Theme.accent)
-                    Toggle("focus.important", isOn: $f.use_important).tint(Theme.accent)
-                } header: { Text("focus.show") } footer: {
-                    if f.on && !f.hasFilters { Text("focus.none").foregroundStyle(Theme.danger) }
-                }
-                .listRowBackground(Theme.card)
-                if f.use_important {
-                    Section {
-                        TextField("focus.search", text: $query).foregroundStyle(Theme.text)
-                        ForEach(others) { m in
-                            Button {
-                                if let i = f.important.firstIndex(of: m.user_id) { f.important.remove(at: i) } else { f.important.append(m.user_id) }
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Avatar(token: store.session?.token ?? "", userID: m.user_id, avatarID: nil, title: m.title, size: 32)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(m.title).foregroundStyle(Theme.text)
-                                        Text("@\(m.username)").font(.caption).foregroundStyle(Theme.muted)
-                                    }
-                                    Spacer()
-                                    Image(systemName: f.important.contains(m.user_id) ? "star.fill" : "star")
-                                        .foregroundStyle(f.important.contains(m.user_id) ? Theme.accent : Theme.muted)
-                                }
+        // the website's Important members dialog in the platform colours (styles/38-smart-focus.css .fx-members)
+        VStack(spacing: 0) {
+            head
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    card {
+                        Toggle(isOn: $f.on) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("focus.on").font(.system(size: 15, weight: .semibold)).foregroundStyle(SFLook.text)
+                                Text("focus.on.note").font(.system(size: 12.5)).foregroundStyle(SFLook.muted)
                             }
                         }
-                    } header: { Text(String(format: NSLocalizedString("focus.important.n", comment: ""), f.important.count)) }
-                    .listRowBackground(Theme.card)
+                        .tint(SFLook.cyan)
+                        .padding(.horizontal, 14).padding(.vertical, 11)
+                    }
+                    sectionLabel(Text("focus.show"))
+                    card {
+                        toggleRow("focus.admins", $f.admins)
+                        hairline
+                        toggleRow("focus.mentions", $f.mentions)
+                        hairline
+                        toggleRow("focus.replies", $f.replies)
+                        hairline
+                        toggleRow("focus.important", $f.use_important)
+                    }
+                    if f.on && !f.hasFilters {
+                        Text("focus.none").font(.system(size: 12.5)).foregroundStyle(Theme.hex(0xFF8A8A))
+                    }
+                    if f.use_important { importantMembers }
+                    if let error {
+                        Text(error).font(.system(size: 12.5)).foregroundStyle(Theme.hex(0xFF8A8A))
+                    }
                 }
-                if let error {
-                    Text(error).font(.footnote).foregroundStyle(Theme.danger).listRowBackground(Color.clear)
-                }
+                .padding(16)
             }
-            .scrollContentBackground(.hidden)
-            .background(Theme.panelGradient.ignoresSafeArea())
-            .navigationTitle(Text("focus.title"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("grp.cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button { Task { await save() } } label: { if saving { ProgressView() } else { Text("grp.save.short").bold() } }
-                        .disabled(saving || f == initial.focus)
+            footer
+        }
+        .background(SFLook.dialog.ignoresSafeArea())
+        .environment(\.colorScheme, .dark)
+        .tfColorScheme()
+    }
+
+    // MARK: - look (38-smart-focus.css)
+
+    private var head: some View {
+        HStack {
+            Text("focus.title").font(.system(size: 18, weight: .bold)).tracking(0.18).foregroundStyle(SFLook.text)
+            Spacer()
+            Button { dismiss() } label: {
+                Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.hex(0xEEF4F7))
+                    .frame(width: 34, height: 34)
+                    .background(Theme.hex(0x01141B, 0.7), in: Circle())
+                    .overlay(Circle().stroke(Theme.hex(0x50AAC8, 0.35), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("grp.cancel"))
+        }
+        .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 12)
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.hex(0x288CAA, 0.22)).frame(height: 1) }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 10) {
+            Button { dismiss() } label: {
+                Text("grp.cancel").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.hex(0xEEF5F8))
+                    .frame(maxWidth: .infinity).frame(height: 46)
+                    .background(Theme.hex(0x021A23), in: Capsule())
+                    .overlay(Capsule().strokeBorder(Theme.hex(0x3C96B4, 0.5), lineWidth: 1.5))
+            }
+            .buttonStyle(.plain)
+            Button { Task { await save() } } label: {
+                Group {
+                    if saving { ProgressView().tint(Theme.hex(0x052332)) } else { Text("grp.save.short").font(.system(size: 15, weight: .bold)) }
+                }
+                .foregroundStyle(Theme.hex(0x052332))
+                .frame(maxWidth: .infinity).frame(height: 46)
+                .background(LinearGradient(stops: [.init(color: Theme.hex(0x5AF6FC), location: 0), .init(color: Theme.hex(0x20E4EE), location: 0.45),
+                                                   .init(color: Theme.hex(0x03D2DC), location: 1)], startPoint: .top, endPoint: .bottom), in: Capsule())
+                .overlay(Capsule().strokeBorder(Theme.hex(0x78FAFF, 0.7), lineWidth: 1.5))
+                .shadow(color: Theme.hex(0x12E0F0, 0.4), radius: 9)
+            }
+            .buttonStyle(.plain)
+            .disabled(saving || f == initial.focus)
+            .opacity(saving || f == initial.focus ? 0.55 : 1)
+        }
+        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
+        .overlay(alignment: .top) { Rectangle().fill(Theme.hex(0x288CAA, 0.22)).frame(height: 1) }
+    }
+
+    @ViewBuilder private var importantMembers: some View {
+        // search
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .semibold)).foregroundStyle(SFLook.label)
+            TextField("", text: $query, prompt: Text("focus.search").foregroundColor(SFLook.label))
+                .font(.system(size: 15)).foregroundStyle(SFLook.text)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .focused($searching)
+        }
+        .padding(.horizontal, 12).frame(height: 42)
+        .background(Theme.hex(0x01141B, 0.6), in: RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(searching ? Theme.hex(0x12E0F0, 0.8) : Theme.hex(0x287896, 0.55), lineWidth: 1.5))
+        .shadow(color: searching ? Theme.hex(0x12E0F0, 0.14) : .clear, radius: 3)
+        // chosen
+        VStack(alignment: .leading, spacing: 8) {
+            sectionLabel(Text(String(format: NSLocalizedString("focus.important.n", comment: ""), f.important.count)))
+            if !f.important.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(f.important, id: \.self) { uid in chip(uid) }
+                    }
                 }
             }
         }
-        .tfColorScheme()
+        // members
+        LazyVStack(spacing: 0) {
+            ForEach(Array(others.enumerated()), id: \.element.id) { i, m in
+                if i > 0 { hairline }
+                memberRow(m)
+            }
+        }
+        .padding(.vertical, 4)
+        .background(Theme.hex(0x041D26), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.hex(0x78BED2, 0.12), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func memberRow(_ m: GroupMember) -> some View {
+        let on = f.important.contains(m.user_id)
+        return Button { toggle(m.user_id) } label: {
+            HStack(spacing: 10) {
+                Avatar(token: store.session?.token ?? "", userID: m.user_id, avatarID: nil, title: m.title, size: 34)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(m.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(SFLook.text).lineLimit(1)
+                    Text("@\(m.username)").font(.system(size: 12)).foregroundStyle(SFLook.muted).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                tick(on)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(on ? AnyShapeStyle(LinearGradient(stops: [.init(color: Theme.hex(0x2FF0F3, 0.12), location: 0), .init(color: Theme.hex(0x2FF0F3, 0.02), location: 0.7)],
+                                                          startPoint: .leading, endPoint: .trailing)) : AnyShapeStyle(Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    /// The round-cornered tick: empty soul square, or the cyan gradient with a dark check and a glow.
+    private func tick(_ on: Bool) -> some View {
+        ZStack {
+            if on {
+                RoundedRectangle(cornerRadius: 7).fill(SFLook.cyanGradient)
+                Image(systemName: "checkmark").font(.system(size: 11, weight: .heavy)).foregroundStyle(Theme.hex(0x032229))
+            } else {
+                RoundedRectangle(cornerRadius: 7).fill(Theme.hex(0x01141B, 0.7))
+                RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.hex(0x50AAC8, 0.55), lineWidth: 1.5)
+            }
+        }
+        .frame(width: 22, height: 22)
+        .shadow(color: on ? Theme.hex(0x2FF0F3, 0.4) : .clear, radius: 5)
+    }
+
+    private func chip(_ uid: String) -> some View {
+        let name = members.first(where: { $0.user_id == uid })?.title ?? NSLocalizedString("qx.focus.former", comment: "")
+        return HStack(spacing: 5) {
+            Text(name).font(.system(size: 13, weight: .bold)).lineLimit(1)
+            Button { toggle(uid) } label: { Image(systemName: "xmark").font(.system(size: 10, weight: .heavy)) }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("grp.cancel") + Text(" " + name))
+        }
+        .foregroundStyle(Theme.hex(0x032229))
+        .padding(.leading, 11).padding(.trailing, 9).frame(height: 28)
+        .background(SFLook.cyanGradient, in: Capsule())
+    }
+
+    private func toggleRow(_ key: LocalizedStringKey, _ on: Binding<Bool>) -> some View {
+        Toggle(isOn: on) { Text(key).font(.system(size: 15)).foregroundStyle(SFLook.text) }
+            .tint(SFLook.cyan)
+            .padding(.horizontal, 14).padding(.vertical, 9)
+    }
+
+    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 0) { content() }
+            .padding(.vertical, 4)
+            .background(Theme.hex(0x041D26), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.hex(0x78BED2, 0.12), lineWidth: 1))
+    }
+
+    private func sectionLabel(_ t: Text) -> some View {
+        t.font(.system(size: 11, weight: .bold)).tracking(0.88).textCase(.uppercase).foregroundStyle(SFLook.label)
+    }
+
+    private var hairline: some View { Rectangle().fill(Theme.hex(0x78BED2, 0.06)).frame(height: 1) }
+
+    private func toggle(_ uid: String) {
+        if let i = f.important.firstIndex(of: uid) { f.important.remove(at: i) } else { f.important.append(uid) }
     }
 
     private func save() async {
@@ -183,6 +321,24 @@ struct SmartFocusSheet: View {
             dismiss()
         } catch {
             self.error = NSLocalizedString("focus.save.failed", comment: "")
+        }
+    }
+}
+
+/// Smart Focus colours (styles/38-smart-focus.css, .fx-members): the one colour soul, cyan ticks and chips.
+private enum SFLook {
+    static let text = Theme.hex(0xF4F8FB)
+    static let muted = Theme.hex(0x7F9AA7)
+    static let label = Theme.hex(0x6F93A3)
+    static let cyan = Theme.hex(0x2FF0F3)
+    static let cyanGradient = LinearGradient(colors: [Theme.hex(0x2FF0F3), Theme.hex(0x08A8B8)], startPoint: .topLeading, endPoint: .bottomTrailing)
+
+    /// radial rgba(6,70,90,.35) at the top-left over #03202b -> #021821 (55%) -> #01141B
+    static var dialog: some View {
+        ZStack {
+            LinearGradient(stops: [.init(color: Theme.hex(0x03202B), location: 0), .init(color: Theme.hex(0x021821), location: 0.55),
+                                   .init(color: Theme.hex(0x01141B), location: 1)], startPoint: .top, endPoint: .bottom)
+            RadialGradient(colors: [Theme.hex(0x06465A, 0.35), .clear], center: .topLeading, startRadius: 0, endRadius: 340)
         }
     }
 }

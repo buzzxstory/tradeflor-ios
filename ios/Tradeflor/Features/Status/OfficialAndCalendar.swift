@@ -54,7 +54,8 @@ struct OfficialViewer: View {
             Color.black.ignoresSafeArea()
             TabView(selection: $index) {
                 ForEach(Array(posts.enumerated()), id: \.element.id) { i, p in
-                    OfficialPage(token: token, post: p) { url in openURL(url) }.tag(i)
+                    // a tap on the dark area around the story closes it, as on iPhone
+                    OfficialPage(token: token, post: p, onOpen: { url in openURL(url) }, onBackdrop: { dismiss() }).tag(i)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
@@ -79,6 +80,8 @@ private struct OfficialPage: View {
     let token: String
     let post: OfficialPost
     let onOpen: (URL) -> Void
+    /// A tap on the empty area around the picture, the words and the button (it must barely move: a swipe never counts).
+    let onBackdrop: () -> Void
     @State private var image: UIImage?
     @State private var player: AVPlayer?
 
@@ -90,13 +93,14 @@ private struct OfficialPage: View {
                     if let player { VideoPlayer(player: player) } else { ProgressView().tint(.white) }
                 } else if let image {
                     Image(uiImage: image).resizable().scaledToFit()
+                        .contentShape(Rectangle()).onTapGesture {} // the picture itself is not the backdrop
                 } else {
                     ProgressView().tint(.white)
                 }
             }
             .frame(maxHeight: 520)
-            if let t = post.title, !t.isEmpty { Text(t).font(.title3.bold()).foregroundStyle(.white).multilineTextAlignment(.center) }
-            if let c = post.caption, !c.isEmpty { Text(c).foregroundStyle(.white.opacity(0.85)).multilineTextAlignment(.center) }
+            if let t = post.title, !t.isEmpty { Text(t).font(.title3.bold()).foregroundStyle(.white).multilineTextAlignment(.center).onTapGesture {} }
+            if let c = post.caption, !c.isEmpty { Text(c).foregroundStyle(.white.opacity(0.85)).multilineTextAlignment(.center).onTapGesture {} }
             if let label = post.cta_label, !label.isEmpty, let s = post.cta_url, let url = URL(string: s) {
                 Button(label) { onOpen(url) }
                     .font(.headline).foregroundStyle(Theme.onAccent)
@@ -106,6 +110,9 @@ private struct OfficialPage: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 30)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture { onBackdrop() }
         .task {
             if post.kind == "video" {
                 let asset = AVURLAsset(url: APIClient.shared.statusMediaURL(id: "official-" + post.id),

@@ -64,7 +64,19 @@ struct ChatView: View {
     @State private var pinIndex = 0
     @State private var members: [GroupMember] = []
     @State private var bottomVisible = true
-    @State private var newWhileAway = 0
+    /// Messages from others that came while I was up in the history, not yet scrolled into view (website d454d16).
+    @State private var unseenBelow: [String] = []
+    /// Of those, the ones that mention me: the "@" button above the arrow (groups).
+    @State private var unseenMentions: [String] = []
+    @State private var badgePop = false
+    @State private var editing: Message?
+    /// Photos and videos being sent: X cancels (website bcfeb0a).
+    @State private var uploads: [String: Task<Message, Error>] = [:]
+    @State private var cancelledUploads: Set<String> = []
+    @State private var typingUser: String?
+    @State private var unreadMarkID: String?
+    @State private var unreadMarkCount = 0
+    @State private var unreadMarkSet = false
     @State private var confirmLeave = false
     @State private var confirmDeleteGroup = false
     @State private var exportURL: URL?
@@ -155,10 +167,18 @@ struct ChatView: View {
                         }
                         let rows = shown
                         let lookIDs = lookAlike
+                        let albums = Albums.runs(rows)
                         ForEach(Array(rows.enumerated()), id: \.element.id) { i, m in
                             if i == 0 || !sameDay(rows[i - 1], m) {
                                 DayDivider(date: m.date)
                             }
+                            if m.id == unreadMarkID && unreadMarkCount > 0 {
+                                UnreadDivider(count: unreadMarkCount).id("unread-mark")
+                            }
+                            if albums.hidden.contains(m.id) {
+                                // drawn inside its album
+                                Color.clear.frame(height: 0).id(m.id).onAppear { seen(m.id) }
+                            } else {
                             let asGroup = isGroup && roleOf(m.sender_id) == "owner"
                             MessageRow(message: m, mine: m.sender_id == me, myID: me, peerName: chat.title,
                                        senderName: isGroup && (m.sender_id != me || asGroup)
@@ -180,7 +200,10 @@ struct ChatView: View {
                                                ? AnyView(Avatar(token: token, userID: m.sender_id, avatarID: memberAvatars[m.sender_id], title: memberNames[m.sender_id] ?? "?", size: 34))
                                                : nil,
                                            avatarSlot: isGroup && !asGroup,
-                                           handle: lookIDs.contains(m.sender_id) ? members.first { $0.user_id == m.sender_id }?.username : nil),
+                                           handle: lookIDs.contains(m.sender_id) ? members.first { $0.user_id == m.sender_id }?.username : nil,
+                                           replySenderName: isGroup ? m.reply_sender_id.flatMap { memberNames[$0] } : nil,
+                                           replyPhotoID: m.reply_to_id.flatMap { rid in messages.first { $0.id == rid && $0.kind == "image" && !$0.isDeleted }?.file_id },
+                                           token: token),
                                        actions: MessageRowActions(
                                            copyLink: {
                                                UIPasteboard.general.string = "tradeflor://chat/\(chat.conversation_id)/message/\(m.id)"
@@ -205,16 +228,45 @@ struct ChatView: View {
                                                } else {
                                                    flash("chat.reply.notloaded")
                                                }
-                                           })) {
-                                messageContent(m)
+                                           },
+                                           edit: canEdit(m) ? { startEdit(m) } : nil)) {
+                                if let album = albums.at[m.id] {
+                                    AlbumGrid(token: token, photos: album, mine: m.sender_id == me,
+                                              state: m.sender_id == me ? receipt(album.last ?? m) : nil) { fid in viewing = ViewedPhoto(id: fid) }
+                                } else {
+                                    messageContent(m)
+                                }
                             }
                             .id(m.id)
+                            .onAppear { seen(m.id) }
+                            }
                         }
                         ForEach(pending) { p in
                             Group {
                                 if let img = p.image {
-                                    PhotoBubble(mine: true, date: p.date, state: p.failed ? .failed : .sending, caption: "") {
-                                        Image(uiImage: img).resizable().scaledToFill()
+                                    // the picture at once, dimmed, with a ring and an X until it is sent (website bcfeb0a)
+                                    PhotoBubble(mine: true, date: p.date, state: p.failed ? .failed : .sending, caption: "", size: img.size) {
+                                        ZStack {
+                                            Image(uiImage: img).resizable().scaledToFill()
+                                            if !p.failed {
+                                                Color.black.opacity(0.35)
+                                                ZStack {
+                                                    Circle().stroke(Color.white.opacity(0.25), lineWidth: 3)
+                                                    ProgressView().progressViewStyle(.circular).tint(.white).scaleEffect(1.5)
+                                                    Button {
+                                                        cancelledUploads.insert(p.id)
+                                                        uploads[p.id]?.cancel()
+                                                        pending.removeAll { $0.id == p.id }
+                                                    } label: {
+                                                        Image(systemName: "xmark").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
+                                                            .frame(width: 30, height: 30).background(Color.black.opacity(0.35), in: Circle())
+                                                    }
+                                                    .accessibilityLabel(Text("chat.upload.cancel"))
+                                                    .offset(y: 40)
+                                                }
+                                                .frame(width: 52, height: 52)
+                                            }
+                                        }
                                     }
                                 } else if p.video != nil {
                                     Bubble(text: "🎬 " + NSLocalizedString("chat.video", comment: ""), mine: true, date: p.date,
@@ -246,7 +298,7 @@ struct ChatView: View {
                             }
                         }
                         Color.clear.frame(height: 1).id("bottom")
-                            .onAppear { bottomVisible = true; newWhileAway = 0 }
+                            .onAppear { bottomVisible = true; unseenBelow = []; unseenMentions = [] }
                             .onDisappear { bottomVisible = false }
                     }
                     .padding(.horizontal, 10)
@@ -254,20 +306,43 @@ struct ChatView: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .overlay(alignment: .bottomTrailing) {
-                    if !bottomVisible && !messages.isEmpty {
-                        Button { scrollToBottom(proxy) } label: {
-                            ZStack(alignment: .topTrailing) {
-                                Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
-                                    .frame(width: 42, height: 42).background(Theme.card, in: Circle())
-                                    .overlay(Circle().stroke(Theme.borderStrong, lineWidth: 1))
-                                if newWhileAway > 0 {
-                                    Text("\(newWhileAway)").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.onAccent)
-                                        .padding(.horizontal, 5).frame(minHeight: 18).background(Theme.accent, in: Capsule()).offset(x: 4, y: -4)
-                                }
+                    // WhatsApp's arrow (website d454d16): dark, light chevron; the count of others' new messages on its upper
+                    // left, counting down as they come into view; in groups the "@" (next mention) stands above it
+                    VStack(spacing: 10) {
+                        if isGroup, let first = unseenMentions.first {
+                            Button { withAnimation { proxy.scrollTo(first, anchor: .center) }; unseenMentions.removeFirst() } label: {
+                                Text("@").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
+                                    .frame(width: 42, height: 42).background(Theme.hex(0x00C6C4), in: Circle())
                             }
+                            .accessibilityLabel(Text("chat.next.mention"))
                         }
-                        .padding(14)
-                        .accessibilityLabel(Text("chat.jump"))
+                        if !bottomVisible && !messages.isEmpty {
+                            Button {
+                                unseenBelow = []
+                                unseenMentions = []
+                                scrollToBottom(proxy)
+                            } label: {
+                                Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.hex(0xE9EDEF))
+                                    .frame(width: 42, height: 42).background(Theme.hex(0x1B2A30), in: Circle())
+                                    .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
+                                    .overlay(alignment: .topLeading) {
+                                        if !unseenBelow.isEmpty {
+                                            Text("\(unseenBelow.count)").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
+                                                .padding(.horizontal, 5).frame(minWidth: 20, minHeight: 20)
+                                                .background(Theme.hex(0x00C6C4), in: Capsule())
+                                                .scaleEffect(badgePop ? 1.2 : 1)
+                                                .offset(x: -7, y: -7)
+                                        }
+                                    }
+                            }
+                            .accessibilityLabel(Text("chat.jump"))
+                            .accessibilityValue(unseenBelow.isEmpty ? Text("") : Text("\(unseenBelow.count)"))
+                        }
+                    }
+                    .padding(14)
+                    .onChange(of: unseenBelow.count) { _ in
+                        withAnimation(.spring(response: 0.2, dampingFraction: 0.5)) { badgePop = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { withAnimation { badgePop = false } }
                     }
                 }
                 .overlay(alignment: .top) {
@@ -319,7 +394,13 @@ struct ChatView: View {
                         .padding(30)
                     }
                 }
-                .onChange(of: messages.last?.id) { _ in scrollToBottom(proxy) }
+                .onChange(of: messages.last?.id) { _ in
+                    // at the end, new messages are simply followed; up in the history they are counted instead
+                    if bottomVisible || messages.last?.sender_id == me { scrollToBottom(proxy) }
+                }
+                .onChange(of: unreadMarkID) { id in
+                    if id != nil { DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { proxy.scrollTo("unread-mark", anchor: .top) } }
+                }
                 .onChange(of: pending.count) { _ in scrollToBottom(proxy) }
                 .onChange(of: composerFocused) { f in if f { scrollToBottom(proxy) } }
             }
@@ -338,6 +419,7 @@ struct ChatView: View {
         .onReceive(live.typing) { t in
             guard t.conversation == chat.conversation_id, t.user != me else { return }
             peerTypingUntil = Date().addingTimeInterval(5)
+            typingUser = t.user
             Task {
                 try? await Task.sleep(nanoseconds: 5_200_000_000)
                 if let u = peerTypingUntil, u <= Date() { peerTypingUntil = nil }
@@ -527,9 +609,13 @@ struct ChatView: View {
         }
         .onReceive(live.messages) { m in
             guard m.conversation_id == chat.conversation_id else { return }
+            let isNew = !messages.contains { $0.id == m.id }
             merge([m])
             pending.removeAll { $0.id == m.client_key }
-            if !bottomVisible && m.sender_id != me { newWhileAway += 1 }
+            if isNew && !bottomVisible && m.sender_id != me && m.kind != "notice" {
+                unseenBelow.append(m.id)
+                if isGroup && ChatEdit.mentions(m, me: me) { unseenMentions.append(m.id) }
+            }
             if m.sender_id != me { Task { await markSeen() } }
         }
         .onReceive(live.changes) { id in
@@ -591,11 +677,25 @@ struct ChatView: View {
 
     private var composer: some View {
         VStack(spacing: 6) {
-            if let r = replyingTo {
+            if let e = editing {
+                // the edit bar (website 86beee5): "Edit message" + the old text; Send saves, X cancels
+                HStack(spacing: 8) {
+                    Image(systemName: "pencil").foregroundStyle(Theme.accent)
+                    Capsule().fill(Theme.accent).frame(width: 3, height: 32)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("chat.edit.title").font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                        Text(e.body).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Button { editing = nil; draft = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .accessibilityLabel(Text("chat.edit.cancel"))
+                }
+                .padding(.horizontal, 6)
+            } else if let r = replyingTo {
                 HStack(spacing: 8) {
                     Capsule().fill(Theme.accent).frame(width: 3, height: 32)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(r.sender_id == me ? NSLocalizedString("chat.you", comment: "") : chat.title)
+                        Text(r.sender_id == me ? NSLocalizedString("chat.you", comment: "") : (isGroup ? memberNames[r.sender_id] ?? chat.title : chat.title))
                             .font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
                         Text(displayText(r)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
@@ -1202,6 +1302,12 @@ struct ChatView: View {
             let page = try await APIClient.shared.messages(token: token, conversationID: chat.conversation_id, limit: pageSize)
             if messages.isEmpty { reachedStart = page.count < pageSize }
             merge(page)
+            if !unreadMarkSet && !page.isEmpty {
+                // "N unread messages" where the unread start (website unreadMark.ts), once, when the chat opens
+                unreadMarkSet = true
+                unreadMarkCount = chat.unread_count
+                unreadMarkID = UnreadMark.startID(messages, unread: chat.unread_count, me: me)
+            }
             problem = nil
             locked = false
             await markSeen()
@@ -1239,9 +1345,47 @@ struct ChatView: View {
 
     // MARK: sending
 
+    private func canEdit(_ m: Message) -> Bool { ChatEdit.canEdit(m, me: me) && canSend && !restricted }
+
+    private func startEdit(_ m: Message) {
+        replyingTo = nil
+        editing = m
+        draft = m.body
+        composerFocused = true
+    }
+
+    private func saveEdit(_ m: Message, _ text: String) async {
+        editing = nil
+        draft = ""
+        guard text != m.body else { return }
+        do {
+            merge([try await APIClient.shared.editMessage(token: token, messageID: m.id, body: text)])
+        } catch APIError.refused(let why) {
+            flashText(why.isEmpty ? NSLocalizedString("chat.edit.failed", comment: "") : why)
+        } catch APIError.server(status: 409) {
+            flash("chat.edit.late")
+        } catch {
+            flash("chat.edit.failed")
+        }
+    }
+
+    private func flashText(_ text: String) {
+        toast = text
+        Task {
+            try? await Task.sleep(nanoseconds: 2_200_000_000)
+            if toast == text { toast = nil }
+        }
+    }
+
+    /// A counted message came into view: one fewer on the arrow.
+    private func seen(_ id: String) {
+        if let i = unseenBelow.firstIndex(of: id) { unseenBelow.remove(at: i) }
+    }
+
     private func sendDraft() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        if let e = editing { await saveEdit(e, text); return }
         draft = ""
         var p = PendingMessage(id: UUID().uuidString.lowercased(), body: text, date: Date())
         p.replyTo = replyingTo?.id ?? ""
@@ -1269,7 +1413,7 @@ struct ChatView: View {
         } else if m.kind == "text", !m.isDeleted, let url = LinkPreviewCard.firstURL(in: m.body) {
             VStack(alignment: m.sender_id == me ? .trailing : .leading, spacing: 4) {
                 Bubble(text: displayText(m), mine: m.sender_id == me, date: m.date,
-                       state: m.sender_id == me ? receipt(m) : nil, faded: false)
+                       state: m.sender_id == me ? receipt(m) : nil, faded: false, edited: m.edited_at != nil)
                 LinkPreviewCard(token: token, url: url)
             }
             .frame(maxWidth: .infinity, alignment: m.sender_id == me ? .trailing : .leading)
@@ -1282,13 +1426,15 @@ struct ChatView: View {
         } else if VideoNotePrep.isNote(m), let fid = m.file_id, !m.isDeleted {
             VideoNoteBubble(token: token, message: m, mine: m.sender_id == me) { watching = ViewedPhoto(id: fid) }
         } else if m.kind == "voice", m.audio_id != nil, !m.isDeleted {
-            VoiceBubble(token: token, message: m, mine: m.sender_id == me, state: m.sender_id == me ? receipt(m) : nil)
+            VoiceBubble(token: token, message: m, mine: m.sender_id == me, state: m.sender_id == me ? receipt(m) : nil,
+                        avatarID: m.sender_id == me ? nil : (isGroup ? memberAvatars[m.sender_id] : chat.peer_avatar_id),
+                        name: isGroup ? memberNames[m.sender_id] : (m.sender_id == me ? nil : chat.title))
         } else if m.kind == "file", let fid = m.file_id, (m.file_mime ?? "").hasPrefix("video/"), !m.isDeleted {
             VideoBubble(token: token, message: m, mine: m.sender_id == me, state: m.sender_id == me ? receipt(m) : nil) {
                 watching = ViewedPhoto(id: fid)
             }
         } else if m.kind == "image", let fid = m.file_id, !m.isDeleted {
-            PhotoBubble(mine: m.sender_id == me, date: m.date, state: m.sender_id == me ? receipt(m) : nil, caption: m.body) {
+            PhotoBubble(mine: m.sender_id == me, date: m.date, state: m.sender_id == me ? receipt(m) : nil, caption: m.body, fileID: fid) {
                 RemoteImage(token: token, fileID: fid)
             }
             .onTapGesture { viewing = ViewedPhoto(id: fid) }
@@ -1298,7 +1444,7 @@ struct ChatView: View {
             }
         } else {
             Bubble(text: displayText(m), mine: m.sender_id == me, date: m.date,
-                   state: m.sender_id == me ? receipt(m) : nil, faded: m.isDeleted)
+                   state: m.sender_id == me ? receipt(m) : nil, faded: m.isDeleted, edited: m.edited_at != nil && !m.isDeleted)
         }
     }
 
@@ -1349,7 +1495,13 @@ struct ChatView: View {
     }
 
     private var subtitle: String? {
-        if let until = peerTypingUntil, until > Date() { return NSLocalizedString("chat.typing", comment: "") }
+        if let until = peerTypingUntil, until > Date() {
+            // groups: "<name> is typing…" (website 86beee5)
+            if isGroup, let u = typingUser, let name = memberNames[u], !name.isEmpty {
+                return String(format: NSLocalizedString("chat.typing.name", comment: ""), name)
+            }
+            return NSLocalizedString("chat.typing", comment: "")
+        }
         if live.online.contains(chat.peer_id) { return NSLocalizedString("chat.online", comment: "") }
         return nil
     }
@@ -1395,8 +1547,12 @@ struct ChatView: View {
 
     private func sendVideo(_ url: URL, caption: String = "") async {
         let key = UUID().uuidString.lowercased()
-        let placeholder = PendingMessage(id: key, body: caption.trimmingCharacters(in: .whitespacesAndNewlines), date: Date(), video: Data())
-        pending.append(placeholder) // shows "sending video" while it is re-encoded
+        // the cover first (mp4 removes the source when done): it shows at once, dimmed, while the video is prepared and sent
+        let poster = await VideoPrep.poster(for: url)
+        var placeholder = PendingMessage(id: key, body: caption.trimmingCharacters(in: .whitespacesAndNewlines), date: Date(), video: Data())
+        placeholder.poster = poster
+        placeholder.image = poster.flatMap { UIImage(data: $0) }
+        pending.append(placeholder)
         guard let out = await VideoPrep.mp4(from: url) else {
             if let i = pending.firstIndex(where: { $0.id == key }) { pending[i].failed = true }
             problem = NSLocalizedString("chat.video.toolarge", comment: "")
@@ -1427,11 +1583,18 @@ struct ChatView: View {
                 m = try await APIClient.shared.sendVoice(token: token, conversationID: chat.conversation_id, audio: audio,
                                                          durationMs: ms, waveform: p.waveform, key: p.id)
             } else if let video = p.video, !video.isEmpty {
-                m = try await APIClient.shared.sendImage(token: token, conversationID: chat.conversation_id, jpeg: video,
-                                                         caption: p.body, key: p.id, fileName: "video.mp4", mime: "video/mp4")
+                let conv = chat.conversation_id, tok = token
+                let t = Task { try await APIClient.shared.sendImage(token: tok, conversationID: conv, jpeg: video,
+                                                                    caption: p.body, key: p.id, fileName: "video.mp4", mime: "video/mp4", poster: p.poster) }
+                uploads[p.id] = t
+                defer { uploads[p.id] = nil }
+                m = try await t.value
             } else if let jpeg = p.jpeg {
-                m = try await APIClient.shared.sendImage(token: token, conversationID: chat.conversation_id,
-                                                         jpeg: jpeg, caption: p.body, key: p.id)
+                let conv = chat.conversation_id, tok = token
+                let t = Task { try await APIClient.shared.sendImage(token: tok, conversationID: conv, jpeg: jpeg, caption: p.body, key: p.id) }
+                uploads[p.id] = t
+                defer { uploads[p.id] = nil }
+                m = try await t.value
             } else {
                 m = try await APIClient.shared.sendText(token: token, conversationID: chat.conversation_id,
                                                         body: p.body, key: p.id, replyTo: p.replyTo)
@@ -1441,6 +1604,7 @@ struct ChatView: View {
         } catch APIError.badCredentials {
             store.sessionExpired()
         } catch {
+            if cancelledUploads.contains(p.id) { cancelledUploads.remove(p.id); return } // X: dropped on purpose
             if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = true }
             if case let .refused(why)? = error as? APIError, !why.isEmpty { problem = why }
         }
@@ -1487,54 +1651,76 @@ struct PendingMessage: Identifiable, Equatable {
     var durationMs: Int? = nil
     var waveform: [Double] = []
     var failed = false
+    /// A video's cover picture (one small JPEG frame), sent with it (website e0f0b7a).
+    var poster: Data? = nil
 }
 
 struct ViewedPhoto: Identifiable {
     let id: String // the file id
 }
 
-/// A photo message: the picture (rounded square), an optional caption, time and ticks.
+/// A photo message (website 063cc7e / 03f13cf): the picture on its own, no card, in a box that keeps its shape (the space
+/// is kept before it loads); the time over the picture; a round forward arrow beside it. With a caption it keeps its card.
 struct PhotoBubble<Content: View>: View {
     let mine: Bool
     let date: Date?
     let state: Bubble.Delivery?
     let caption: String
+    var fileID: String? = nil
+    /// The picture's own size when known here (a picture being sent).
+    var size: CGSize? = nil
     @ViewBuilder let content: () -> Content
-
-    private static var time: DateFormatter {
-        let f = DateFormatter()
-        f.timeStyle = .short
-        f.dateStyle = .none
-        return f
-    }
+    @ObservedObject private var dims = MediaDims.shared
+    @Environment(\.tfMediaForward) private var forward
 
     var body: some View {
-        HStack {
-            if mine { Spacer(minLength: 48) }
+        let box = MediaDims.box(size ?? fileID.flatMap { dims.size($0) })
+        HStack(alignment: .center, spacing: 8) {
+            if mine { Spacer(minLength: 0) }
+            if mine, let forward { forwardButton(forward) }
             VStack(alignment: .trailing, spacing: 4) {
                 content()
-                    .frame(width: 240, height: 240)
+                    .frame(width: box.width, height: box.height)
                     .background(Theme.surface)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: caption.isEmpty ? 12 : 10, style: .continuous))
                     .contentShape(Rectangle())
+                    .overlay(alignment: .bottomTrailing) {
+                        if caption.isEmpty { MediaTimeChip(date: date, state: state).padding(6) }
+                    }
                 if !caption.isEmpty {
-                    Text(caption)
-                        .foregroundStyle(Theme.text)
-                        .frame(maxWidth: 240, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ZStack(alignment: .bottomTrailing) {
+                        (Text(caption) + Text(Bubble.metaSpacer(date: date, ticks: state != nil, edited: false)).foregroundColor(.clear).font(.system(size: 11)))
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.text)
+                            .frame(maxWidth: box.width, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Bubble.meta(date: date, state: state, edited: false)
+                    }
+                    .padding(.horizontal, 6).padding(.bottom, 2)
                 }
-                HStack(spacing: 4) {
-                    if let date { Text(Self.time.string(from: date)) }
-                    if let state { Bubble.tickView(state) }
-                }
-                .font(.caption2)
-                .foregroundStyle(Theme.muted.opacity(0.85))
-                .padding(.trailing, 4)
             }
-            .padding(4)
-            .tfBubble(mine: mine)
-            if !mine { Spacer(minLength: 48) }
+            .padding(caption.isEmpty ? 0 : 3)
+            .modifier(CaptionCard(on: !caption.isEmpty, mine: mine))
+            if !mine, let forward { forwardButton(forward) }
+            if !mine { Spacer(minLength: 0) }
         }
+    }
+
+    private func forwardButton(_ f: @escaping () -> Void) -> some View {
+        Button(action: f) {
+            Image(systemName: "arrowshape.turn.up.right.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
+                .frame(width: 32, height: 32).background(Theme.card.opacity(0.85), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("chat.forward"))
+    }
+}
+
+private struct CaptionCard: ViewModifier {
+    let on: Bool
+    let mine: Bool
+    func body(content: Content) -> some View {
+        if on { content.tfBubble(mine: mine) } else { content }
     }
 }
 
@@ -1561,6 +1747,9 @@ private struct DayDivider: View {
     }
 }
 
+/// A text message, WhatsApp-style (website 7e5a789 / ac11142 / fbe88d3): 15 pt text in a snug bubble at most 85% of the
+/// screen wide; the time (and "Edited") sits inside the last line when it fits; a long message shows "Read more".
+/// In groups the sender's name and the quoted message sit inside the top of the card (tfBubbleHead).
 struct Bubble: View {
     enum Delivery { case sending, sent, delivered, read, failed }
 
@@ -1569,6 +1758,10 @@ struct Bubble: View {
     let date: Date?
     let state: Delivery?
     let faded: Bool
+    var edited = false
+    @Environment(\.tfBubbleHead) private var head
+    @Environment(\.openURL) private var parentOpen
+    @State private var expanded = false
 
     private static let time: DateFormatter = {
         let f = DateFormatter()
@@ -1577,15 +1770,40 @@ struct Bubble: View {
         return f
     }()
 
+    static func timeString(_ d: Date) -> String { time.string(from: d) }
+
+    /// Invisible text as wide as the time line, at the end of the message: the time then sits in the last line when it
+    /// fits, and on a line of its own when it does not.
+    static func metaSpacer(date: Date?, ticks: Bool, edited: Bool) -> String {
+        var s = "\u{2003}"
+        if edited { s += NSLocalizedString("chat.edited", comment: "") + " " }
+        if let date { s += timeString(date) }
+        if ticks { s += "\u{2003}" }
+        return " " + s
+    }
+
+    @ViewBuilder static func meta(date: Date?, state: Delivery?, edited: Bool) -> some View {
+        HStack(spacing: 3) {
+            if edited { Text("chat.edited").opacity(0.85) }
+            if let date { Text(timeString(date)) }
+            if let state { tickView(state) }
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(Theme.muted.opacity(0.9))
+        .padding(.bottom, -1)
+    }
+
     var body: some View {
         let jumbo = faded ? 0 : TextLook.emojiCount(text)
         HStack {
-            if mine { Spacer(minLength: 48) }
+            if mine { Spacer(minLength: 0) }
             if jumbo > 0 {
                 // 1-3 emoji alone: large, without a bubble (website emoji.ts jumboClass)
                 VStack(alignment: .trailing, spacing: 2) {
+                    if let head { head }
                     Text(text).font(.system(size: jumbo == 1 ? 60 : (jumbo == 2 ? 48 : 40)))
                     HStack(spacing: 4) {
+                        if edited { Text("chat.edited") }
                         if let date { Text(Self.time.string(from: date)) }
                         if let state { tick(state) }
                     }
@@ -1593,32 +1811,51 @@ struct Bubble: View {
                     .padding(.horizontal, 8).padding(.vertical, 2).background(Theme.card.opacity(0.7), in: Capsule())
                 }
             } else {
-            VStack(alignment: .trailing, spacing: 3) {
-                Text(TextLook.linked(text))
-                    .font(.body)
+                card
+            }
+            if !mine { Spacer(minLength: 0) }
+        }
+    }
+
+    private var card: some View {
+        let cut = faded || expanded ? nil : ReadMore.cut(text)
+        let arabic = TextLook.isArabic(text)
+        var shown = TextLook.linked(cut ?? text)
+        if cut != nil {
+            var more = AttributedString("… " + NSLocalizedString("chat.readmore", comment: ""))
+            more.link = URL(string: "tfreadmore://open")
+            more.foregroundColor = Theme.accent
+            more.font = .system(size: 15, weight: .semibold)
+            shown += more
+        }
+        return VStack(alignment: .leading, spacing: 4) {
+            if let head { head }
+            ZStack(alignment: .bottomTrailing) {
+                (Text(shown) + Text(Self.metaSpacer(date: date, ticks: state != nil, edited: edited)).font(.system(size: 11)).foregroundColor(.clear))
+                    .font(.system(size: 15))
                     .italic(faded)
                     .foregroundStyle(Theme.text)
                     .tint(Theme.accent)
                     .opacity(faded ? 0.7 : 1)
+                    .lineSpacing(1.5)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
-                    // an Arabic message reads right to left in its own bubble (website bidi.ts)
-                    .multilineTextAlignment(TextLook.isArabic(text) ? .trailing : .leading)
-                    .environment(\.layoutDirection, TextLook.isArabic(text) ? .rightToLeft : .leftToRight)
-                HStack(spacing: 4) {
-                    if let date { Text(Self.time.string(from: date)) }
-                    if let state { tick(state) }
-                }
-                .font(.caption2)
-                .foregroundStyle(Theme.muted.opacity(0.85))
+                    .multilineTextAlignment(arabic ? .trailing : .leading)
+                    .environment(\.openURL, OpenURLAction { url in
+                        if url.scheme == "tfreadmore" { withAnimation(.easeOut(duration: 0.15)) { expanded = true }; return .handled }
+                        parentOpen(url)
+                        return .handled
+                    })
+                Self.meta(date: date, state: state, edited: edited)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .tfBubble(mine: mine)
-            .fixedSize(horizontal: false, vertical: true)
-            }
-            if !mine { Spacer(minLength: 48) }
+            // an Arabic message reads right to left in its own bubble (website bidi.ts)
+            .environment(\.layoutDirection, arabic ? .rightToLeft : .leftToRight)
         }
+        .padding(.horizontal, 10)
+        .padding(.top, 6).padding(.bottom, 6)
+        .tfBubble(mine: mine)
+        .frame(maxWidth: UIScreen.main.bounds.width * 0.85, alignment: mine ? .trailing : .leading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder private func tick(_ s: Delivery) -> some View { Self.tickView(s) }
@@ -1633,7 +1870,6 @@ struct Bubble: View {
         }
     }
 }
-
 
 struct ExportFile: Identifiable {
     let url: URL

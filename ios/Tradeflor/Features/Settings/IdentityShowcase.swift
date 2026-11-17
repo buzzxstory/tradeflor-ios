@@ -60,6 +60,8 @@ struct IdentityCardFace: View {
     let id: StIdentity
     let link: String
     var avatar: UIImage?
+    /// The scan beam on the QR; off for the saved / shared card image.
+    var beam = true
 
     private var name: String { id.display_name.trimmingCharacters(in: .whitespaces).isEmpty ? id.username : id.display_name }
 
@@ -103,11 +105,8 @@ struct IdentityCardFace: View {
                         .frame(maxWidth: 240).background(Theme.hex(0xF2F8FA), in: RoundedRectangle(cornerRadius: 8))
                 }
                 Spacer(minLength: 0)
-                if let qr = TFQR.image(link) {
-                    Image(uiImage: qr).interpolation(.none).resizable().frame(width: 104, height: 104)
-                        .padding(6).background(.white, in: RoundedRectangle(cornerRadius: 10))
-                        .accessibilityLabel(Text(String(format: NSLocalizedString("id.qr.for", comment: ""), id.username)))
-                }
+                BrandedQR(text: link, side: 116, beam: beam)
+                    .accessibilityLabel(Text(String(format: NSLocalizedString("id.qr.for", comment: ""), id.username)))
             }
             badges
             Text("id.hint").font(.system(size: 12.5)).foregroundStyle(IdentityTone.muted).frame(maxWidth: .infinity)
@@ -203,10 +202,8 @@ struct IdentityShowcase: View {
         }
         .sheet(isPresented: $qrOnly) {
             VStack(spacing: 14) {
-                if let qr = TFQR.image(link) {
-                    Image(uiImage: qr).interpolation(.none).resizable().frame(width: 248, height: 248)
-                        .padding(12).background(.white, in: RoundedRectangle(cornerRadius: 16))
-                }
+                BrandedQR(text: link, side: 272)
+                    .accessibilityLabel(Text(String(format: NSLocalizedString("id.qr.for", comment: ""), id.username)))
                 Text(id.display_name.isEmpty ? id.username : id.display_name).font(.title3.bold()).foregroundStyle(Theme.text)
                 Text("@\(id.username) · PIN \(id.pin)").font(.subheadline).foregroundStyle(Theme.muted)
                 Button { qrOnly = false } label: {
@@ -234,7 +231,7 @@ struct IdentityShowcase: View {
     }
 
     @MainActor private func render() -> UIImage? {
-        let r = ImageRenderer(content: IdentityCardFace(id: id, link: link, avatar: avatar).frame(width: 380).padding(16).background(Theme.hex(0x02090E)))
+        let r = ImageRenderer(content: IdentityCardFace(id: id, link: link, avatar: avatar, beam: false).frame(width: 380).padding(16).background(Theme.hex(0x02090E)))
         r.scale = 3
         return r.uiImage
     }

@@ -100,22 +100,15 @@ struct FlashConnectView: View {
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.borderStrong, lineWidth: 1))
     }
 
+    /// The branded code as a picture (TRADEFLOR mark, correction Q, no beam).
     static func qr(_ s: String) -> UIImage? {
-        let f = CIFilter.qrCodeGenerator()
-        f.message = Data(s.utf8)
-        f.correctionLevel = "M"
-        guard let out = f.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)),
-              let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
-        return UIImage(cgImage: cg)
+        BrandedQR.image(text: s, side: 244)
     }
 
+    /// My QR, Group QR, event QR, GroupQRSheet: the branded code with the scan beam (its tile carries the quiet zone).
     static func qrCard(_ link: String) -> some View {
-        Group {
-            if let img = qr(link) {
-                Image(uiImage: img).interpolation(.none).resizable().frame(width: 220, height: 220)
-                    .padding(12).background(.white, in: RoundedRectangle(cornerRadius: 16))
-            }
-        }
+        BrandedQR(text: link, side: 220)
+            .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
     }
 }
 

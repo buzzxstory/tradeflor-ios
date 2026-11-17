@@ -30,7 +30,7 @@ struct StatusViewerScreen: View {
     @State private var myReacts: [String: String] = [:] // changed on this visit
     @State private var burst: (emoji: String, key: UUID)?
     @State private var reacting = false
-    static let reactions = ["❤️", "😍", "😂", "😮", "😢", "👏", "🔥", "🙏"]
+    @State private var showEmoji = false // the full emoji panel for the reply (the button in the reply box)
 
     private let photoSeconds = 5.0
 
@@ -50,18 +50,25 @@ struct StatusViewerScreen: View {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea()
-            // tap zones: left third back, the rest forward; holding pauses
-            HStack(spacing: 0) {
-                Color.clear.contentShape(Rectangle()).frame(maxWidth: .infinity).onTapGesture { previous() }
-                Color.clear.contentShape(Rectangle()).frame(maxWidth: .infinity).onTapGesture { next() }
-                Color.clear.contentShape(Rectangle()).frame(maxWidth: .infinity).onTapGesture { next() }
+            // tap zones: left third back, the rest forward; a tap on the dark area around the picture or video closes
+            // (as on iPhone; a tap only counts when it barely moves, so drags and swipes never close); holding pauses
+            GeometryReader { geo in
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(SpatialTapGesture().onEnded { v in tapStage(at: v.location, in: geo.size) })
             }
+            .ignoresSafeArea()
             .environment(\.layoutDirection, .leftToRight)
             .simultaneousGesture(
                 LongPressGesture(minimumDuration: 0.25)
                     .onChanged { _ in setPaused(true) }
-                    .onEnded { _ in setPaused(false) }
+                    .onEnded { _ in setPaused(userPaused || replyFocused || showEmoji) }
             )
+            // WhatsApp's quick reactions: the status dims and eight big emojis come up while the reply box is focused
+            if canReply && replyFocused && !showEmoji && post != nil {
+                StatusQuickGrid(onPick: { e in Task { await quickReact(e) } }, onDismiss: { replyFocused = false })
+                    .transition(.opacity)
+            }
             VStack(spacing: 10) {
                 bars
                 header
@@ -84,8 +91,17 @@ struct StatusViewerScreen: View {
         .statusBarHidden()
         .task(id: "\(g)-\(p)") { await show() }
         .sheet(isPresented: $showViewers) {
-            if let post { StatusViewersSheet(token: token, postID: post.id) }
+            if let post { StatusViewersSheet(token: token, postID: post.id, views: post.views ?? 0) }
         }
+        .sheet(isPresented: $showEmoji, onDismiss: { replyFocused = true }) {
+            // the full emoji panel: each pick goes into the reply (the panel stays open for more)
+            EmojiPickerSheet { e in
+                reply = String((reply + e).prefix(2000))
+                replyNote = nil
+            }
+        }
+        .onChange(of: showEmoji) { s in setPaused(s || replyFocused || userPaused) }
+        .animation(.easeOut(duration: 0.18), value: replyFocused)
         .confirmationDialog(Text("status.delete.confirm"), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("status.delete", role: .destructive) { Task { await deleteCurrent() } }
         }
@@ -210,38 +226,46 @@ struct StatusViewerScreen: View {
                     .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
             }
             if group.isMine, let post {
+                // WhatsApp: "^" over "eye N"; opens the "N views" list
                 Button { setPaused(true); showViewers = true } label: {
-                    Label(String(format: NSLocalizedString("stx.views", comment: ""), post.views ?? 0), systemImage: "eye")
-                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-                        .padding(.horizontal, 14).frame(height: 36).background(.black.opacity(0.45), in: Capsule())
+                    VStack(spacing: 2) {
+                        Image(systemName: "chevron.up").font(.system(size: 14, weight: .bold))
+                        HStack(spacing: 5) {
+                            Image(systemName: "eye")
+                            Text(verbatim: "\(post.views ?? 0)")
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 6).background(.black.opacity(0.45), in: Capsule())
                 }
                 .padding(.bottom, 12)
-                .accessibilityLabel(Text("stx.views.show"))
+                .accessibilityLabel(Text(statusViewsTitle(post.views ?? 0)))
+                .accessibilityHint(Text("stx.views.show"))
             } else if group.group_id == nil {
                 VStack(spacing: 6) {
                     if let replyNote { Text(replyNote).font(.system(size: 12)).foregroundStyle(.white.opacity(0.85)) }
-                    if replyFocused {
-                        // the eight quick reactions above the reply box while typing (WhatsApp)
-                        HStack(spacing: 6) {
-                            ForEach(Self.reactions, id: \.self) { e in
-                                Button { Task { await react(e) } } label: {
-                                    Text(e).font(.system(size: 28)).frame(width: 40, height: 44)
-                                        .background(myReact == e ? Color.white.opacity(0.22) : .clear, in: Circle())
-                                }
-                                .accessibilityLabel(Text(String(format: NSLocalizedString("stx.react.with", comment: ""), e)))
-                            }
-                        }
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
                     HStack(spacing: 8) {
-                        TextField("", text: $reply, prompt: Text(String(format: NSLocalizedString("stx.reply.ph", comment: ""), group.title))
-                            .foregroundColor(.white.opacity(0.6)))
-                            .focused($replyFocused)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16).frame(height: 44)
-                            .background(.black.opacity(0.45), in: Capsule())
-                            .overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 1))
-                            .onChange(of: replyFocused) { f in setPaused(f || userPaused) }
+                        HStack(spacing: 4) {
+                            TextField("", text: $reply, prompt: Text(String(format: NSLocalizedString("stx.reply.ph", comment: ""), group.title))
+                                .foregroundColor(.white.opacity(0.6)))
+                                .focused($replyFocused)
+                                .foregroundStyle(.white)
+                                .onChange(of: replyFocused) { f in setPaused(f || userPaused || showEmoji) }
+                                .onChange(of: reply) { t in if t.count > 2000 { reply = String(t.prefix(2000)) } }
+                            // the full emoji panel for the reply
+                            Button {
+                                setPaused(true)
+                                showEmoji = true
+                            } label: {
+                                Image(systemName: "face.smiling").font(.system(size: 20, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.9)).frame(width: 34, height: 44)
+                            }
+                            .accessibilityLabel(Text("stv.emoji"))
+                        }
+                        .padding(.leading, 16).padding(.trailing, 6).frame(height: 44)
+                        .background(.black.opacity(0.45), in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.3), lineWidth: 1))
                         if !reply.trimmingCharacters(in: .whitespaces).isEmpty {
                             Button { Task { await sendReply() } } label: {
                                 Group { if sending { ProgressView().tint(.white) } else { Image(systemName: "paperplane.fill") } }
@@ -251,15 +275,15 @@ struct StatusViewerScreen: View {
                             .disabled(sending)
                             .accessibilityLabel(Text("stx.reply.send"))
                         } else {
-                            // the one-tap like beside the reply box
-                            Button { Task { await react("❤️") } } label: {
-                                Image(systemName: myReact == "❤️" ? "heart.fill" : "heart")
+                            // the one-tap like beside the reply box: a private like, no chat message
+                            Button { Task { await react(statusLike) } } label: {
+                                Image(systemName: myReact == statusLike ? "heart.fill" : "heart")
                                     .font(.system(size: 22, weight: .semibold))
-                                    .foregroundStyle(myReact == "❤️" ? Color.red : .white)
+                                    .foregroundStyle(myReact == statusLike ? Color.red : .white)
                                     .frame(width: 44, height: 44)
                             }
-                            .accessibilityLabel(Text(LocalizedStringKey(myReact == "❤️" ? "stx.unlike" : "stx.like")))
-                            .accessibilityAddTraits(myReact == "❤️" ? .isSelected : [])
+                            .accessibilityLabel(Text(LocalizedStringKey(myReact == statusLike ? "stx.unlike" : "stx.like")))
+                            .accessibilityAddTraits(myReact == statusLike ? .isSelected : [])
                         }
                     }
                 }
@@ -358,14 +382,35 @@ struct StatusViewerScreen: View {
         }
     }
 
-    /// A reply goes to the person's private chat as a message quoting the status (like the website).
-    private var myReact: String {
-        guard let post else { return "" }
-        return myReacts[post.id] ?? post.my_reaction ?? ""
+    /// Someone else's personal status: a reply or a quick reaction goes to the owner's chat.
+    private var canReply: Bool { !group.isMine && group.group_id == nil }
+
+    /// A tap on the stage: on the dark area around the picture or video it closes the viewer (not while a sheet, the
+    /// emoji panel or the keyboard is up); else the left third goes back and the rest forward.
+    private func tapStage(at pt: CGPoint, in size: CGSize) {
+        if !showViewers && !confirmDelete && !showEmoji && !replyFocused,
+           let r = statusFittedRect(kind: post?.kind, image: image, player: player, in: size),
+           !r.insetBy(dx: -1, dy: -1).contains(pt) {
+            close()
+            return
+        }
+        if pt.x < size.width / 3 { previous() } else { next() }
     }
 
-    /// A quick reaction: recorded on the status (the owner sees it in Viewed by) and announced in the owner's chat.
-    /// The same emoji again takes it back (no second message).
+    /// What I reacted to this status with: changed on this visit, else sent earlier this session, else what the server remembers.
+    private var myReact: String {
+        guard let post else { return "" }
+        return myReacts[post.id] ?? StatusReactCache.shared.get(post.id) ?? post.my_reaction ?? ""
+    }
+
+    private func showBurst(_ emoji: String) {
+        let key = UUID()
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { burst = (emoji, key) }
+        Task { try? await Task.sleep(nanoseconds: 1_100_000_000); if burst?.key == key { withAnimation { burst = nil } } }
+    }
+
+    /// The like (the heart): recorded on the status only; the owner sees it in "Viewed by" and nothing goes to the chat
+    /// (WhatsApp). The heart again takes it back.
     private func react(_ emoji: String) async {
         guard let post, !reacting else { return }
         reacting = true
@@ -373,21 +418,34 @@ struct StatusViewerScreen: View {
         let prev = myReact
         let next = prev == emoji ? "" : emoji
         myReacts[post.id] = next
-        if !next.isEmpty {
-            let key = UUID()
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) { burst = (next, key) }
-            Task { try? await Task.sleep(nanoseconds: 1_100_000_000); if burst?.key == key { withAnimation { burst = nil } } }
-        }
-        reply = ""
-        replyFocused = false
+        if !next.isEmpty { showBurst(next) }
         do {
             _ = try await APIClient.shared.postJSON("status/\(post.id)/react", token: token, body: ["Emoji": next])
         } catch {
             myReacts[post.id] = prev // not recorded: show what is really there
             return
         }
-        guard !next.isEmpty else { return }
-        // the chat line is a courtesy: if it cannot be sent, the reaction still stands
+        StatusReactCache.shared.set(post.id, next) // so the like still shows when this status is opened again
+        // any reaction other than the like is also announced in the owner's chat (the heart is private)
+        guard !next.isEmpty, next != statusLike else { return }
+        await sendReactionLine(next, for: post)
+    }
+
+    /// A quick reaction from the big grid: the emoji floats up and goes to the owner's chat as a reaction line; the like
+    /// stays as it is and the status plays on.
+    private func quickReact(_ emoji: String) async {
+        guard let post else { return }
+        showBurst(emoji)
+        reply = ""
+        replyFocused = false
+        if !(await sendReactionLine(emoji, for: post)) {
+            replyNote = NSLocalizedString("stx.reply.failed", comment: "")
+        }
+    }
+
+    /// "😂 Reacted to your status · Photo" in the owner's chat (web statusReactBody). True when it was sent.
+    @discardableResult
+    private func sendReactionLine(_ emoji: String, for post: StatusPost) async -> Bool {
         let cap = (post.kind == "text" ? (post.text ?? "") : (post.caption ?? "")).split(whereSeparator: \.isWhitespace).joined(separator: " ")
         let what: String
         if !cap.isEmpty {
@@ -400,9 +458,13 @@ struct StatusViewerScreen: View {
             default: what = "Status"
             }
         }
-        if let conv = try? await APIClient.shared.directConversation(token: token, with: group.user_id) {
-            _ = try? await APIClient.shared.sendText(token: token, conversationID: conv, body: "\(next) Reacted to your status · \(what)",
-                                                     key: UUID().uuidString.lowercased())
+        do {
+            let conv = try await APIClient.shared.directConversation(token: token, with: group.user_id)
+            _ = try await APIClient.shared.sendText(token: token, conversationID: conv, body: "\(emoji) Reacted to your status · \(what)",
+                                                    key: UUID().uuidString.lowercased())
+            return true
+        } catch {
+            return false
         }
     }
 
@@ -425,7 +487,13 @@ struct StatusViewerScreen: View {
             _ = try await APIClient.shared.sendText(token: token, conversationID: conv, body: body, key: UUID().uuidString.lowercased())
             reply = ""
             replyFocused = false
-            replyNote = String(format: NSLocalizedString("stx.reply.sent", comment: ""), group.title)
+            replyNote = nil
+            // as in WhatsApp: the reply is sent, the status closes and the chat with that person opens with the reply in it
+            close()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 400_000_000) // let the viewer go first
+                LocalNotifier.shared.tappedConversation = conv
+            }
         } catch {
             replyNote = NSLocalizedString("stx.reply.failed", comment: "")
         }
@@ -457,23 +525,19 @@ struct StatusViewerScreen: View {
 struct StatusViewersSheet: View {
     let token: String
     let postID: String
+    /// The status's view count, shown in the title until the list has loaded.
+    var views: Int = 0
     @State private var viewers: [StatusViewerEntry] = []
     @State private var loading = true
 
     var body: some View {
         NavigationStack {
-            List(viewers) { v in
-                HStack {
-                    Text(v.username)
-                    if let r = v.reaction, !r.isEmpty { Text(r).accessibilityLabel(Text(String(format: NSLocalizedString("stx.reacted", comment: ""), r))) }
-                    Spacer()
-                    if let d = serverDate(v.viewed_at) { Text(d, style: .relative).foregroundStyle(.secondary).font(.caption) }
-                }
-            }
+            // WhatsApp: "N views", a heart badge on those who liked it, "today 12:31 AM"
+            List(viewers) { v in StatusViewerLine(token: token, viewer: v) }
             .overlay {
                 if loading { ProgressView() } else if viewers.isEmpty { Text("status.noviews").foregroundStyle(.secondary) }
             }
-            .navigationTitle(Text("status.viewers"))
+            .navigationTitle(Text(statusViewsTitle(loading ? views : viewers.count)))
             .navigationBarTitleDisplayMode(.inline)
         }
         .presentationDetents([.medium, .large])
