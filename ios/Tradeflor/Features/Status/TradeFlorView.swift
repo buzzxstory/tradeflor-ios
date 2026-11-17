@@ -258,7 +258,7 @@ struct TradeFlorView: View {
         switch i {
         case "high": return Theme.danger
         case "medium": return Theme.gold
-        case "low": return Theme.hex(0x3B82F6)
+        case "low": return Theme.hex(0x2BB6C9) // turquoise, the calendar's new "low" (web 0627f86)
         default: return Theme.faint
         }
     }

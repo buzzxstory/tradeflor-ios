@@ -1694,3 +1694,21 @@
 "gp2.inv.sent" = "تم إرسال الطلب ✓";
 "gp2.inv.sent.note" = "سيراجعه مشرفو المجموعة، وستظهر المجموعة في قائمتك بعد الموافقة.";
 "gp2.media.max" = "حتى %d صورة وفيديو في المرة الواحدة.";
+
+/* poll and signal composers (web f51e762) */
+"pc2.poll.sub" = "اسأل المجموعة · من 2 إلى 10 خيارات";
+"pc2.poll.ready" = "جاهز للإرسال";
+"pc2.poll.send" = "إرسال الاستطلاع";
+"pc2.poll.multi.on" = "يمكن اختيار أكثر من خيار";
+"pc2.poll.multi.off" = "يختار كل شخص خيارًا واحدًا";
+"pc2.poll.remove" = "إزالة الخيار %d";
+"pc2.signal.sub" = "الدخول ووقف الخسارة وجني الربح";
+"pc2.signal.ready" = "جاهزة للنشر";
+"pc2.signal.fill" = "املأ كل الأسعار";
+"pc2.signal.posting" = "جارٍ النشر…";
+"pc2.signal.post" = "نشر الإشارة";
+"pc2.signal.symbol" = "الرمز";
+"pc2.signal.below" = "تحت الدخول";
+"pc2.signal.above" = "فوق الدخول";
+"pc2.signal.buy" = "شراء";
+"pc2.signal.sell" = "بيع";

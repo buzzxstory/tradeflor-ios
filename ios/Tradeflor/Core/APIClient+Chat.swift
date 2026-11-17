@@ -102,6 +102,7 @@ struct GroupPinRef: Decodable, Identifiable {
     let seq: Int64
     let kind: String
     let text: String
+    var file_id: String? = nil
     var id: String { message_id }
 }
 

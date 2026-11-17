@@ -1694,3 +1694,21 @@
 "gp2.inv.sent" = "Request sent ✓";
 "gp2.inv.sent.note" = "The group's admins will review it; you will see the group in your list once approved.";
 "gp2.media.max" = "Up to %d photos and videos at a time.";
+
+/* poll and signal composers (web f51e762) */
+"pc2.poll.sub" = "Ask the group · 2 to 10 options";
+"pc2.poll.ready" = "Ready to send";
+"pc2.poll.send" = "Send poll";
+"pc2.poll.multi.on" = "People can pick more than one option";
+"pc2.poll.multi.off" = "People pick one option";
+"pc2.poll.remove" = "Remove option %d";
+"pc2.signal.sub" = "Entry, stop loss and take profit";
+"pc2.signal.ready" = "Ready to post";
+"pc2.signal.fill" = "Fill in all prices";
+"pc2.signal.posting" = "Posting…";
+"pc2.signal.post" = "Post signal";
+"pc2.signal.symbol" = "Symbol";
+"pc2.signal.below" = "Below entry";
+"pc2.signal.above" = "Above entry";
+"pc2.signal.buy" = "Buy";
+"pc2.signal.sell" = "Sell";

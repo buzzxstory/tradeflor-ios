@@ -1242,11 +1242,22 @@ struct ChatView: View {
             } label: {
                 HStack(spacing: 10) {
                     Rectangle().fill(Theme.accent).frame(width: 3, height: 32)
+                    // the pinned photo's thumbnail (retried after a refused first try, web 4ceceea), or the kind's icon
+                    if p.kind == "image", let fid = p.file_id, !fid.isEmpty {
+                        RemoteImage(token: token, fileID: fid).frame(width: 34, height: 34)
+                            .clipShape(RoundedRectangle(cornerRadius: 6)).id(fid)
+                    } else if let icon = ["file": "doc", "voice": "mic", "poll": "chart.bar", "signal": "chart.line.uptrend.xyaxis",
+                                          "location": "location"][p.kind] {
+                        Image(systemName: icon).font(.system(size: 15)).foregroundStyle(Theme.accent)
+                            .frame(width: 34, height: 34).background(Theme.surface, in: RoundedRectangle(cornerRadius: 6))
+                    }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(pins.count > 1 ? String(format: NSLocalizedString("pin.n.of", comment: ""), pinIndex + 1, pins.count)
                                             : NSLocalizedString("pin.one", comment: ""))
                             .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.accent)
-                        Text(p.text.isEmpty ? NSLocalizedString("pin." + p.kind, comment: "") : p.text)
+                        // the thumbnail already says it is a photo: no leading picture sign
+                        Text(p.text.isEmpty ? NSLocalizedString("pin." + p.kind, comment: "")
+                                            : (p.file_id != nil && p.kind == "image" ? p.text.replacingOccurrences(of: "^[🖼📷]\\s*", with: "", options: .regularExpression) : p.text))
                             .font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
                     }
                     Spacer()

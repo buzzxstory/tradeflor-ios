@@ -33,6 +33,10 @@ struct CalendarView: View {
                         "Australia/Sydney", "Pacific/Auckland", "America/Sao_Paulo", "America/New_York", "America/Chicago",
                         "America/Denver", "America/Los_Angeles"]
 
+    /// Low impact in the app's turquoise (web 0627f86: --lo #199CEB -> #2bb6c9); high red and medium amber unchanged.
+    static let lowImpact = Theme.hex(0x2BB6C9)
+    static func impactColor(_ i: String) -> Color { i == "low" ? lowImpact : TradeFlorView.impactColor(i) }
+
     private var token: String { store.session?.token ?? "" }
     private var zone: TimeZone { tzID.isEmpty ? .current : (TimeZone(identifier: tzID) ?? .current) }
     private var cal: Calendar {
@@ -79,7 +83,7 @@ struct CalendarView: View {
                                        selected: impact == "high") { impact = "high" }
                             FilterChip(title: NSLocalizedString("calendar.medium", comment: ""), icon: "circle.fill", iconColor: Theme.gold,
                                        selected: impact == "medium") { impact = "medium" }
-                            FilterChip(title: NSLocalizedString("calendar.low", comment: ""), icon: "circle.fill", iconColor: Theme.hex(0x3B82F6),
+                            FilterChip(title: NSLocalizedString("calendar.low", comment: ""), icon: "circle.fill", iconColor: Self.lowImpact,
                                        selected: impact == "low") { impact = "low" }
                             FilterChip(title: currencies.isEmpty ? NSLocalizedString("cal.currencies", comment: "")
                                         : String(format: NSLocalizedString("cal.currencies.n", comment: ""), currencies.count),
@@ -165,7 +169,7 @@ struct CalendarView: View {
                     value: "\(today.filter { $0.impact == "high" }.count)")
             counter(icon: "chart.bar.fill", tint: Theme.gold, title: NSLocalizedString("calendar.medium", comment: ""),
                     value: "\(today.filter { $0.impact == "medium" }.count)")
-            counter(icon: "chart.bar.fill", tint: Theme.hex(0x3B82F6), title: NSLocalizedString("calendar.low", comment: ""),
+            counter(icon: "chart.bar.fill", tint: Self.lowImpact, title: NSLocalizedString("calendar.low", comment: ""),
                     value: "\(today.filter { $0.impact == "low" }.count)")
         }
     }
@@ -357,7 +361,7 @@ struct CalendarView: View {
     /// Four rising bars, lit by impact (the website's impact meter).
     private func bars(_ impact: String) -> some View {
         let lit = impact == "high" ? 4 : (impact == "medium" ? 3 : (impact == "low" ? 2 : 0))
-        let color = TradeFlorView.impactColor(impact)
+        let color = Self.impactColor(impact)
         return HStack(alignment: .bottom, spacing: 2) {
             ForEach(0..<4, id: \.self) { i in
                 RoundedRectangle(cornerRadius: 1).fill(i < lit ? color : Theme.faint.opacity(0.25)).frame(width: 3, height: CGFloat(5 + i * 3))
@@ -394,7 +398,7 @@ struct CalendarView: View {
                 HStack(spacing: 8) {
                     Text(LocalizedStringKey("cal.impact." + c.0)).font(.system(size: 12)).foregroundStyle(Theme.muted).frame(width: 64, alignment: .leading)
                     GeometryReader { g in
-                        RoundedRectangle(cornerRadius: 3).fill(TradeFlorView.impactColor(c.0))
+                        RoundedRectangle(cornerRadius: 3).fill(Self.impactColor(c.0))
                             .frame(width: max(4, g.size.width * CGFloat(c.1) / CGFloat(top)))
                     }
                     .frame(height: 8)
