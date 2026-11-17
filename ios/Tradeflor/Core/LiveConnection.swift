@@ -61,9 +61,12 @@ final class LiveConnection: ObservableObject {
 
     /// One person's presence read over HTTP (opening a private chat): the same fields as the live event.
     func applyPresence(_ p: PresenceInfo, userID: String) {
-        if p.online == true { online.insert(userID) } else { online.remove(userID) }
-        if let t = p.last_seen, t > 0 { lastSeen[userID] = t }
-        if p.hidden == true { hiddenPresence.insert(userID); lastSeen[userID] = nil } else { hiddenPresence.remove(userID) }
+        let on = p.online == true
+        if on { online.insert(userID) } else { online.remove(userID) }
+        if let t = p.last_seen, t > 0 { lastSeen[userID] = t } else if !on { lastSeen[userID] = nil }
+        if let h = p.hidden {
+            if h { hiddenPresence.insert(userID); lastSeen[userID] = nil } else { hiddenPresence.remove(userID) }
+        }
     }
 
     /// The line under a person's name: "online", "last seen …", or nil.
@@ -120,6 +123,7 @@ final class LiveConnection: ObservableObject {
                 // fall through to the backoff below
             }
             connected = false
+            online = [] // not connected: nobody is shown "online" from an old answer (website liveHub.ts); last seen stays
             if Task.isCancelled { return }
             let delay = min(30.0, pow(2.0, Double(attempt)))
             attempt += 1
@@ -180,9 +184,12 @@ final class LiveConnection: ObservableObject {
                 if let c = d["conversation_id"] as? String, let u = d["user_id"] as? String { typing.send((c, u)) }
             case "presence":
                 if let u = d["user_id"] as? String {
-                    if (d["online"] as? Bool) == true { online.insert(u) } else { online.remove(u) }
-                    if let t = (d["last_seen"] as? NSNumber)?.int64Value, t > 0 { lastSeen[u] = t }
-                    if (d["hidden"] as? Bool) == true { hiddenPresence.insert(u); lastSeen[u] = nil } else { hiddenPresence.remove(u) }
+                    let on = (d["online"] as? Bool) == true
+                    if on { online.insert(u) } else { online.remove(u) }
+                    if let t = (d["last_seen"] as? NSNumber)?.int64Value, t > 0 { lastSeen[u] = t } else if !on { lastSeen[u] = nil }
+                    if let h = d["hidden"] as? Bool {
+                        if h { hiddenPresence.insert(u); lastSeen[u] = nil } else { hiddenPresence.remove(u) }
+                    }
                 }
             default:
                 // the snapshot replaces what I knew

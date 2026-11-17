@@ -107,7 +107,7 @@ struct ChatFolder: Decodable, Identifiable, Hashable {
     }
 }
 
-struct OfficialPost: Decodable, Identifiable, Equatable {
+struct OfficialPost: Codable, Identifiable, Equatable {
     let id: String
     let kind: String
     let mime: String?
@@ -118,9 +118,10 @@ struct OfficialPost: Decodable, Identifiable, Equatable {
     let created_at: Int64
     let seen: Bool
     let poster: Bool?
+    var expires_at: Int64? = nil
 }
 
-struct OfficialChannel: Decodable {
+struct OfficialChannel: Codable {
     let name: String
     let posts: [OfficialPost]?
     let all_seen: Bool
@@ -163,4 +164,24 @@ struct ConversationPrefs: Decodable {
 
     var pinned: Bool { (pinned_at ?? 0) > 0 }
     var muted: Bool { (muted_until ?? 0) > Int64(Date().timeIntervalSince1970) }
+}
+
+
+/// The last TRADEFLOR Official feed this phone saw (web a67ca84): shown at once on the next start, so the circle never
+/// vanishes while the server answers. The posts are the same for every account; only "seen" is mine and the server's
+/// answer replaces it a moment later. Posts that have expired since are left out.
+enum OfficialFeedCache {
+    private static let key = "tf.official.feed"
+
+    static func load() -> OfficialChannel? {
+        guard let d = UserDefaults.standard.data(forKey: key), let f = try? JSONDecoder().decode(OfficialChannel.self, from: d) else { return nil }
+        let now = Int64(Date().timeIntervalSince1970)
+        let posts = (f.posts ?? []).filter { ($0.expires_at ?? 0) == 0 || ($0.expires_at ?? 0) > now }
+        return posts.isEmpty ? nil : OfficialChannel(name: f.name, posts: posts, all_seen: f.all_seen)
+    }
+
+    static func keep(_ f: OfficialChannel) {
+        if (f.posts ?? []).isEmpty { UserDefaults.standard.removeObject(forKey: key); return }
+        if let d = try? JSONEncoder().encode(f) { UserDefaults.standard.set(d, forKey: key) }
+    }
 }

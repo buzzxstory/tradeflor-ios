@@ -184,7 +184,7 @@ struct ScanResultView: View {
                     Text("fc.own").foregroundStyle(Theme.faint)
                 } else if p.relation == "contact" || p.saved == true {
                     Button { Task { await openChat(p.user_id) } } label: {
-                        Text("ct.message").bold().foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 44).background(Theme.accent, in: Capsule())
+                        Text("sc.open.chat").bold().foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 44).background(Theme.accent, in: Capsule())
                     }
                 } else {
                     Button { Task { await addAndChat(p) } } label: {
@@ -243,7 +243,7 @@ struct ScanResultView: View {
         case .savedNoChat:
             // saved: the button becomes Message, which opens the chat again (safe to retry)
             person?.saved = true
-            info = NSLocalizedString("cv3.err.chat", comment: "")
+            info = NSLocalizedString("cv4.err.chat.qr", comment: "")
         case .failed(let message, _):
             info = message
         }

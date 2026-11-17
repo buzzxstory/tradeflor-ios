@@ -295,19 +295,19 @@ struct ScanConnectScreen: View {
             .frame(width: side + 44, height: side + 44)
             .frame(maxHeight: .infinity)
 
-            camRow
+            if camera.cams.count > 1 || camera.canFlip || camera.hasTorch { camRow }
             Text(note ?? " ").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.hex(0x7FF3F3))
                 .lineLimit(2).multilineTextAlignment(.center).minimumScaleFactor(0.8)
                 .frame(minHeight: 20).padding(.top, 8)
         
             VStack(spacing: 12) {
                 PhotosPicker(selection: $picked, matching: .images) {
+                    // outlined like Enter Connect Link (web 80-contacts-v4.css)
                     Label("sc.photo", systemImage: "photo.on.rectangle")
-                        .font(.system(size: small ? 17 : 19, weight: .heavy)).foregroundStyle(ScanLook.ink)
-                        .frame(maxWidth: .infinity).frame(height: small ? 54 : 60)
-                        .background(ScanLook.thumb, in: Capsule())
-                        .overlay(Capsule().stroke(Theme.hex(0xAAFAFF, 0.55), lineWidth: 1))
-                        .shadow(color: Theme.hex(0x24D6E8, 0.32), radius: 15, y: 10)
+                        .font(.system(size: small ? 17 : 18, weight: .heavy)).foregroundStyle(ScanLook.white)
+                        .frame(maxWidth: .infinity).frame(height: small ? 50 : 54)
+                        .background(Theme.hex(0x041019, 0.55), in: Capsule())
+                        .overlay(Capsule().stroke(Theme.hex(0x6EE8F4, 0.55), lineWidth: 1.5))
                 }
                 .accessibilityIdentifier("sc.photo")
                 HStack(spacing: 14) {

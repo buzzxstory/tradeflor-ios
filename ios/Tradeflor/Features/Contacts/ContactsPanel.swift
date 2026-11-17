@@ -109,7 +109,8 @@ struct ContactsPanel: View {
                 }
             } message: {
                 if let c = confirm {
-                    Text(c.kind == .block ? NSLocalizedString("ci.block.msg", comment: "") : NSLocalizedString("cv3.remove.msg", comment: ""))
+                    Text(c.kind == .block ? String(format: NSLocalizedString("cv4.block.msg", comment: ""), c.name)
+                                          : NSLocalizedString("cv3.remove.msg", comment: ""))
                 }
             }
             .fullScreenCover(isPresented: $showScanner) {
@@ -359,9 +360,12 @@ struct ContactsPanel: View {
                 if i > 0 { Rectangle().fill(CV3.rule).frame(height: 1) }
                 HStack(spacing: 10) {
                     HStack(spacing: 14) {
-                        Avatar(token: token, userID: r.from_user_id, avatarID: nil, title: r.from_username, size: 52)
+                        let rp = profiles.profile(r.from_user_id)
+                        let rname = (rp?.display_name.isEmpty == false ? rp?.display_name : nil) ?? r.from_username
+                        Avatar(token: token, userID: r.from_user_id, avatarID: rp?.avatar_id.isEmpty == false ? rp?.avatar_id : nil, title: rname, size: 52)
+                            .task { await profiles.load(token: token, userID: r.from_user_id) }
                         VStack(alignment: .leading, spacing: 1) {
-                            Text(r.from_username).font(.system(size: 17, weight: .semibold)).foregroundStyle(CV3.title).lineLimit(1)
+                            Text(rname).font(.system(size: 17, weight: .semibold)).foregroundStyle(CV3.title).lineLimit(1)
                             Text(String(format: NSLocalizedString("ct.wants", comment: ""), r.from_username))
                                 .font(.system(size: 14)).foregroundStyle(CV3.small).lineLimit(1)
                         }

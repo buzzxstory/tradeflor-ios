@@ -160,7 +160,7 @@ struct ChatListView: View {
             GlassIconButton(systemName: "person.badge.plus") { showContacts = true }
                 .accessibilityLabel(Text("ct.title"))
                 .accessibilityIdentifier("chats.new")
-                .sheet(isPresented: $showContacts) {
+                .sheet(isPresented: $showContacts, onDismiss: { Task { await load(quiet: true) } }) {
                     ContactsPanel { c in
                         Task {
                             await load(quiet: true)

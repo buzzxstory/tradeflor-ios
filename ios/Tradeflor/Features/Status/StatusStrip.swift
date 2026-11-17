@@ -5,7 +5,9 @@ import SwiftUI
 struct StatusStrip: View {
     @EnvironmentObject private var store: SessionStore
     @State private var groups: [StatusGroup] = []
-    @State private var official: OfficialChannel?
+    @State private var official: OfficialChannel? = OfficialFeedCache.load()
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var officialRetry = 0
     @State private var myAvatar: String?
     @State private var open: StatusOpen?
     @State private var openOfficial = false
@@ -44,6 +46,15 @@ struct StatusStrip: View {
             .padding(.horizontal, 16)
         }
         .task { await load() }
+        // the web re-reads every two minutes and when the app comes back to the front
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 120_000_000_000)
+                if Task.isCancelled { return }
+                await load()
+            }
+        }
+        .onChange(of: scenePhase) { p in if p == .active { Task { await load() } } }
         .fullScreenCover(item: $open) { o in
             StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) { Task { await load() } }
         }
@@ -94,7 +105,26 @@ struct StatusStrip: View {
         async let off = APIClient.shared.official(token: token)
         async let prof = APIClient.shared.profile(token: token)
         groups = (try? await feed) ?? groups
-        official = (try? await off) ?? official
+        if let o = try? await off {
+            official = o
+            OfficialFeedCache.keep(o)
+            officialRetry = 0
+        } else {
+            // not read now: the copy on screen stays, and the server is asked again soon (2, 4, 8 … at most 30 s)
+            guard officialRetry == 0 else { return } // one retry line at a time
+            officialRetry = 1
+            Task {
+                for n in 0..<8 {
+                    try? await Task.sleep(nanoseconds: UInt64(min(30, 2 << min(n, 4))) * 1_000_000_000)
+                    if let o = try? await APIClient.shared.official(token: token) {
+                        official = o
+                        OfficialFeedCache.keep(o)
+                        break
+                    }
+                }
+                officialRetry = 0
+            }
+        }
         if let p = try? await prof { myAvatar = p.avatar_id.isEmpty ? nil : p.avatar_id }
     }
 }

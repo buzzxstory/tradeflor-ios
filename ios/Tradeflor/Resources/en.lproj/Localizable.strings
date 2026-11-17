@@ -93,7 +93,7 @@
 "settings.edit" = "Edit name and about";
 "settings.photo.change" = "Change profile photo";
 "settings.photo.remove" = "Remove profile photo";
-"settings.devices" = "Linked devices";
+"settings.devices" = "Linked Devices";
 "settings.devices.footer" = "Swipe a device to sign it out.";
 "settings.devices.this" = "This iPhone";
 "settings.devices.signout" = "Sign out";
@@ -279,7 +279,7 @@
 "settings.identity.sub" = "PIN · QR · Public card";
 "settings.none" = "None";
 "settings.sharing.n" = "Sharing in %d chats";
-"settings.devices.sub" = "Where your account is signed in";
+"settings.devices.sub" = "Manage the devices where your account is signed in";
 "settings.events" = "Events";
 "settings.events.sub" = "Saved calendar events and reminders";
 "settings.events.none" = "No saved events yet. Tap the star or bell next to an event to save it.";
@@ -1361,7 +1361,7 @@
 "mc.copied" = "Connect link copied. It works once, for about a minute.";
 "mc.err.403" = "You cannot create a code right now.";
 "sc.scan.title" = "Scan & Connect";
-"sc.scan.hint" = "Scan a TRADEFLOR code to connect instantly.";
+"sc.scan.hint" = "Point your camera at a TRADEFLOR QR code.";
 "sc.not.ours" = "That is not a TRADEFLOR code.";
 "sc.cam.starting" = "Opening the camera…";
 "sc.cam.live" = "";
@@ -1637,7 +1637,7 @@
 "cv3.ph.pin" = "Type their TRADEFLOR PIN";
 "cv3.ph.username" = "Type their @username";
 "cv3.clear" = "Clear search";
-"cv3.tile.scan.sub" = "Add instantly";
+"cv3.tile.scan.sub" = "Connect with a TRADEFLOR code";
 "cv3.tile.pin" = "Add by PIN";
 "cv3.tile.pin.sub" = "e.g. 9999";
 "cv3.tile.username" = "Add by Username";
@@ -1678,3 +1678,8 @@
 "select.partial" = "Only the loaded messages are selected. Check your connection.";
 "select.deleting" = "Deleting %d messages…";
 "select.some.failed" = "Some messages couldn't be deleted. Check your connection and try again.";
+
+/* audit fixes (web d4d2e77, ea10bd9, 4c784a8) */
+"ls.summary.online" = "%@, online: Everyone";
+"cv4.block.msg" = "@%@ won't be able to message or call you. You can unblock them later.";
+"cv4.err.chat.qr" = "The contact is saved, but the chat could not be opened. Tap Open Chat to try again.";

@@ -137,6 +137,9 @@ struct LastSeenPrivacyView: View {
 
     static func summary(_ p: PresencePrivacy?) -> String {
         guard let p else { return "" }
-        return NSLocalizedString(p.last_seen == "contacts" ? "ls.contacts" : (p.last_seen == "nobody" ? "ls.nobody" : "ls.everyone"), comment: "")
+        let label = NSLocalizedString(p.last_seen == "contacts" ? "ls.contacts" : (p.last_seen == "nobody" ? "ls.nobody" : "ls.everyone"), comment: "")
+        // "My contacts, online: Everyone" when online is shared more widely than last seen (website summary())
+        if p.online == "everyone" && p.last_seen != "everyone" { return String(format: NSLocalizedString("ls.summary.online", comment: ""), label) }
+        return label
     }
 }

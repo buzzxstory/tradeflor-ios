@@ -279,7 +279,7 @@
 "settings.identity.sub" = "الرقم · رمز QR · البطاقة العامة";
 "settings.none" = "لا شيء";
 "settings.sharing.n" = "مشاركة في %d محادثات";
-"settings.devices.sub" = "أين حسابك مسجّل الدخول";
+"settings.devices.sub" = "إدارة الأجهزة التي سُجّل فيها الدخول إلى حسابك";
 "settings.events" = "الأحداث";
 "settings.events.sub" = "أحداث التقويم المحفوظة والتذكيرات";
 "settings.events.none" = "لا أحداث محفوظة بعد. اضغط النجمة أو الجرس بجانب حدث لحفظه.";
@@ -1361,7 +1361,7 @@
 "mc.copied" = "نُسخ رابط الاتصال. يعمل مرة واحدة، لنحو دقيقة.";
 "mc.err.403" = "لا يمكنك إنشاء رمز الآن.";
 "sc.scan.title" = "امسح وتواصل";
-"sc.scan.hint" = "امسح رمز TRADEFLOR للتواصل فورًا.";
+"sc.scan.hint" = "وجّه الكاميرا إلى رمز QR من TRADEFLOR.";
 "sc.not.ours" = "هذا ليس رمز TRADEFLOR.";
 "sc.cam.starting" = "جارٍ فتح الكاميرا…";
 "sc.cam.live" = "";
@@ -1637,7 +1637,7 @@
 "cv3.ph.pin" = "اكتب رمز TRADEFLOR PIN الخاص به";
 "cv3.ph.username" = "اكتب ‎@اسم المستخدم الخاص به";
 "cv3.clear" = "مسح البحث";
-"cv3.tile.scan.sub" = "أضف فورًا";
+"cv3.tile.scan.sub" = "تواصل برمز TRADEFLOR";
 "cv3.tile.pin" = "إضافة برمز PIN";
 "cv3.tile.pin.sub" = "مثال: 9999";
 "cv3.tile.username" = "إضافة باسم المستخدم";
@@ -1678,3 +1678,8 @@
 "select.partial" = "تم تحديد الرسائل المحمّلة فقط. تحقّق من اتصالك.";
 "select.deleting" = "جارٍ حذف %d رسالة…";
 "select.some.failed" = "تعذّر حذف بعض الرسائل. تحقّق من اتصالك وحاول مجددًا.";
+
+/* audit fixes (web d4d2e77, ea10bd9, 4c784a8) */
+"ls.summary.online" = "%@، الاتصال: الجميع";
+"cv4.block.msg" = "لن يتمكن ‎@%@ من مراسلتك أو الاتصال بك. يمكنك إلغاء حظره لاحقًا.";
+"cv4.err.chat.qr" = "تم حفظ جهة الاتصال، لكن تعذّر فتح المحادثة. اضغط «فتح الدردشة» للمحاولة مجددًا.";
