@@ -2236,7 +2236,6 @@ struct Bubble: View {
                         .opacity(faded ? 0.7 : 1)
                         .lineSpacing(1.5)
                         .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
                         .multilineTextAlignment(arabic ? .trailing : .leading)
                         .frame(maxWidth: .infinity, alignment: arabic ? .trailing : .leading)
                         .environment(\.layoutDirection, arabic ? .rightToLeft : .leftToRight)
@@ -2261,7 +2260,6 @@ struct Bubble: View {
                     .opacity(faded ? 0.7 : 1)
                     .lineSpacing(1.5)
                     .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
                     .multilineTextAlignment(arabic ? .trailing : .leading)
                     .environment(\.openURL, OpenURLAction { url in
                         if url.scheme == "tfreadmore" {

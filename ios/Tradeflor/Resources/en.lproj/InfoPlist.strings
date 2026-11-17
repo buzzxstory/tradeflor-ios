@@ -5,3 +5,4 @@
 "NSPhotoLibraryAddUsageDescription" = "Tradeflor saves photos and videos you choose to keep into your library.";
 "NSFaceIDUsageDescription" = "Tradeflor uses Face ID to unlock your locked chats.";
 "NSLocationWhenInUseUsageDescription" = "Tradeflor shares your live location in a chat only when you choose to, for the time you pick.";
+"NSLocalNetworkUsageDescription" = "Tradeflor uses your local network to connect voice calls directly and with the best sound.";
