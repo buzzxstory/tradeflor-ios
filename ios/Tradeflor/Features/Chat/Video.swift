@@ -269,6 +269,9 @@ final class VideoPlayback: ObservableObject {
         guard player.currentItem == nil else { return }
         let asset = RemoteMedia.asset(token: token, fileID: fileID)
         let item = AVPlayerItem(asset: asset)
+        // start as soon as a little is there (WhatsApp-like), instead of buffering ahead first
+        item.preferredForwardBufferDuration = 1.5
+        player.automaticallyWaitsToMinimizeStalling = false
         player.replaceCurrentItem(with: item)
         if let known = RemoteMedia.cachedLength(fileID) { total = known }
 
@@ -384,8 +387,8 @@ struct VideoScreen: View {
         .statusBarHidden(!controlsVisible)
         .onAppear {
             VoicePlayer.shared.stop()
-            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-            try? AVAudioSession.sharedInstance().setActive(true)
+            if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback) } // never cut a running call's microphone
+            if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setActive(true) } // never cut a running call's microphone
             model.load(token: token, fileID: fileID)
             keepShown()
         }

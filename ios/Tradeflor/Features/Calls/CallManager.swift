@@ -21,7 +21,10 @@ final class CallManager: NSObject, ObservableObject {
     enum Phase: Equatable { case idle, outgoing, incoming, connecting, active, ended }
     enum Role { case caller, callee }
 
-    @Published private(set) var phase: Phase = .idle
+    @Published private(set) var phase: Phase = .idle {
+        // while a call is on, the live socket reconnects without backoff (the server keeps the call 20 s for a device away)
+        didSet { live?.callInProgress = phase != .idle && phase != .ended }
+    }
     @Published private(set) var peerName = ""
     @Published private(set) var muted = false
     @Published private(set) var speaker = false
@@ -37,6 +40,11 @@ final class CallManager: NSObject, ObservableObject {
     @Published private(set) var peerID: String?
     /// How long the call that just ended lasted (shown on the end-of-call card).
     @Published private(set) var lastDuration: TimeInterval?
+    /// A call holds the phone's audio: voice notes and videos must not change or switch off the audio session meanwhile
+    /// (a .playback category or setActive(false) cuts the call's microphone and sound).
+    var lineInUse: Bool { phase != .idle && phase != .ended }
+    /// CallKit put this call on hold (a phone call answered with "Hold & Accept"): no microphone until it is resumed.
+    private var held = false
 
     private var live: LiveConnection?
     private var token = ""
@@ -61,9 +69,20 @@ final class CallManager: NSObject, ObservableObject {
     private var pendingSignals: [[String: Any]] = []
     private var pendingCandidates: [RTCIceCandidate] = []
     private var sentConnected = false
+    /// ICE restarts in a row without getting the connection back (web callEngine.ts MAX_ICE_RESTARTS = 3); back to 0 once
+    /// media flows again, so a long call survives several separate blips.
     private var restarts = 0
-    private var disconnectTimer: Task<Void, Never>?
+    /// This side asked for an ICE restart: the callee may make an offer (otherwise only the caller offers).
+    private var restartPending = false
+    /// The wait before an ICE restart (3.5 s grace for "disconnected", web DISCONNECT_GRACE_MS) and between attempts (9 s,
+    /// web RESTART_WAIT_MS).
+    private var restartTimer: Task<Void, Never>?
+    /// "Reconnecting..." only for a disconnection that lasts 2 s (web RECONNECTING_LABEL_MS).
+    private var labelTimer: Task<Void, Never>?
     private var safetyTimer: Task<Void, Never>?
+    /// Offers, answers and candidates are applied one at a time, in arrival order: WebRTC's asynchronous steps must not
+    /// interleave (an offer applied while our own was half made is what broke renegotiation).
+    private var negotiation: Task<Void, Never>?
 
     private let provider: CXProvider
     private let callController = CXCallController()
@@ -89,6 +108,7 @@ final class CallManager: NSObject, ObservableObject {
         self.live = live
         self.token = token
         self.me = userID
+        live.callInProgress = phase != .idle && phase != .ended
         subs.removeAll()
         live.calls.receive(on: RunLoop.main).sink { [weak self] ev in self?.handle(ev.type, ev.data) }.store(in: &subs)
         live.opened.receive(on: RunLoop.main).sink { [weak self] in self?.send("call.sync", [:]) }.store(in: &subs)
@@ -147,7 +167,14 @@ final class CallManager: NSObject, ObservableObject {
             let handle = CXHandle(type: .generic, value: peerName)
             let action = CXStartCallAction(call: id, handle: handle)
             action.isVideo = false
-            callController.request(CXTransaction(action: action)) { _ in }
+            callController.request(CXTransaction(action: action)) { [weak self] err in
+                let refused = err != nil
+                Task { @MainActor in
+                    guard let self = self, self.uuid == id else { return }
+                    if refused { self.audioWithoutCallKit() } // CallKit refused: no one else switches the audio on
+                    else { self.provider.reportCall(with: id, updated: self.callCapabilities()) }
+                }
+            }
             send("call.invite", ["call_id": callID ?? "", "conversation_id": conversationID])
             arm(seconds: 70) { [weak self] in self?.hangUp() }
         }
@@ -156,7 +183,7 @@ final class CallManager: NSObject, ObservableObject {
     func accept() {
         guard phase == .incoming else { return }
         callController.request(CXTransaction(action: CXAnswerCallAction(call: uuid))) { [weak self] err in
-            if err != nil { Task { @MainActor in self?.doAccept() } }
+            if err != nil { Task { @MainActor in self?.audioWithoutCallKit(); self?.doAccept() } }
         }
     }
 
@@ -202,10 +229,40 @@ final class CallManager: NSObject, ObservableObject {
         }
     }
 
+    /// CallKit normally activates the call's audio session (provider didActivate). When it refused the call, the app does
+    /// it itself, or WebRTC never starts the microphone and speaker (and iOS suspends the app in the background).
+    private var ownAudio = false
+    private func audioWithoutCallKit() {
+        guard !ownAudio else { return }
+        ownAudio = true
+        CallManager.configureAudioSession()
+        let s = RTCAudioSession.sharedInstance()
+        s.lockForConfiguration()
+        try? s.setActive(true)
+        s.unlockForConfiguration()
+        s.isAudioEnabled = true
+    }
+
+    fileprivate func applyHeld(_ value: Bool) {
+        held = value
+        audioTrack?.isEnabled = !(muted || held)
+    }
+
+    /// What CallKit may do with this call: hold it (WhatsApp's "Hold & Accept" for a phone call), nothing else.
+    private func callCapabilities() -> CXCallUpdate {
+        let u = CXCallUpdate()
+        u.supportsHolding = true
+        u.supportsGrouping = false
+        u.supportsUngrouping = false
+        u.supportsDTMF = false
+        u.hasVideo = false
+        return u
+    }
+
     fileprivate func applyMute(_ value: Bool) {
         guard muted != value else { return }
         muted = value
-        audioTrack?.isEnabled = !muted
+        audioTrack?.isEnabled = !(muted || held)
         if let id = callID, phase == .connecting || phase == .active { send("call.media", ["call_id": id, "muted": muted]) }
     }
 
@@ -262,13 +319,14 @@ final class CallManager: NSObject, ObservableObject {
             peerID = (role == .caller ? d["callee_id"] : d["caller_id"]) as? String ?? peerID
             phase = .connecting
             arm(seconds: 45) { [weak self] in self?.hangUp() }
-            Task { await setUpPeerConnection() }
+            serially { [weak self] in await self?.setUpPeerConnection() }
         case "call.active":
             guard cid == callID else { return }
             markActive()
         case "call.signal":
             guard cid == callID else { return }
-            if pc == nil { pendingSignals.append(d) } else { Task { await applySignal(d) } }
+            // before call.accepted there is no peer connection yet: kept until setUpPeerConnection
+            if pc == nil && negotiation == nil { pendingSignals.append(d) } else { serially { [weak self] in await self?.applySignal(d) } }
         case "call.peer_media":
             guard cid == callID else { return }
             peerMuted = (d["muted"] as? Bool) ?? false
@@ -284,10 +342,14 @@ final class CallManager: NSObject, ObservableObject {
             } else if let c = call, phase == .idle, (c["state"] as? String) == "ringing", (c["role"] as? String) == "callee",
                       let id = c["call_id"] as? String {
                 ringIncoming(c, id: id)
+            } else if let c = call, (c["call_id"] as? String) == callID, phase == .connecting || phase == .active {
+                // the socket came back and the server still has our call: what was sent while it was down is lost
+                resumeAfterSocketGap()
             }
         case "call.error":
+            // only a refused invite ends the call (web callEngine.ts); a refused signal or media frame is only logged there
             guard cid == nil || cid == "" || cid == callID else { return }
-            if (d["op"] as? String) == "call.invite" || phase == .outgoing {
+            if (d["op"] as? String) == "call.invite" && phase == .outgoing {
                 endReason = d["code"] as? String
                 finish()
             }
@@ -305,10 +367,9 @@ final class CallManager: NSObject, ObservableObject {
         phase = .incoming
         peerName = NSLocalizedString("call.someone", comment: "")
         if let caller = d["caller_id"] as? String { Task { await lookUpName(caller) } }
-        let update = CXCallUpdate()
+        let update = callCapabilities()
         update.remoteHandle = CXHandle(type: .generic, value: peerName)
         update.localizedCallerName = peerName
-        update.hasVideo = false
         provider.reportNewIncomingCall(with: uuid, update: update) { _ in }
         showScreen = true
         arm(seconds: 50) { [weak self] in
@@ -322,7 +383,7 @@ final class CallManager: NSObject, ObservableObject {
         if let list = try? await APIClient.shared.conversations(token: token),
            let c = list.first(where: { $0.peer_id == userID }) {
             peerName = c.title
-            let update = CXCallUpdate()
+            let update = callCapabilities()
             update.localizedCallerName = c.title
             update.remoteHandle = CXHandle(type: .generic, value: c.title)
             provider.reportCall(with: uuid, updated: update)
@@ -332,8 +393,10 @@ final class CallManager: NSObject, ObservableObject {
     // MARK: WebRTC
 
     private func setUpPeerConnection() async {
-        guard pc == nil else { return }
+        guard pc == nil, let id = callID else { return }
         let ice = (try? await APIClient.shared.iceServers(token: token)) ?? []
+        // the call may have ended while the TURN credentials were on their way
+        guard pc == nil, callID == id, phase == .connecting || phase == .active else { return }
         let cfg = RTCConfiguration()
         cfg.iceServers = ice
         cfg.bundlePolicy = .maxBundle
@@ -350,7 +413,7 @@ final class CallManager: NSObject, ObservableObject {
             mandatoryConstraints: ["googEchoCancellation": "true", "googNoiseSuppression": "true", "googAutoGainControl": "true"],
             optionalConstraints: nil))
         let track = Self.factory.audioTrack(with: source, trackId: "mic")
-        track.isEnabled = !muted
+        track.isEnabled = !(muted || held)
         audioTrack = track
         if role == .caller {
             conn.add(track, streamIds: ["tf"]) // triggers negotiation: we make the first offer
@@ -361,16 +424,20 @@ final class CallManager: NSObject, ObservableObject {
         for s in queued { await applySignal(s) }
     }
 
-    private func makeOffer() async {
-        guard let pc else { return }
+    /// Runs in the negotiation queue. A failed (re)negotiation never ends the call by itself (web callEngine.ts only logs
+    /// it): the ICE restart loop and the server's connect timeout decide.
+    private func makeOffer(_ conn: RTCPeerConnection) async {
+        // not stable: an offer or answer is in progress; WebRTC asks again ("negotiation needed") once it is stable
+        guard pc === conn, conn.signalingState == .stable else { return }
         makingOffer = true
         defer { makingOffer = false }
         do {
-            let offer = try await pc.tfOffer()
-            try await pc.tfSetLocal(offer)
+            let offer = try await conn.tfOffer()
+            guard pc === conn, conn.signalingState == .stable else { return }
+            try await conn.tfSetLocal(offer)
             sendDescription(offer)
         } catch {
-            fail("negotiation_failed")
+            print("call: offer failed: \(error)")
         }
     }
 
@@ -387,15 +454,20 @@ final class CallManager: NSObject, ObservableObject {
         let sdp = (payload["sdp"] as? String) ?? ""
         do {
             if t == "offer" {
+                // both sides restarting ICE at once (both saw the same network blip) is normal: perfect negotiation
                 let collision = makingOffer || pc.signalingState != .stable
                 if collision && role == .caller { return } // impolite: ignore theirs, ours wins
-                if collision { try await pc.tfSetLocal(RTCSessionDescription(type: .rollback, sdp: "")) }
+                if collision && pc.signalingState == .haveLocalOffer {
+                    try await pc.tfSetLocal(RTCSessionDescription(type: .rollback, sdp: "")) // polite: drop ours
+                }
                 try await pc.tfSetRemote(RTCSessionDescription(type: .offer, sdp: sdp))
                 attachMicIfNeeded()
                 let answer = try await pc.tfAnswer()
                 try await pc.tfSetLocal(answer)
                 sendDescription(answer)
             } else if t == "answer" {
+                // an answer to an offer we no longer have (rolled back, or a duplicate after a socket gap): nothing to do
+                guard pc.signalingState == .haveLocalOffer else { return }
                 try await pc.tfSetRemote(RTCSessionDescription(type: .answer, sdp: sdp))
             } else {
                 return
@@ -404,7 +476,8 @@ final class CallManager: NSObject, ObservableObject {
             pendingCandidates = []
             for c in queued { try? await pc.tfAdd(c) }
         } catch {
-            fail("negotiation_failed")
+            // the web logs this and goes on: the call ends only through ICE restarts running out or the server's timeout
+            print("call: applying a \(t) failed: \(error)")
         }
     }
 
@@ -436,44 +509,119 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     private func connectionChanged(_ state: RTCPeerConnectionState) {
-        if state == .connected, !sentConnected, let id = callID {
-            sentConnected = true
-            send("call.connected", ["call_id": id])
-            if muted { send("call.media", ["call_id": id, "muted": true]) }
-            markActive()
-        }
-    }
-
-    private func iceChanged(_ state: RTCIceConnectionState) {
         switch state {
-        case .connected, .completed:
-            disconnectTimer?.cancel()
-            reconnecting = false
-        case .disconnected:
-            if phase == .active { reconnecting = true }
-            disconnectTimer?.cancel()
-            disconnectTimer = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 3_500_000_000)
-                if !Task.isCancelled { await self?.restartIce() }
+        case .connected:
+            recovered()
+            if !sentConnected, let id = callID {
+                sentConnected = true
+                send("call.connected", ["call_id": id])
+                if muted { send("call.media", ["call_id": id, "muted": true]) }
+                markActive()
             }
         case .failed:
-            if phase == .active { reconnecting = true }
-            Task { await restartIce() }
+            iceChanged(.failed)
         default:
             break
         }
     }
 
+    /// Media flows again: no more "Reconnecting...", restarts counted from zero for the next blip.
+    private func recovered() {
+        restartTimer?.cancel(); restartTimer = nil
+        labelTimer?.cancel(); labelTimer = nil
+        reconnecting = false
+        restarts = 0
+        restartPending = false
+    }
+
+    /// Mirrors web callEngine.ts onIceState: "disconnected" often heals by itself, so it gets 3.5 s before an ICE restart
+    /// and "Reconnecting..." only after 2 s; "failed" restarts at once. The call is never ended here.
+    private func iceChanged(_ state: RTCIceConnectionState) {
+        switch state {
+        case .connected, .completed:
+            if pc?.connectionState == .connected { recovered() }
+        case .disconnected, .failed:
+            guard phase == .connecting || phase == .active else { return }
+            if phase == .active && !reconnecting {
+                if state == .failed {
+                    reconnecting = true
+                } else if labelTimer == nil {
+                    labelTimer = Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
+                        guard let self, !Task.isCancelled else { return }
+                        self.labelTimer = nil
+                        let now = self.pc?.iceConnectionState
+                        if self.phase == .active && (now == .disconnected || now == .failed) { self.reconnecting = true }
+                    }
+                }
+            }
+            if state == .failed {
+                // a restart already under way gets its full 9 s; otherwise no need to wait out the grace
+                if restartTimer != nil && restarts > 0 { return }
+                scheduleRestart(after: 0)
+            } else if restartTimer == nil {
+                scheduleRestart(after: 3.5)
+            }
+        default:
+            break
+        }
+    }
+
+    private func scheduleRestart(after seconds: Double) {
+        restartTimer?.cancel()
+        restartTimer = Task { @MainActor [weak self] in
+            if seconds > 0 { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+            guard let self, !Task.isCancelled else { return }
+            self.restartTimer = nil
+            await self.restartIce()
+        }
+    }
+
+    /// One ICE restart with fresh TURN credentials; the next one in 9 s if the connection is not back by then, and after
+    /// three in a row the call is reported failed (web callEngine.ts restartIce).
     private func restartIce() async {
         guard let pc, phase == .connecting || phase == .active else { return }
+        if pc.connectionState == .connected { recovered(); return }
+        if restarts >= 3 { fail("ice_failed"); return }
         restarts += 1
-        if restarts > 3 { fail("ice_failed"); return }
-        if let ice = try? await APIClient.shared.iceServers(token: token) {
+        if phase == .active { reconnecting = true }
+        scheduleRestart(after: 9)
+        if let ice = try? await APIClient.shared.iceServers(token: token), self.pc === pc {
             let cfg = pc.configuration
             cfg.iceServers = ice
             _ = pc.setConfiguration(cfg)
         }
-        pc.restartIce() // fires "negotiation needed": a new offer from this side
+        guard self.pc === pc, phase == .connecting || phase == .active else { return }
+        if pc.connectionState == .connected { recovered(); return } // came back by itself meanwhile
+        restartPending = true
+        pc.restartIce() // fires "negotiation needed": a new offer from this side (perfect negotiation handles collisions)
+    }
+
+    /// The socket was down and is back (call.sync answered with our call). An offer of ours sent meanwhile never arrived:
+    /// send it again; a connection that is still down gets its ICE restart now instead of at the next step.
+    private func resumeAfterSocketGap() {
+        guard let conn = pc else { return }
+        serially { [weak self] in
+            guard let self, self.pc === conn else { return }
+            if conn.signalingState == .haveLocalOffer, let offer = conn.localDescription {
+                self.sendDescription(offer)
+                return
+            }
+            let ice = conn.iceConnectionState
+            if (ice == .disconnected || ice == .failed) && self.restarts == 0 { self.scheduleRestart(after: 0) }
+        }
+    }
+
+    /// Runs `op` after every earlier negotiation step has finished.
+    /// A step queued for a call that has ended meanwhile (or been replaced by the next one) is dropped.
+    private func serially(_ op: @escaping @MainActor () async -> Void) {
+        let previous = negotiation
+        let call = uuid
+        negotiation = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, self.uuid == call, self.callID != nil else { return }
+            await op()
+        }
     }
 
     private func fail(_ cls: String) {
@@ -506,7 +654,10 @@ final class CallManager: NSObject, ObservableObject {
         CallTones.shared.ringback(false)
         if hadCall { if endReason == "busy" { CallTones.shared.busy() } else { CallTones.shared.end() } }
         safetyTimer?.cancel()
-        disconnectTimer?.cancel()
+        restartTimer?.cancel(); restartTimer = nil
+        labelTimer?.cancel(); labelTimer = nil
+        negotiation = nil
+        restartPending = false
         pc?.close()
         pc = nil
         audioTrack = nil
@@ -516,6 +667,15 @@ final class CallManager: NSObject, ObservableObject {
         pendingCandidates = []
         sentConnected = false
         restarts = 0
+        held = false
+        if ownAudio {
+            ownAudio = false
+            let s = RTCAudioSession.sharedInstance()
+            s.isAudioEnabled = false
+            s.lockForConfiguration()
+            try? s.setActive(false)
+            s.unlockForConfiguration()
+        }
         if hadCall {
             let reason: CXCallEndedReason = endReason == "no_answer" ? .unanswered
                 : (endReason == "answered_elsewhere" ? .answeredElsewhere : .remoteEnded)
@@ -552,8 +712,8 @@ extension CallManager: RTCPeerConnectionDelegate {
     nonisolated func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
         Task { @MainActor in
             // the callee only negotiates for an ICE restart; its first answer comes from the caller's offer
-            guard self.pc === peerConnection, self.role == .caller || self.restarts > 0 else { return }
-            await self.makeOffer()
+            guard self.pc === peerConnection, self.role == .caller || self.restartPending else { return }
+            self.serially { [weak self] in await self?.makeOffer(peerConnection) }
         }
     }
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
@@ -589,6 +749,11 @@ extension CallManager: CXProviderDelegate {
         Task { @MainActor in
             if self.phase == .incoming { self.decline() } else if self.phase != .ended && self.phase != .idle { self.hangUp() }
         }
+        action.fulfill()
+    }
+    nonisolated func provider(_ provider: CXProvider, perform action: CXSetHeldCallAction) {
+        let onHold = action.isOnHold
+        Task { @MainActor in self.applyHeld(onHold) }
         action.fulfill()
     }
     nonisolated func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {

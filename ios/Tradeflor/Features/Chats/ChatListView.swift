@@ -147,15 +147,19 @@ struct ChatListView: View {
         HStack(spacing: 10) {
             Text("chats.title").font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.text)
             Spacer()
-            GlassIconButton(systemName: "qrcode.viewfinder") { showFlash = true }
-                .accessibilityLabel(Text("fc.title"))
-                .sheet(isPresented: $showFlash) {
-                    FlashConnectView { c in
+            // straight to Scan & Connect, as on the web (ChatScreen openFlash({view: "scan"}))
+            GlassIconButton(systemName: "qrcode.viewfinder") { ScanTiming.tapped(); showFlash = true }
+                .accessibilityLabel(Text("sc.scan.title"))
+                .fullScreenCover(isPresented: $showFlash) {
+                    ScanFlow { c in
+                        showFlash = false
                         Task {
                             await load(quiet: true)
                             path = [c]
                         }
                     }
+                    .environmentObject(store)
+                    .environmentObject(live)
                 }
             GlassIconButton(systemName: "person.badge.plus") { showContacts = true }
                 .accessibilityLabel(Text("ct.title"))

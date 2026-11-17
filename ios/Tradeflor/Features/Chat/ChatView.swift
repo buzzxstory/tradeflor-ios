@@ -89,8 +89,6 @@ struct ChatView: View {
     @State private var fileRetries: [String: Int] = [:]
     /// Group typing: everyone typing now, each with their own 3.5 s timer (web 86beee5).
     @State private var typingUsers: [String: Date] = [:]
-    /// Rows on screen now: the floating date pill shows the day of the top one (groups, web 5b6f8e1).
-    @State private var visibleIDs: Set<String> = []
     /// "Select all" took the whole chat (every older page loaded first): Delete then also takes the call entries (web b9833d1).
     @State private var allPicked = false
     @State private var pickingAll = false
@@ -194,7 +192,7 @@ struct ChatView: View {
                             }
                             if albums.hidden.contains(m.id) {
                                 // drawn inside its album
-                                Color.clear.frame(height: 0).id(m.id).onAppear { seen(m.id) }
+                                Color.clear.frame(height: 0).id(m.id).onAppear { if !unseenBelow.isEmpty { seen(m.id) } }
                             } else {
                             let asGroup = isGroup && roleOf(m.sender_id) == "owner"
                             MessageRow(message: m, mine: m.sender_id == me, myID: me, peerName: chat.title,
@@ -269,8 +267,7 @@ struct ChatView: View {
                                 }
                             }
                             .id(m.id)
-                            .onAppear { seen(m.id); visibleIDs.insert(m.id) }
-                            .onDisappear { visibleIDs.remove(m.id) }
+                            .onAppear { if !unseenBelow.isEmpty { seen(m.id) } }
                             }
                         }
                         ForEach(pending) { p in
@@ -406,18 +403,6 @@ struct ChatView: View {
                     .onChange(of: unseenBelow.count) { _ in
                         withAnimation(.spring(response: 0.2, dampingFraction: 0.5)) { badgePop = true }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { withAnimation { badgePop = false } }
-                    }
-                }
-                .overlay(alignment: .top) {
-                    // the day of the top message, floating while a group is scrolled (web: sticky date in groups)
-                    if isGroup, toast == nil, let first = messages.first, !visibleIDs.contains(first.id),
-                       let top = messages.first(where: { visibleIDs.contains($0.id) }), let d = top.date {
-                        Text(DayLabel.text(d)).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                            .padding(.horizontal, 10).padding(.vertical, 4)
-                            .background(Theme.surface.opacity(0.95), in: Capsule())
-                            .padding(.top, 8)
-                            .allowsHitTesting(false)
-                            .transition(.opacity)
                     }
                 }
                 .overlay(alignment: .top) {
@@ -2038,11 +2023,10 @@ struct PhotoBubble<Content: View>: View {
     /// The picture's own size when known here (a picture being sent).
     var size: CGSize? = nil
     @ViewBuilder let content: () -> Content
-    @ObservedObject private var dims = MediaDims.shared
     @Environment(\.tfMediaForward) private var forward
 
     var body: some View {
-        let box = MediaDims.box(size ?? fileID.flatMap { dims.size($0) })
+        let box = MediaDims.box(size ?? fileID.flatMap { MediaDims.shared.size($0) })
         HStack(alignment: .center, spacing: 8) {
             if mine { Spacer(minLength: 0) }
             if mine, let forward { forwardButton(forward) }
@@ -2198,6 +2182,34 @@ struct Bubble: View {
         }
         return VStack(alignment: .leading, spacing: 4) {
             if let head { head }
+            if cut != nil || arabic {
+                // a cut message ("… Read more") or right-to-left text: the time sits on its own line under the text, so the
+                // two never overlap (mixed directions move an inline spacer)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(shown)
+                        .font(.system(size: 15))
+                        .italic(faded)
+                        .foregroundStyle(Theme.text)
+                        .tint(Theme.accent)
+                        .opacity(faded ? 0.7 : 1)
+                        .lineSpacing(1.5)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(arabic ? .trailing : .leading)
+                        .frame(maxWidth: .infinity, alignment: arabic ? .trailing : .leading)
+                        .environment(\.layoutDirection, arabic ? .rightToLeft : .leftToRight)
+                        .environment(\.openURL, OpenURLAction { url in
+                            if url.scheme == "tfreadmore" {
+                                ReadMore.opened.insert(text.hashValue)
+                                withAnimation(.easeOut(duration: 0.15)) { expanded = true }
+                                return .handled
+                            }
+                            parentOpen(url)
+                            return .handled
+                        })
+                    Self.meta(date: date, state: state, edited: edited)
+                }
+            } else {
             ZStack(alignment: .bottomTrailing) {
                 (Text(shown) + Text(Self.metaSpacer(date: date, ticks: state != nil, edited: edited)).font(.system(size: 11)).foregroundColor(.clear))
                     .font(.system(size: 15))
@@ -2220,8 +2232,8 @@ struct Bubble: View {
                     })
                 Self.meta(date: date, state: state, edited: edited)
             }
-            // an Arabic message reads right to left in its own bubble (website bidi.ts)
-            .environment(\.layoutDirection, arabic ? .rightToLeft : .leftToRight)
+            .environment(\.layoutDirection, .leftToRight)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.top, 6).padding(.bottom, 6)
@@ -2254,7 +2266,17 @@ enum TextLook {
     private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
     /// Every web address in the text is a link (Tradeflor links open inside the app).
+    private static var linkedCache: [String: AttributedString] = [:]
+
     static func linked(_ text: String) -> AttributedString {
+        if let hit = linkedCache[text] { return hit }
+        let out = findLinks(text)
+        if linkedCache.count > 800 { linkedCache.removeAll(keepingCapacity: true) }
+        linkedCache[text] = out
+        return out
+    }
+
+    private static func findLinks(_ text: String) -> AttributedString {
         var out = AttributedString(text)
         guard let detector, text.contains(".") else { return out }
         for m in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {

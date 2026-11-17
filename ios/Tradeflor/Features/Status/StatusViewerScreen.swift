@@ -18,7 +18,17 @@ struct StatusViewerScreen: View {
     @State private var image: UIImage?
     @State private var player: AVPlayer?
     @State private var musicPlayer: AVPlayer?
-    @State private var drag: CGFloat = 0
+    @State private var poster: UIImage? // a video status's poster, shown at once while the video loads
+    @State private var videoStarted = false
+    // swipe down to close (web swipeDismiss)
+    @State private var dragY: CGFloat = 0
+    @State private var dragAxis: SwipeAxis?
+    @State private var closing = false
+    @State private var stageH: CGFloat = 800
+    /// when a hold or a swipe last ended: the tap the finger may end with is not a tap on a zone
+    @State private var lastGestureAt = Date.distantPast
+    @GestureState private var holding = false
+    @GestureState private var touching = false
     @State private var showViewers = false
     @State private var confirmDelete = false
     @State private var muted = false
@@ -34,6 +44,8 @@ struct StatusViewerScreen: View {
 
     private let photoSeconds = 5.0
 
+    private enum SwipeAxis { case down, up, side }
+
     init(groups: [StatusGroup], startGroup: Int, token: String, onClose: @escaping () -> Void) {
         self.groups = groups
         self.token = token
@@ -46,50 +58,36 @@ struct StatusViewerScreen: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea()
-            // tap zones: left third back, the rest forward; a tap on the dark area around the picture or video closes
-            // (as on iPhone; a tap only counts when it barely moves, so drags and swipes never close); holding pauses
-            GeometryReader { geo in
-                Color.clear
-                    .contentShape(Rectangle())
-                    .gesture(SpatialTapGesture().onEnded { v in tapStage(at: v.location, in: geo.size) })
-            }
-            .ignoresSafeArea()
-            .environment(\.layoutDirection, .leftToRight)
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.25)
-                    .onChanged { _ in setPaused(true) }
-                    .onEnded { _ in setPaused(userPaused || replyFocused || showEmoji) }
-            )
-            // WhatsApp's quick reactions: the status dims and eight big emojis come up while the reply box is focused
-            if canReply && replyFocused && !showEmoji && post != nil {
-                StatusQuickGrid(onPick: { e in Task { await quickReact(e) } }, onDismiss: { replyFocused = false })
-                    .transition(.opacity)
-            }
-            VStack(spacing: 10) {
-                bars
-                header
-                Spacer()
-                footer
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 6)
+            // the dark backdrop: it fades while the story is swiped down, so the screen underneath shows through
+            Color.black.opacity(closing ? 0 : StatusSwipe.backdrop(dragY, height: stageH)).ignoresSafeArea()
+            stage
+                .scaleEffect(StatusSwipe.scale(dragY, height: stageH))
+                .offset(y: dragY)
+                .opacity(closing ? 0 : 1)
+                // anywhere on the story: down closes, up (my own) shows who viewed / (someone else's) the next person,
+                // sideways goes to the next or previous person. Simultaneous, so the taps and the hold keep working.
+                .simultaneousGesture(swipe)
         }
-        .offset(y: drag)
-        .gesture(
-            DragGesture()
-                .onChanged { v in if v.translation.height > 0 && !replyFocused { drag = v.translation.height } }
-                .onEnded { v in
-                    if v.translation.height > 120 && !replyFocused { close() }
-                    else if v.translation.height < -80 && !replyFocused { nextPerson() } // swipe up: the next person
-                    else { withAnimation { drag = 0 } }
-                }
-        )
+        .background(GeometryReader { geo in
+            Color.clear
+                .onAppear { stageH = max(1, geo.size.height) }
+                .onChange(of: geo.size.height) { h in stageH = max(1, h) }
+        })
+        .modifier(StatusClearCover())
         .statusBarHidden()
         .task(id: "\(g)-\(p)") { await show() }
+        .onChange(of: holding) { h in
+            if h { setPaused(true) } else { lastGestureAt = Date(); resume() }
+        }
+        .onChange(of: touching) { t in
+            // a drag the system cancelled (no onEnded): put the story back
+            guard !t else { return }
+            DispatchQueue.main.async {
+                guard dragAxis != nil, !closing else { return }
+                dragAxis = nil
+                springBack()
+            }
+        }
         .sheet(isPresented: $showViewers) {
             if let post { StatusViewersSheet(token: token, postID: post.id, views: post.views ?? 0) }
         }
@@ -100,7 +98,9 @@ struct StatusViewerScreen: View {
                 replyNote = nil
             }
         }
-        .onChange(of: showEmoji) { s in setPaused(s || replyFocused || userPaused) }
+        .onChange(of: showEmoji) { _ in resume() }
+        .onChange(of: showViewers) { _ in resume() }
+        .onChange(of: confirmDelete) { _ in resume() }
         .animation(.easeOut(duration: 0.18), value: replyFocused)
         .confirmationDialog(Text("status.delete.confirm"), isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("status.delete", role: .destructive) { Task { await deleteCurrent() } }
@@ -117,6 +117,126 @@ struct StatusViewerScreen: View {
         .onDisappear { player?.pause(); musicPlayer?.pause(); musicPlayer = nil; onClose() }
     }
 
+    /// The story itself (what moves with the finger): the picture / video / text, the tap zones, the bars and controls.
+    private var stage: some View {
+        ZStack {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
+            // tap zones: left third back, the rest forward; a tap on the dark area around the picture or video closes
+            // (as on iPhone; a tap only counts when it barely moves, so drags and swipes never close); holding pauses
+            GeometryReader { geo in
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(SpatialTapGesture().onEnded { v in tapStage(at: v.location, in: geo.size) })
+            }
+            .ignoresSafeArea()
+            .environment(\.layoutDirection, .leftToRight)
+            .simultaneousGesture(hold)
+            // WhatsApp's quick reactions: the status dims and eight big emojis come up while the reply box is focused
+            if canReply && replyFocused && !showEmoji && post != nil {
+                StatusQuickGrid(onPick: { e in Task { await quickReact(e) } }, onDismiss: { replyFocused = false })
+                    .transition(.opacity)
+            }
+            VStack(spacing: 10) {
+                bars
+                header
+                Spacer()
+                footer
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+        }
+    }
+
+    // MARK: gestures
+
+    /// Hold to pause: paused from the moment the hold is recognised until the finger lifts (a LongPressGesture alone
+    /// ends as soon as it is recognised, which resumed the story while the finger was still down).
+    private var hold: some Gesture {
+        LongPressGesture(minimumDuration: 0.25)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
+            .updating($holding) { v, state, _ in
+                if case .second(true, _) = v { state = true }
+            }
+    }
+
+    private var swipe: some Gesture {
+        DragGesture(minimumDistance: 12, coordinateSpace: .global)
+            .updating($touching) { _, state, _ in state = true }
+            .onChanged { v in swipeChanged(v) }
+            .onEnded { v in swipeEnded(v) }
+    }
+
+    /// No swipe while the keyboard, the emoji panel, a sheet or the delete question is up.
+    private var swipeAllowed: Bool { !replyFocused && !showEmoji && !showViewers && !confirmDelete && !closing }
+
+    private func swipeChanged(_ v: DragGesture.Value) {
+        let dx = v.translation.width
+        let dy = v.translation.height
+        if dragAxis == nil {
+            guard swipeAllowed else { return }
+            // the first move decides: mostly vertical is a drag down / a swipe up, anything else is sideways
+            dragAxis = abs(dy) > abs(dx) * 1.2 ? (dy > 0 ? SwipeAxis.down : SwipeAxis.up) : SwipeAxis.side
+            if dragAxis == .down { setPaused(true) } // the story waits while it is dragged
+        }
+        if dragAxis == .down { dragY = max(0, dy) } // follows the finger 1:1 (no animation while the finger is down)
+    }
+
+    private func swipeEnded(_ v: DragGesture.Value) {
+        let axis = dragAxis
+        dragAxis = nil
+        lastGestureAt = Date()
+        guard let axis, !closing else { return }
+        let dx = v.translation.width
+        let dy = v.translation.height
+        switch axis {
+        case .down:
+            if StatusSwipe.shouldClose(v) { closeBySwipe() } else { springBack() }
+        case .up:
+            guard dy <= -70 else { return }
+            if group.isMine, post != nil {
+                setPaused(true) // swipe up on my own status: who viewed it (web)
+                showViewers = true
+            } else {
+                nextPerson()
+            }
+        case .side:
+            let pdx = v.predictedEndTranslation.width
+            if dx <= -60 || (dx < -20 && pdx <= -220) { nextPerson() } else if dx >= 60 || (dx > 20 && pdx >= 220) { previousPerson() }
+        }
+    }
+
+    /// A short drag: the story springs back and plays on.
+    private func springBack() {
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { dragY = 0 }
+        resume()
+    }
+
+    /// Far enough or a flick: the story slides on down and fades with the backdrop, then the viewer goes.
+    private func closeBySwipe() {
+        player?.pause()
+        musicPlayer?.pause()
+        let to = dragY + stageH * 0.45
+        withAnimation(.easeOut(duration: 0.24)) {
+            closing = true
+            dragY = to
+        }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 240_000_000)
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) { dismiss() }
+        }
+    }
+
+    /// Whether something still holds the story (the pause button, the keyboard, a panel, a finger, a drag).
+    private var mustHold: Bool {
+        userPaused || replyFocused || showEmoji || showViewers || confirmDelete || holding || dragAxis == .down || closing
+    }
+
+    private func resume() { setPaused(mustHold) }
+
     @ViewBuilder private var content: some View {
         if let post {
             switch post.kind {
@@ -132,7 +252,12 @@ struct StatusViewerScreen: View {
                         .padding(28)
                 }
             case "video":
-                if let player { VideoPlayer(player: player).disabled(true) } else { ProgressView().tint(.white) }
+                // our own AVPlayerLayer (no system controls); the poster shows at once underneath until the first frame
+                ZStack {
+                    if let poster { Image(uiImage: poster).resizable().scaledToFit() }
+                    if let player { StatusVideoLayer(player: player) }
+                    if !videoStarted { ProgressView().tint(.white) }
+                }
             case "image":
                 if let image { Image(uiImage: image).resizable().scaledToFit() } else { ProgressView().tint(.white) }
             case "voice":
@@ -177,7 +302,7 @@ struct StatusViewerScreen: View {
             Spacer()
             Button {
                 userPaused.toggle()
-                setPaused(userPaused)
+                resume()
             } label: {
                 Image(systemName: userPaused ? "play.fill" : "pause.fill").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).frame(width: 36, height: 40)
             }
@@ -251,7 +376,7 @@ struct StatusViewerScreen: View {
                                 .foregroundColor(.white.opacity(0.6)))
                                 .focused($replyFocused)
                                 .foregroundStyle(.white)
-                                .onChange(of: replyFocused) { f in setPaused(f || userPaused || showEmoji) }
+                                .onChange(of: replyFocused) { _ in resume() }
                                 .onChange(of: reply) { t in if t.count > 2000 { reply = String(t.prefix(2000)) } }
                             // the full emoji panel for the reply
                             Button {
@@ -301,36 +426,41 @@ struct StatusViewerScreen: View {
         musicPlayer?.pause()
         musicPlayer = nil
         image = nil
+        poster = nil
+        videoStarted = false
         progress = 0
         ready = false
         guard let post else { return }
         if !group.isMine && !post.seen { Task { await APIClient.shared.statusSeen(token: token, id: post.id) } }
 
         var seconds = photoSeconds
+        var video: AVPlayer?
         switch post.kind {
         case "image":
             if let d = await APIClient.shared.statusMedia(token: token, id: post.id) { image = UIImage(data: d) }
         case "video", "voice":
-            let asset = AVURLAsset(url: APIClient.shared.statusMediaURL(id: post.id),
-                                   options: ["AVURLAssetHTTPHeaderFieldsKey": ["Authorization": "Bearer \(token)"]])
-            let pl = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-            pl.isMuted = muted
+            // starts at once (no waiting for the length or a big buffer); the bar follows the video's own clock below
+            let pl = StatusVideo.player(token: token, id: post.id, muted: muted)
             player = pl
-            let opened = Date()
-            if let d = try? await asset.load(.duration), d.seconds.isFinite, d.seconds > 0 {
-                seconds = min(d.seconds, 60)
-                if post.kind == "video" { MediaLog.record(id: post.id, ok: true, ms: Int(Date().timeIntervalSince(opened) * 1000)) }
-            } else if post.kind == "video" {
-                MediaLog.record(id: post.id, ok: false, ms: Int(Date().timeIntervalSince(opened) * 1000))
-            }
+            video = pl
             if !paused { pl.play() }
+            if let ms = post.duration_ms, ms > 0 { seconds = min(Double(ms) / 1000, 60) }
+            if post.kind == "video" {
+                // the poster (memory-cached; prefetched while the story before was on screen) shows while it loads
+                let id = post.id
+                Task {
+                    guard let d = await APIClient.shared.statusMedia(token: token, id: id, poster: true),
+                          let img = UIImage(data: d), self.post?.id == id else { return }
+                    poster = img
+                }
+            }
         default:
             break
         }
         // the status's music (the app's own library): plays while it is on screen; photos and text stay 15 s to hear it
         if let m = post.music, !m.isEmpty, let url = APIClient.shared.stMusicURL(m) {
-            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-            try? AVAudioSession.sharedInstance().setActive(true)
+            if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers]) } // never cut a running call's microphone
+            if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setActive(true) } // never cut a running call's microphone
             let mp = AVPlayer(url: url)
             mp.isMuted = muted
             musicPlayer = mp
@@ -338,20 +468,89 @@ struct StatusViewerScreen: View {
             if !paused { mp.play() }
         }
         ready = true
-        // advance on a clock (pausing holds it)
+        prefetchNext()
+        if let video {
+            await runVideo(video, post: post, fallback: seconds)
+            return
+        }
+        await runClock(seconds)
+    }
+
+    /// Photos and text (and a video that cannot play): advance on a clock (pausing holds it).
+    private func runClock(_ seconds: Double, from already: Double = 0) async {
         let start = Date()
         var pausedFor: TimeInterval = 0
         var pausedAt: Date?
         while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            try? await Task.sleep(nanoseconds: 33_000_000)
+            if Task.isCancelled { return }
             if paused {
                 if pausedAt == nil { pausedAt = Date() }
                 continue
             }
             if let pa = pausedAt { pausedFor += Date().timeIntervalSince(pa); pausedAt = nil }
-            let t = Date().timeIntervalSince(start) - pausedFor
+            let t = already + Date().timeIntervalSince(start) - pausedFor
             progress = min(1, t / seconds)
             if t >= seconds { next(); return }
+        }
+    }
+
+    /// A video or voice status: the bar follows the player's own time over the real length (so it waits while the video
+    /// loads or stalls), and the next story comes when the video ends (at most 60 s, as before).
+    private func runVideo(_ pl: AVPlayer, post: StatusPost, fallback: Double) async {
+        guard let item = pl.currentItem else { return }
+        let opened = Date()
+        var logged = post.kind != "video"
+        let end = StatusEndFlag()
+        let obs = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { _ in
+            end.ended = true
+        }
+        defer { NotificationCenter.default.removeObserver(obs) }
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 33_000_000)
+            if Task.isCancelled { return }
+            if item.status == .failed {
+                if !logged { MediaLog.record(id: post.id, ok: false, ms: Int(Date().timeIntervalSince(opened) * 1000)) }
+                // it cannot play: the story still moves on, on a clock
+                videoStarted = true
+                await runClock(fallback, from: fallback * progress)
+                return
+            }
+            let t = pl.currentTime().seconds
+            if !videoStarted, t.isFinite, t > 0.01 {
+                videoStarted = true // the first frame is up: the spinner goes
+                if !logged {
+                    logged = true
+                    MediaLog.record(id: post.id, ok: true, ms: Int(Date().timeIntervalSince(opened) * 1000))
+                }
+            }
+            if paused { continue }
+            let d = item.duration.seconds
+            let total = d.isFinite && d > 0 ? min(d, 60) : 0
+            if total > 0, t.isFinite {
+                progress = min(1, max(0, t / total))
+                if end.ended || t >= total - 0.04 { next(); return }
+            } else if end.ended {
+                next()
+                return
+            }
+            StatusVideo.resumeIfStalled(pl)
+        }
+    }
+
+    /// Fetch the next story's photo (or video poster) while this one is on screen, so it shows at once.
+    private func prefetchNext() {
+        var ng = g
+        var np = p + 1
+        if np >= groups[ng].posts.count { ng += 1; np = 0 }
+        guard groups.indices.contains(ng), groups[ng].posts.indices.contains(np) else { return }
+        let n = groups[ng].posts[np]
+        let id = n.id
+        let tok = token
+        switch n.kind {
+        case "image": Task(priority: .utility) { _ = await APIClient.shared.statusMedia(token: tok, id: id) }
+        case "video": Task(priority: .utility) { _ = await APIClient.shared.statusMedia(token: tok, id: id, poster: true) }
+        default: break
         }
     }
 
@@ -373,7 +572,7 @@ struct StatusViewerScreen: View {
 
     /// Swipe up: the next person's statuses.
     private func nextPerson() {
-        withAnimation { drag = 0 }
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { dragY = 0 }
         if g + 1 < groups.count {
             g += 1
             p = 0
@@ -382,14 +581,23 @@ struct StatusViewerScreen: View {
         }
     }
 
+    /// Swipe right: the previous person's statuses (on the first person nothing happens).
+    private func previousPerson() {
+        guard g > 0 else { return }
+        g -= 1
+        p = 0
+    }
+
     /// Someone else's personal status: a reply or a quick reaction goes to the owner's chat.
     private var canReply: Bool { !group.isMine && group.group_id == nil }
 
     /// A tap on the stage: on the dark area around the picture or video it closes the viewer (not while a sheet, the
     /// emoji panel or the keyboard is up); else the left third goes back and the rest forward.
     private func tapStage(at pt: CGPoint, in size: CGSize) {
+        // the finger was holding the story or swiping it: its lift is not a tap
+        if holding || dragAxis != nil || closing || Date().timeIntervalSince(lastGestureAt) < 0.35 { return }
         if !showViewers && !confirmDelete && !showEmoji && !replyFocused,
-           let r = statusFittedRect(kind: post?.kind, image: image, player: player, in: size),
+           let r = statusFittedRect(kind: post?.kind, image: post?.kind == "video" ? poster : image, player: player, in: size),
            !r.insetBy(dx: -1, dy: -1).contains(pt) {
             close()
             return

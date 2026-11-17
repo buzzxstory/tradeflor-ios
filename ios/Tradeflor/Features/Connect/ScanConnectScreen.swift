@@ -660,3 +660,31 @@ struct MyCodePanel: View {
         }
     }
 }
+
+
+/// Scan & Connect opened from the Chats header (web: openFlash({view: "scan"})): the two-tab screen, and what a scanned
+/// code points to (a person to Add & Chat, Mutual Connect's confirm card, a group or an event) pushed on top of it; Back
+/// returns to the scanner.
+struct ScanFlow: View {
+    let onOpen: (ConversationSummary) -> Void
+    @State private var target: FlashTarget?
+    @State private var initial: ScanTab = {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["TF_CI_FLASH"] == "mutual" { return .code }
+        #endif
+        return .scan
+    }()
+
+    var body: some View {
+        NavigationStack {
+            ScanConnectScreen(initial: initial, onOpen: onOpen) { text in target = FlashTarget.parse(text) }
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(isPresented: Binding(get: { target != nil }, set: { if !$0 { target = nil } })) {
+                    if let t = target {
+                        ScanResultView(target: t, onOpen: onOpen, onDone: { target = nil })
+                            .toolbar(.visible, for: .navigationBar)
+                    }
+                }
+        }
+    }
+}

@@ -301,7 +301,7 @@ struct MusicPickerSheet: View {
     private func toggle(_ id: String) {
         if playing == id { player?.pause(); playing = nil; return }
         guard let url = APIClient.shared.stMusicURL(id) else { return }
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setCategory(.playback) } // never cut a running call's microphone
         let p = AVPlayer(url: url)
         player?.pause()
         player = p
@@ -470,7 +470,7 @@ struct VoiceStatusRecorder: View {
     private func listen() {
         guard let d = done else { return }
         if playing { player?.pause(); playing = false; return }
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setCategory(.playback) } // never cut a running call's microphone
         player = try? AVAudioPlayer(data: d.data)
         player?.play()
         playing = true

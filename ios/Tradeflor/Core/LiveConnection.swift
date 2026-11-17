@@ -18,6 +18,11 @@ final class LiveConnection: ObservableObject {
     private var steadyTask: Task<Void, Never>?
     private let path = NWPathMonitor()
     private var offline = false
+    /// The interfaces of the last network path (nil before the first answer): a change (Wi-Fi to mobile data) leaves the
+    /// socket on a network that is gone, so it is replaced at once instead of after the heartbeat's 35 s.
+    private var lastInterfaces: [NWInterface.InterfaceType]?
+    /// A call is going on (CallManager): reconnect fast, the server keeps a call only 20 s for a device whose socket is gone.
+    var callInProgress = false
 
     private func connectedChanged() {
         steadyTask?.cancel()
@@ -67,10 +72,18 @@ final class LiveConnection: ObservableObject {
 
     init() {
         path.pathUpdateHandler = { [weak self] p in
+            let satisfied = p.status == .satisfied
+            let kinds = p.availableInterfaces.map(\.type)
             Task { @MainActor in
                 guard let self else { return }
-                self.offline = p.status != .satisfied
+                let wasOffline = self.offline
+                let before = self.lastInterfaces
+                self.offline = !satisfied
+                self.lastInterfaces = kinds
                 if self.offline && !self.connected { self.steadyConnected = false }
+                guard satisfied, before != nil, self.token != nil else { return }
+                // back online, or on another network: a fresh socket now (the old one is dead or about to be)
+                if (wasOffline && !self.connected) || before?.first != kinds.first { self.reconnectNow() }
             }
         }
         path.start(queue: DispatchQueue(label: "tf.live.path"))
@@ -124,6 +137,13 @@ final class LiveConnection: ObservableObject {
         }
     }
 
+    /// Replaces the socket at once (no backoff). The server keeps this device's call through the gap and `opened` sends
+    /// call.sync when the new socket is up.
+    func reconnectNow() {
+        guard let token else { return }
+        start(tokenForcing: token)
+    }
+
     private func start(tokenForcing token: String) {
         stop()
         self.token = token
@@ -156,7 +176,8 @@ final class LiveConnection: ObservableObject {
             connected = false
             online = [] // not connected: nobody is shown "online" from an old answer (website liveHub.ts); last seen stays
             if Task.isCancelled { return }
-            let delay = min(30.0, pow(2.0, Double(attempt)))
+            // during a call: try again every second (the server ends a call whose device stays away 20 s)
+            let delay = callInProgress ? 1.0 : min(30.0, pow(2.0, Double(attempt)))
             attempt += 1
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         }

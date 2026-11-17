@@ -30,6 +30,11 @@ final class APIClient {
     static let shared = APIClient()
 
     private let session: URLSession
+    /// The live socket's own session. URLSession applies `timeoutIntervalForRequest` to a WebSocket task as an idle
+    /// limit between received frames: with the requests' 20 s the socket dropped every ~20 s of quiet (the server pings
+    /// every 25 s), and every drop lost the call signaling sent meanwhile. LiveConnection's own heartbeat (ping every
+    /// 25 s, dead after 10 s without an answer) finds a dead socket instead.
+    private let socketSession: URLSession
     private let base: URL
     let userAgent: String
 
@@ -41,6 +46,11 @@ final class APIClient {
         cfg.waitsForConnectivity = false
         cfg.httpMaximumConnectionsPerHost = 6
         self.session = session ?? URLSession(configuration: cfg)
+        let ws = URLSessionConfiguration.ephemeral
+        ws.timeoutIntervalForRequest = 120
+        ws.urlCache = nil
+        ws.waitsForConnectivity = false
+        self.socketSession = URLSession(configuration: ws)
         let v = ProcessInfo.processInfo.operatingSystemVersion
         self.userAgent = "Tradeflor-iOS/\(AppConfig.version) (iPhone; iOS \(v.majorVersion).\(v.minorVersion))"
     }
@@ -657,7 +667,8 @@ final class APIClient {
         var req = URLRequest(url: url)
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("ios", forHTTPHeaderField: "X-Tradeflor-Client")
-        return session.webSocketTask(with: req)
+        req.timeoutInterval = 120
+        return socketSession.webSocketTask(with: req)
     }
 
     static func q(_ s: String) -> String {

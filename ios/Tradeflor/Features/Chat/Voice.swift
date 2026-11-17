@@ -34,6 +34,8 @@ final class VoiceRecorder: ObservableObject {
             session.requestRecordPermission { cont.resume(returning: $0) }
         }
         guard granted else { denied = true; return }
+        // the microphone belongs to the call while one is on (WhatsApp does not record voice notes during a call either)
+        guard !CallManager.shared.lineInUse else { return }
         do {
             try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetooth])
             try session.setActive(true)
@@ -100,8 +102,10 @@ final class VoiceRecorder: ObservableObject {
             previewPlaying = false
             return
         }
-        try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-        try? AVAudioSession.sharedInstance().setActive(true)
+        if !CallManager.shared.lineInUse { // during a call the call's audio session plays it as it is
+            try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            try? AVAudioSession.sharedInstance().setActive(true)
+        }
         if preview == nil { preview = try? AVAudioPlayer(contentsOf: url) }
         guard let p = preview else { return }
         if p.currentTime >= p.duration - 0.05 { p.currentTime = 0 }
@@ -149,7 +153,8 @@ final class VoiceRecorder: ObservableObject {
         recorder = nil
         url = nil
         recording = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // switching the audio session off during a call would cut the call's sound and microphone
+        if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
     }
 
     nonisolated static func downsample(_ v: [Double], to n: Int) -> [Double] {
@@ -295,6 +300,8 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func activateSession() {
+        // during a call a .playback category would cut the call's microphone: play through the call's session instead
+        guard !CallManager.shared.lineInUse else { return }
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
         try? AVAudioSession.sharedInstance().setActive(true)
     }
