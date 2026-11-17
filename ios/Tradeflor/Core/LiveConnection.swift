@@ -69,6 +69,8 @@ final class LiveConnection: ObservableObject {
     private var loop: Task<Void, Never>?
     private var lastPong = Date()
     private var attempt = 0
+    /// Bumped by stop(): a loop from before (still waiting for its URL when it was replaced) never opens a socket.
+    private var generation = 0
 
     init() {
         path.pathUpdateHandler = { [weak self] p in
@@ -119,6 +121,7 @@ final class LiveConnection: ObservableObject {
     }
 
     func stop() {
+        generation += 1
         loop?.cancel()
         loop = nil
         task?.cancel(with: .goingAway, reason: nil)
@@ -151,10 +154,15 @@ final class LiveConnection: ObservableObject {
     }
 
     private func run() async {
-        while !Task.isCancelled {
+        let gen = generation
+        while !Task.isCancelled && gen == generation {
             guard let token else { return }
             do {
                 var url = try await APIClient.shared.liveURL(token: token)
+                // replaced while asking for the URL (foreground, network change, new login): open nothing -- a socket
+                // opened here would never be closed and keeps answering pings, so the server counts it against the
+                // account (20 at most) and refuses new ones
+                if Task.isCancelled || gen != generation { return }
                 if !appActive, var c = URLComponents(url: url, resolvingAgainstBaseURL: false) {
                     // not in front right now: connect without counting as online
                     c.queryItems = (c.queryItems ?? []) + [URLQueryItem(name: "active", value: "0")]
@@ -165,7 +173,12 @@ final class LiveConnection: ObservableObject {
                 ws.resume()
                 lastPong = Date()
                 let heartbeat = Task { [weak self] in await self?.heartbeat(ws) }
-                defer { heartbeat.cancel() }
+                // whatever ends this socket (error, missed pong, replacement), it is closed for the server too
+                defer {
+                    heartbeat.cancel()
+                    ws.cancel(with: .goingAway, reason: nil)
+                    if task === ws { task = nil }
+                }
                 try await receive(ws)
             } catch APIError.badCredentials {
                 connected = false
@@ -173,6 +186,7 @@ final class LiveConnection: ObservableObject {
             } catch {
                 // fall through to the backoff below
             }
+            if gen != generation { return } // replaced: the new loop owns the state now
             connected = false
             online = [] // not connected: nobody is shown "online" from an old answer (website liveHub.ts); last seen stays
             if Task.isCancelled { return }
