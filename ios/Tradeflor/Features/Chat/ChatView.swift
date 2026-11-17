@@ -1860,7 +1860,7 @@ struct ChatView: View {
                 let after = APIClient.shared.lastRetryAfter
                 APIClient.shared.lastRetryAfter = 0
                 let secs = max(after, Double(backoff) * Double.random(in: 0.8...1.2))
-                let t = Task { try? await Task.sleep(nanoseconds: UInt64(secs * 1_000_000_000)) }
+                let t = Task<Void, Never> { _ = try? await Task.sleep(nanoseconds: UInt64(secs * 1_000_000_000)) }
                 queueWait = t
                 await t.value
                 queueWait = nil
