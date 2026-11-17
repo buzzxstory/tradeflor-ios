@@ -1410,3 +1410,21 @@
 "sc.err.signin" = "Please sign in again.";
 "sc.err.offline" = "You are offline. Connect to the internet and try again.";
 "sc.err.generic" = "Something went wrong. Please try again.";
+
+/* Scan & Connect: two tabs (website 5211e17) */
+"sc.h.a" = "Scan & ";
+"sc.h.b" = "Connect";
+"sc.code.hint" = "Let someone scan your code to connect.";
+"sc.tab.scan" = "Scan QR";
+"sc.tab.code" = "My Code";
+"sc.or" = "or";
+"sc.cam.off" = "";
+"sc.cam.none" = "No camera";
+"sc.choose.cam" = "Choose a camera";
+"sc.help.label" = "How Scan & Connect works";
+"sc.help.title" = "How it works";
+"sc.help.1" = "One of you opens My Code.";
+"sc.help.2" = "The other taps Scan QR and points the camera at it (or scans a photo of it).";
+"sc.help.3" = "The code owner taps Accept, and you are connected.";
+"sc.help.note" = "A code works once and renews itself every minute. Nobody is connected without saying yes.";
+"sc.help.ok" = "Got it";

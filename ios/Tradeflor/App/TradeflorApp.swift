@@ -80,7 +80,7 @@ struct RootView: View {
         .environment(\.openURL, OpenURLAction { url in DeepLinks.shared.handle(url) ? .handled : .systemAction })
         .sheet(item: $links.pending) { p in DeepLinkSheet(target: p.target).environmentObject(store) }
         // someone scanned my connect code: Connection Request (Accept / Decline) wherever I am
-        .sheet(item: Binding(get: { flash.screens == 0 && links.pending == nil ? flash.request : nil },
+        .sheet(item: Binding(get: { links.pending == nil ? flash.request(for: nil) : nil },
                              set: { if $0 == nil, let r = flash.request { flash.answered(r.id) } })) { r in
             ConnectionRequestSheet(request: r) { chat in LocalNotifier.shared.tappedConversation = chat.conversation_id }
                 .environmentObject(store)

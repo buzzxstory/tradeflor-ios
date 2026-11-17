@@ -17,8 +17,9 @@ final class FlashHub: ObservableObject {
     }
 
     @Published var request: Request?
-    /// How many Flash Connect screens are open; while one is, it shows the request itself (a sheet can't stack on a sheet).
-    @Published private(set) var screens = 0
+    /// The Flash Connect screens open now, newest last; the newest shows the request itself (a sheet can't open over a
+    /// sheet or a full-screen cover from below). None open: the root shows it.
+    @Published private(set) var presenters: [String] = []
     /// Raw "flash" events, for a guest waiting on its own session.
     let events = PassthroughSubject<[String: Any], Never>()
     /// The live connection (re)opened: a guest re-reads its session.
@@ -51,8 +52,14 @@ final class FlashHub: ObservableObject {
         request = nil
     }
 
-    func screenAppeared() { screens += 1 }
-    func screenGone() { screens = max(0, screens - 1) }
+    func present(_ id: String) { presenters.removeAll { $0 == id }; presenters.append(id) }
+    func unpresent(_ id: String) { presenters.removeAll { $0 == id } }
+    /// The request, for the screen `id` if it is the one that shows it now.
+    func request(for id: String?) -> Request? { presenters.last == id ? request : nil }
+    /// A binding for .sheet(item:): closing it without answering hides it here (it stays waiting on the server).
+    func binding(for id: String?) -> Binding<Request?> {
+        Binding(get: { self.request(for: id) }, set: { if $0 == nil, let r = self.request { self.answered(r.id) } })
+    }
 
     /// Requests that wait for my answer (another device, a missed event, back from the background).
     func askPending() async {

@@ -7,10 +7,10 @@ struct FlashConnectView: View {
     let onOpen: (ConversationSummary) -> Void
     @EnvironmentObject private var store: SessionStore
     @Environment(\.dismiss) private var dismiss
-    @State private var scanning = false
+    @State private var cover: ScanTab?
     @State private var target: FlashTarget?
-    @State private var showMutual = false
     @ObservedObject private var hub = FlashHub.shared
+    @State private var presenterID = "flash-" + UUID().uuidString
 
     private var token: String { store.session?.token ?? "" }
 
@@ -24,13 +24,13 @@ struct FlashConnectView: View {
                     }
                     Text("fc.lead").font(.system(size: 13)).foregroundStyle(Theme.faint)
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                        Button { scanning = true } label: { tile("qrcode.viewfinder", "fc.scan", "fc.scan.sub") }
+                        Button { cover = .scan } label: { tile("qrcode.viewfinder", "fc.scan", "fc.scan.sub") }
                         NavigationLink { MyQRView() } label: { tile("qrcode", "fc.myqr", "fc.myqr.sub") }
                         NavigationLink { GroupQRView() } label: { tile("person.3", "fc.groupqr", "fc.groupqr.sub") }
                         NavigationLink { EventConnectView(onOpen: open) } label: { tile("calendar.badge.plus", "fc.event", "fc.event.sub") }
                     }
                     .buttonStyle(.plain)
-                    NavigationLink { MutualConnectView(onOpen: open) } label: {
+                    Button { cover = .code } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "arrow.left.arrow.right.circle.fill").font(.system(size: 26)).foregroundStyle(Theme.accent)
                             VStack(alignment: .leading, spacing: 2) {
@@ -56,35 +56,34 @@ struct FlashConnectView: View {
             .navigationDestination(isPresented: Binding(get: { target != nil }, set: { if !$0 { target = nil } })) {
                 if let t = target { ScanResultView(target: t, onOpen: open, onDone: { dismiss() }) }
             }
-            .navigationDestination(isPresented: $showMutual) { MutualConnectView(onOpen: open) }
         }
         .onAppear {
-            hub.screenAppeared()
+            hub.present(presenterID)
             #if DEBUG
             switch ProcessInfo.processInfo.environment["TF_CI_FLASH"] {
-            case "scan"?: scanning = true
-            case "mutual"?: showMutual = true
+            case "scan"?: cover = .scan
+            case "mutual"?: cover = .code
             default: break
             }
             #endif
         }
-        .onDisappear { hub.screenGone() }
+        .onDisappear { hub.unpresent(presenterID) }
         // someone scanned my code: the Connection Request, here (a sheet can't open over this sheet from the root)
-        .sheet(item: Binding(get: { hub.screens > 0 ? hub.request : nil }, set: { if $0 == nil, let r = hub.request { hub.answered(r.id) } })) { r in
+        .sheet(item: hub.binding(for: presenterID)) { r in
             ConnectionRequestSheet(request: r, onOpen: open).environmentObject(store)
         }
-        .fullScreenCover(isPresented: $scanning) {
-            QRScannerView(onMutual: {
-                scanning = false
-                showMutual = true
-            }) { text in
-                scanning = false
+        // Scan & Connect: one screen, two tabs (Scan QR | My Code)
+        .fullScreenCover(item: $cover) { t in
+            ScanConnectScreen(initial: t, onOpen: open) { text in
+                cover = nil
                 target = FlashTarget.parse(text)
             }
+            .environmentObject(store)
         }
     }
 
     private func open(_ c: ConversationSummary) {
+        cover = nil
         dismiss()
         onOpen(c)
     }
@@ -311,245 +310,8 @@ struct MyQRView: View {
     }
 }
 
-/// My Connect Code (website MutualConnect.tsx, 9256375): a 60-second, single-use code for someone next to you. It renews
-/// itself 1.5 s before it expires while this screen is open and the app is in front (never in the background); an older
-/// answer never replaces a newer code (each request has a number); "Try again" only when renewing failed. Someone scanning
-/// it only asks: the Connection Request (FlashHub) comes up and you Accept or Decline.
-struct MutualConnectView: View {
-    let onOpen: (ConversationSummary) -> Void
-    @EnvironmentObject private var store: SessionStore
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var session: MutualSession?
-    @State private var deadline: Date?
-    @State private var now = Date()
-    @State private var busy = false
-    @State private var error: String?
-    @State private var seq = 0
-    @State private var copied: String?
-
-    private var token: String { store.session?.token ?? "" }
-    private var left: Int { deadline.map { max(0, Int(ceil($0.timeIntervalSince(now)))) } ?? 0 }
-    private var expired: Bool { deadline != nil && left == 0 }
-    private var link: String? { session?.token.flatMap { expired ? nil : "https://app.tradeflor.com/?mutual=\($0)" } }
-    private let cyan = Theme.hex(0x35E6F2)
-
-    var body: some View {
-        ZStack {
-            LinearGradient(colors: [Theme.hex(0x082231), Theme.hex(0x061A27), Theme.hex(0x04121D)], startPoint: .top, endPoint: .bottom)
-            RadialGradient(colors: [Theme.hex(0x127080, 0.34), .clear], center: UnitPoint(x: 0.5, y: 0.46), startRadius: 0, endRadius: 360)
-            RadialGradient(colors: [Theme.hex(0x0A5C6E, 0.32), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 320)
-            VStack(spacing: 0) {
-                HStack {
-                    round("chevron.left", "fc.back") { dismiss() }
-                    Spacer()
-                    HStack(spacing: 10) {
-                        Image("BrandFlower").resizable().scaledToFit().frame(width: 36, height: 36)
-                        Text("TRADEFLOR").font(.system(size: 20, weight: .heavy)).tracking(3).foregroundStyle(Theme.hex(0xEEF6FA))
-                    }
-                    Spacer()
-                    round("xmark", "chat.close") { dismiss() }
-                }
-                .padding(.top, 8)
-                ScrollView {
-                    VStack(spacing: 16) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "qrcode.viewfinder").font(.system(size: 28)).foregroundStyle(cyan)
-                            (Text("mc.title.a").foregroundColor(Theme.hex(0xF2F8FB)) + Text("mc.title.b").foregroundColor(cyan))
-                                .font(.system(size: 28, weight: .heavy)).minimumScaleFactor(0.7).lineLimit(1)
-                        }
-                        .padding(.top, 18)
-                        Text("mc.lead2").font(.system(size: 15)).foregroundStyle(Theme.hex(0xC4D5DF)).multilineTextAlignment(.center)
-                        stage.padding(.top, 8)
-                        meta
-                        if let error { Text(error).font(.system(size: 13)).foregroundStyle(Theme.hex(0xFF8A8A)).multilineTextAlignment(.center) }
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                bottom.padding(.bottom, 16)
-            }
-            .padding(.horizontal, 22)
-        }
-        .ignoresSafeArea(edges: .horizontal)
-        .navigationBarBackButtonHidden(true)
-        .toolbar(.hidden, for: .navigationBar)
-        .preferredColorScheme(.dark)
-        .task { await fresh() }
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                now = Date()
-            }
-        }
-        // renew by itself 1.5 s before expiry, and at once when the app comes back with a code about to die; never in the background
-        .task(id: "\(session?.id ?? "")|\(scenePhase == .active)") {
-            guard scenePhase == .active, let d = deadline else { return }
-            let wait = d.timeIntervalSinceNow - 1.5
-            if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
-            if Task.isCancelled || scenePhase != .active { return }
-            await fresh()
-        }
-    }
-
-    private func round(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon).font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.hex(0xF2F8FB))
-                .frame(width: 48, height: 48).background(Theme.hex(0x041019, 0.7), in: Circle())
-                .overlay(Circle().stroke(Color.white.opacity(0.14), lineWidth: 1))
-        }
-        .accessibilityLabel(Text(LocalizedStringKey(label)))
-    }
-
-    private var stage: some View {
-        let side: CGFloat = min(268, UIScreen.main.bounds.width * 0.62)
-        return ZStack {
-            Circle().fill(RadialGradient(colors: [cyan.opacity(0.22), .clear], center: .center, startRadius: 0, endRadius: side * 0.9))
-                .frame(width: side * 1.6, height: side * 1.6)
-            Group {
-                if let link, let qr = TFQR.image(link) {
-                    Image(uiImage: qr).interpolation(.none).resizable().padding(14)
-                        .overlay(Image("BrandFlower").resizable().scaledToFit().frame(width: side * 0.16)
-                            .padding(5).background(.white, in: RoundedRectangle(cornerRadius: 8)))
-                        .accessibilityLabel(Text("mc.qr"))
-                } else if expired {
-                    VStack(spacing: 6) {
-                        Image(systemName: "clock").font(.system(size: 34)).foregroundStyle(Theme.hex(0x4A5A64))
-                        Text(LocalizedStringKey(busy ? "mc.renewing" : "mc.expired.title")).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.hex(0x0B1F2A))
-                        Text(LocalizedStringKey(busy ? "mc.renewing.sub" : "mc.expired.sub2")).font(.system(size: 12)).foregroundStyle(Theme.hex(0x4A5A64)).multilineTextAlignment(.center)
-                    }
-                    .padding(16)
-                } else {
-                    VStack(spacing: 10) {
-                        ProgressView().tint(Theme.hex(0x0B6E7A))
-                        Text(LocalizedStringKey(error == nil ? "mc.creating" : "mc.nocode")).font(.system(size: 13)).foregroundStyle(Theme.hex(0x4A5A64))
-                    }
-                }
-            }
-            .frame(width: side, height: side)
-            .background(.white, in: RoundedRectangle(cornerRadius: 22))
-            .opacity(expired ? 0.92 : 1)
-            ForEach(0..<4, id: \.self) { k in
-                CornerMark().stroke(cyan, style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .frame(width: 34, height: 34)
-                    .rotationEffect(.degrees(Double(k) * 90))
-                    .offset(x: (k == 0 || k == 3 ? -1 : 1) * (side / 2 + 12), y: (k < 2 ? -1 : 1) * (side / 2 + 12))
-                    .shadow(color: cyan.opacity(0.6), radius: 6)
-            }
-        }
-        .frame(height: side + 60)
-    }
-
-    /// "Expires in 57s | Single use | Auto refresh"
-    private var meta: some View {
-        HStack(spacing: 10) {
-            Group {
-                if session != nil && !expired {
-                    (Text("mc.expires.in") + Text(" \(left)s").bold()).foregroundColor(left <= 10 ? Theme.hex(0xFFB35C) : Theme.hex(0xC4D5DF))
-                } else if expired {
-                    Text("mc.expired").bold().foregroundColor(Theme.hex(0xFF8A8A))
-                } else {
-                    Text("mc.expires.dash").foregroundColor(Theme.hex(0xC4D5DF))
-                }
-            }
-            sep
-            Label("mc.single", systemImage: "checkmark.shield").foregroundStyle(Theme.hex(0xC4D5DF))
-            sep
-            Label(LocalizedStringKey(busy ? "mc.refreshing" : "mc.auto"), systemImage: "arrow.triangle.2.circlepath")
-                .foregroundStyle(busy ? cyan : Theme.hex(0xC4D5DF))
-        }
-        .font(.system(size: 13.5))
-        .lineLimit(1).minimumScaleFactor(0.75)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var sep: some View { Rectangle().fill(Color.white.opacity(0.2)).frame(width: 1, height: 16) }
-
-    @ViewBuilder private var bottom: some View {
-        VStack(spacing: 8) {
-            if error != nil {
-                // renewing failed: the one moment a button is needed
-                Button { Task { await fresh() } } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 20, weight: .semibold))
-                        Text(LocalizedStringKey(busy ? "mc.trying" : "mc.tryagain")).font(.system(size: 17, weight: .bold))
-                    }
-                    .foregroundStyle(Theme.hex(0x03222B))
-                    .frame(maxWidth: .infinity).frame(height: 56)
-                    .background(LinearGradient(colors: [Theme.hex(0x5FF2FA), Theme.hex(0x16C9DA)], startPoint: .top, endPoint: .bottom), in: Capsule())
-                    .shadow(color: cyan.opacity(0.35), radius: 14, y: 6)
-                }
-                .disabled(busy)
-            } else {
-                HStack(spacing: 10) {
-                    if let link, let url = URL(string: link) {
-                        ShareLink(item: url, subject: Text("mc.share.title"), message: Text("mc.share.msg")) { shareLabel }
-                    } else {
-                        shareLabel.opacity(0.5)
-                    }
-                    Button {
-                        guard let link else { return }
-                        UIPasteboard.general.string = link
-                        copied = NSLocalizedString("mc.copied", comment: "")
-                        Task {
-                            try? await Task.sleep(nanoseconds: 2_600_000_000)
-                            copied = nil
-                        }
-                    } label: {
-                        Label("mc.copy", systemImage: "doc.on.doc").font(.system(size: 15, weight: .bold)).lineLimit(1).minimumScaleFactor(0.8)
-                            .foregroundStyle(Theme.hex(0xF2F8FB))
-                            .frame(maxWidth: .infinity).frame(height: 52)
-                            .background(Theme.hex(0x041019, 0.7), in: Capsule())
-                            .overlay(Capsule().stroke(cyan.opacity(0.45), lineWidth: 1))
-                    }
-                    .disabled(link == nil)
-                    .accessibilityIdentifier("mc.copy")
-                }
-            }
-            Text(copied ?? " ").font(.system(size: 12.5)).foregroundStyle(cyan).multilineTextAlignment(.center)
-        }
-    }
-
-    private var shareLabel: some View {
-        Label("mc.share", systemImage: "square.and.arrow.up").font(.system(size: 15, weight: .bold)).lineLimit(1).minimumScaleFactor(0.8)
-            .foregroundStyle(Theme.hex(0x03222B))
-            .frame(maxWidth: .infinity).frame(height: 52)
-            .background(LinearGradient(colors: [Theme.hex(0x5FF2FA), Theme.hex(0x16C9DA)], startPoint: .top, endPoint: .bottom), in: Capsule())
-            .shadow(color: cyan.opacity(0.3), radius: 10, y: 4)
-    }
-
-    /// A new code; one request at a time, and an older answer is dropped. The countdown runs on the server's clock.
-    private func fresh() async {
-        guard !busy else { return }
-        seq += 1
-        let my = seq
-        busy = true
-        error = nil
-        defer { busy = false }
-        do {
-            let s = try await APIClient.shared.ctStartMutual(token: token)
-            guard my == seq else { return }
-            guard s.token != nil else { error = NSLocalizedString("mc.err", comment: ""); return }
-            let got = Date().timeIntervalSince1970
-            let offset = s.server_now.map { Double($0) - got } ?? 0
-            session = s
-            deadline = Date(timeIntervalSince1970: Double(s.expires_at) - offset)
-            now = Date()
-        } catch {
-            // a code still on screen stays valid until its own expiry
-            guard my == seq else { return }
-            switch error as? APIError {
-            case .rateLimited?: self.error = NSLocalizedString("mc.err.rate", comment: "")
-            case .badCredentials?: self.error = NSLocalizedString("sc.err.signin", comment: "")
-            case .network?: self.error = NSLocalizedString("sc.err.offline", comment: "")
-            case .refused(let why)?: self.error = why.isEmpty || why.count >= 140 ? NSLocalizedString("mc.err.403", comment: "") : why
-            default: self.error = NSLocalizedString("mc.err", comment: "")
-            }
-        }
-    }
-}
-
 /// One corner of the QR frame (top-left; rotated for the others).
-private struct CornerMark: Shape {
+struct CornerMark: Shape {
     func path(in r: CGRect) -> Path {
         var p = Path()
         p.move(to: CGPoint(x: r.minX, y: r.maxY))

@@ -26,7 +26,7 @@ permissions:
 jobs:
   ios:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: ios
@@ -82,7 +82,7 @@ jobs:
           retention-days: 30
 
       - name: Screenshots on a fresh simulator
-        timeout-minutes: 15
+        timeout-minutes: 28
         env:
           TF_CI_USERNAME: ${{ secrets.TF_CI_USERNAME }}
           TF_CI_PASSWORD: ${{ secrets.TF_CI_PASSWORD }}

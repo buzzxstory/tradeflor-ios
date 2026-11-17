@@ -56,10 +56,14 @@ struct ContactsPanel: View {
                 }
             } message: { Text("ci.block.msg") }
             .fullScreenCover(isPresented: $showScanner) {
-                QRScannerView { text in
+                ScanConnectScreen(initial: .scan, onOpen: { c in
+                    showScanner = false
+                    LocalNotifier.shared.tappedConversation = c.conversation_id
+                }) { text in
                     showScanner = false
                     Task { await handleScanned(text) }
                 }
+                .environmentObject(store)
             }
         }
         .task { await load() }

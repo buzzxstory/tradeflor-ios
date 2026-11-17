@@ -81,10 +81,11 @@ if [ -n "${TF_CI_USERNAME:-}" ] && [ -n "${TF_CI_PASSWORD:-}" ]; then
   SIMCTL_CHILD_TF_CI_TAB=groups SIMCTL_CHILD_TF_CI_OPEN_GROUP=1 SIMCTL_CHILD_TF_CI_MEMBER=1 launch en en_US && sleep 14 && shot 15-member-info.png || status=1
   SIMCTL_CHILD_TF_CI_TAB=groups SIMCTL_CHILD_TF_CI_OPEN_GROUP=1 SIMCTL_CHILD_TF_CI_GROUP_INFO=1 SIMCTL_CHILD_TF_CI_ADD_MEMBERS=buzzxstory launch en en_US && sleep 16 && shot 16-add-members.png || status=1
   SIMCTL_CHILD_TF_CI_TAB=groups SIMCTL_CHILD_TF_CI_OPEN_GROUP=1 SIMCTL_CHILD_TF_CI_GROUP_INFO=1 launch ar ar_SA && sleep 14 && shot 17-group-info-ar.png || status=1
-  # Scan & Connect: My Connect Code (a real 60 s code for the CI account) and the scanner (no camera in the simulator)
-  SIMCTL_CHILD_TF_CI_FLASH=mutual launch en en_US && sleep 10 && shot 18-my-connect-code.png || status=1
-  SIMCTL_CHILD_TF_CI_FLASH=scan launch en en_US && sleep 10 && shot 19-scan-connect.png || status=1
-  SIMCTL_CHILD_TF_CI_FLASH=mutual launch ar ar_SA && sleep 10 && shot 20-my-connect-code-ar.png || status=1
+  # Scan & Connect, two tabs: My Code (a real 60 s code for the CI account), Scan QR (no camera in the simulator), the help
+  SIMCTL_CHILD_TF_CI_FLASH=mutual launch en en_US && sleep 10 && shot 18-my-code.png || status=1
+  SIMCTL_CHILD_TF_CI_FLASH=scan launch en en_US && sleep 10 && shot 19-scan-qr.png || status=1
+  SIMCTL_CHILD_TF_CI_FLASH=scan SIMCTL_CHILD_TF_CI_SCAN_HELP=1 launch en en_US && sleep 10 && shot 20-scan-help.png || status=1
+  SIMCTL_CHILD_TF_CI_FLASH=mutual launch ar ar_SA && sleep 10 && shot 21-my-code-ar.png || status=1
   SIMCTL_CHILD_TF_CI_DAY=1 launch en en_US && sleep 8 && shot 10-chats-day.png || status=1
   SIMCTL_CHILD_TF_CI_DAY=1 SIMCTL_CHILD_TF_CI_OPEN_CHAT=1 launch en en_US && sleep 10 && shot 11-chat-day.png || status=1
   # End the CI session on the server (POST /auth/logout) so test runs do not pile up under Linked devices.
@@ -101,7 +102,38 @@ run 120 xcrun simctl install "$UDID" "$APP" || status=1
 launch en en_US && sleep 5 && shot 01-login-en.png || status=1
 launch ar ar_SA && sleep 4 && shot 02-login-ar.png || status=1
 
+# Scan & Connect on the two phone sizes the design must fit without scrolling: 375x667 (iPhone SE) and 390x844.
+# Each is a fresh simulator of the same runtime, signed in with the CI account and signed out again at the end.
+size_shots() { # size_shots <label> <device type candidates...>
+  local label="$1"; shift
+  local dt=""
+  for c in "$@"; do
+    if xcrun simctl list devicetypes | grep -q "SimDeviceType.$c)"; then dt="com.apple.CoreSimulator.SimDeviceType.$c"; break; fi
+  done
+  [ -z "$dt" ] && { echo "::warning::no device type for $label"; return 0; }
+  local MAIN="$UDID"
+  run 60 xcrun simctl shutdown "$MAIN" >/dev/null 2>&1 || true
+  UDID=$(xcrun simctl create "TF $label" "$dt" "$RUNTIME") || { UDID="$MAIN"; return 1; }
+  echo "$label simulator: $dt $UDID"
+  run 300 xcrun simctl boot "$UDID" && run 300 xcrun simctl bootstatus "$UDID" -b || { UDID="$MAIN"; return 1; }
+  run 30 xcrun simctl status_bar "$UDID" override --time "9:41" --batteryState charged --batteryLevel 100 || true
+  run 120 xcrun simctl install "$UDID" "$APP" || { UDID="$MAIN"; return 1; }
+  run 60 xcrun simctl launch "$UDID" com.apple.Preferences >/dev/null || true
+  local rc=0
+  launch en en_US with-account && sleep 15 || rc=1
+  SIMCTL_CHILD_TF_CI_FLASH=scan launch en en_US && sleep 10 && shot "s-$label-scan-qr.png" || rc=1
+  SIMCTL_CHILD_TF_CI_FLASH=mutual launch en en_US && sleep 10 && shot "s-$label-my-code.png" || rc=1
+  SIMCTL_CHILD_TF_CI_SIGNOUT=1 launch en en_US && sleep 8 || true
+  run 60 xcrun simctl shutdown "$UDID" || true
+  UDID="$MAIN"
+  return $rc
+}
+
 run 60 xcrun simctl spawn "$UDID" log show --last 5m --predicate 'process == "Tradeflor"' --style compact > "$OUT/app.log" 2>&1 || true
+if [ -n "${TF_CI_USERNAME:-}" ] && [ -n "${TF_CI_PASSWORD:-}" ]; then
+  size_shots 375 iPhone-SE-3rd-generation iPhone-SE-2nd-generation || status=1
+  size_shots 390 iPhone-14 iPhone-13 iPhone-16e iPhone-12 || status=1
+fi
 run 60 xcrun simctl shutdown "$UDID" || true
 ls -la "$OUT"
 exit $status
