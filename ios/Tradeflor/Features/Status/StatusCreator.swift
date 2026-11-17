@@ -144,6 +144,10 @@ struct StatusCreatorSheet: View {
         .sheet(isPresented: $showText) {
             TextStatusComposer { text, bg, font in
                 Task {
+                    posting = true
+                    progress = ""
+                    problem = nil
+                    defer { posting = false }
                     do {
                         try await APIClient.shared.stPostTextStatus(token: token, groupID: groupID, text: text, bg: bg, font: font, music: music)
                         onPosted()
@@ -159,6 +163,10 @@ struct StatusCreatorSheet: View {
         .sheet(isPresented: $showVoice) {
             VoiceStatusRecorder { data, ms in
                 Task {
+                    posting = true
+                    progress = ""
+                    problem = nil
+                    defer { posting = false }
                     do {
                         try await APIClient.shared.stPostStatus(token: token, groupID: groupID, file: data, fileName: "voice.m4a", mime: "audio/mp4", voiceMs: ms)
                         onPosted()
@@ -227,6 +235,10 @@ struct StatusCreatorSheet: View {
                 mainTile
             }
             .buttonStyle(.plain)
+            if posting && items.isEmpty {
+                // a text or voice status on its way (the queue's own button shows the progress otherwise)
+                ProgressView().tint(Theme.accent).padding(.vertical, 4)
+            }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                 Button { showCamera = true } label: { tile("camera", "stx.tile.camera", "stx.tile.camera.sub", 0x2FD9DC, soft: 0.14, glow: 0.22) }
                 Button { showText = true } label: { tile(nil, "stx.tile.text", "stx.tile.text.sub", 0xF2C14E, soft: 0.15, glow: 0.2) }
@@ -236,6 +248,7 @@ struct StatusCreatorSheet: View {
                 Button { showVoice = true } label: { tile("mic", "stx.tile.voice", "stx.tile.voice.sub", 0xFF8AA0, soft: 0.15, glow: 0.2, glowHex: 0xFF7A93) }
             }
             .buttonStyle(.plain)
+            .disabled(posting)
         }
         .padding(.horizontal, 16)
         .padding(.top, 26)
@@ -339,6 +352,7 @@ struct StatusCreatorSheet: View {
     }
 
     private func postAll() async {
+        guard !posting else { return }
         posting = true
         problem = nil
         defer { posting = false }
@@ -404,8 +418,11 @@ struct MusicPickerSheet: View {
                         HStack(spacing: 12) {
                             Button { toggle(t.id) } label: {
                                 Image(systemName: playing == t.id ? "pause.circle.fill" : "play.circle.fill").font(.system(size: 28)).foregroundStyle(Theme.accent)
+                                    .frame(width: 44, height: 44).contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel(Text(LocalizedStringKey(playing == t.id ? "stx.pause" : "stx.play")))
+                            .accessibilityValue(Text(t.title))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(t.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
                                 Text(t.mood).font(.system(size: 12)).foregroundStyle(Theme.faint)
@@ -413,8 +430,11 @@ struct MusicPickerSheet: View {
                             Spacer()
                             Button { selection = t.id; player?.pause(); dismiss() } label: {
                                 Image(systemName: selection == t.id ? "checkmark.circle.fill" : "circle").foregroundStyle(Theme.accent).font(.system(size: 20))
+                                    .frame(width: 44, height: 44).contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityLabel(Text(t.title))
+                            .accessibilityAddTraits(selection == t.id ? .isSelected : [])
                         }
                     }
                 }
@@ -553,6 +573,7 @@ struct VoiceStatusRecorder: View {
     @State private var done: (data: Data, ms: Int)?
     @State private var player: AVAudioPlayer?
     @State private var playing = false
+    @State private var sent = false // a quick double tap posted the same voice status twice
 
     var body: some View {
         VStack(spacing: 18) {
@@ -569,14 +590,17 @@ struct VoiceStatusRecorder: View {
                         Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.accent)
                             .frame(width: 56, height: 56).background(Theme.card, in: Circle())
                     }
-                    Button { done = nil } label: {
+                    .accessibilityLabel(Text(LocalizedStringKey(playing ? "stx.pause" : "stx.play")))
+                    Button { player?.stop(); player = nil; playing = false; done = nil } label: {
                         Image(systemName: "trash").font(.system(size: 20)).foregroundStyle(Theme.danger)
                             .frame(width: 56, height: 56).background(Theme.card, in: Circle())
                     }
-                    Button { if let d = done { player?.stop(); onPost(d.data, d.ms); dismiss() } } label: {
+                    .accessibilityLabel(Text("chat.voice.cancel"))
+                    Button { if let d = done, !sent { sent = true; player?.stop(); playing = false; onPost(d.data, d.ms); dismiss() } } label: {
                         Image(systemName: "paperplane.fill").font(.system(size: 20, weight: .bold)).foregroundStyle(.white)
                             .frame(width: 56, height: 56).background(Theme.sendGradient, in: Circle())
                     }
+                    .accessibilityLabel(Text("status.post"))
                 } else {
                     Button {
                         if recorder.recording { stop() } else { Task { await recorder.start() } }
@@ -584,6 +608,7 @@ struct VoiceStatusRecorder: View {
                         Image(systemName: recorder.recording ? "stop.fill" : "mic.fill").font(.system(size: 26, weight: .bold)).foregroundStyle(.white)
                             .frame(width: 72, height: 72).background(recorder.recording ? AnyShapeStyle(Theme.danger) : AnyShapeStyle(Theme.sendGradient), in: Circle())
                     }
+                    .accessibilityLabel(Text(LocalizedStringKey(recorder.recording ? "cam.stop" : "cam.record")))
                 }
             }
         }
@@ -602,9 +627,19 @@ struct VoiceStatusRecorder: View {
         guard let d = done else { return }
         if playing { player?.pause(); playing = false; return }
         if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setCategory(.playback) } // never cut a running call's microphone
-        player = try? AVAudioPlayer(data: d.data)
-        player?.play()
+        if let p = player, p.currentTime > 0, p.currentTime < p.duration {
+            p.play() // carries on where it was paused
+        } else {
+            player = try? AVAudioPlayer(data: d.data)
+            player?.play()
+        }
+        guard let p = player, p.isPlaying else { playing = false; return }
         playing = true
+        // the button goes back to Play once the recording has played to the end (it stayed on Pause)
+        Task { @MainActor in
+            while playing, p === player, p.isPlaying { try? await Task.sleep(nanoseconds: 200_000_000) }
+            if p === player { playing = false }
+        }
     }
 }
 
@@ -623,6 +658,9 @@ struct StatusCreatorHero: View {
                 .fill(AngularGradient(colors: [Theme.hex(0x2FD9DC), Theme.hex(0x1B7FD6), Theme.hex(0xF2C14E), Theme.hex(0x2FD9DC)], center: .center))
                 .frame(width: 116, height: 116)
                 .rotationEffect(.degrees(spin ? 360 : 0))
+                // the turn is scoped to the ring's rotation: started with withAnimation in onAppear it also animated the
+                // whole page's layout forever, so the creator's content slid about by itself
+                .animation(.linear(duration: 9).repeatForever(autoreverses: false), value: spin)
                 .shadow(color: Theme.hex(0x2FD9DC, 0.35), radius: 18)
             Circle().fill(Theme.hex(0x041821)).frame(width: 108, height: 108)
             Avatar(token: token, userID: userID, avatarID: nil, title: name, size: 100)
@@ -630,7 +668,7 @@ struct StatusCreatorHero: View {
         .frame(width: 116, height: 116)
         .frame(maxWidth: .infinity)
         .accessibilityHidden(true)
-        .onAppear { withAnimation(.linear(duration: 9).repeatForever(autoreverses: false)) { spin = true } }
+        .onAppear { spin = true }
     }
 }
 

@@ -42,6 +42,9 @@ struct ContactsPanel: View {
     @State private var chatPath: [ConversationSummary] = []
     @State private var scanTarget: FlashTarget?
     @State private var opening = false
+    /// Requests being answered / a block or remove on its way: their buttons wait (a double tap sent them twice).
+    @State private var answering: Set<String> = []
+    @State private var confirming = false
     @FocusState private var fieldFocused: Bool
 
     init(onOpen: @escaping (ConversationSummary) -> Void) {
@@ -376,11 +379,13 @@ struct ContactsPanel: View {
                             .padding(.horizontal, 12).frame(height: 34).background(CV3.cyan, in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .disabled(answering.contains(r.id))
                     Button { Task { await respond(r, accept: false) } } label: {
                         Text("new.decline").font(.system(size: 14, weight: .semibold)).foregroundStyle(CV3.title)
                             .padding(.horizontal, 12).frame(height: 34).overlay(Capsule().stroke(CV3.ghostBorder, lineWidth: 1))
                     }
                     .buttonStyle(.plain)
+                    .disabled(answering.contains(r.id))
                 }
                 .padding(.vertical, 10)
                 .contextMenu {
@@ -559,6 +564,9 @@ struct ContactsPanel: View {
     }
 
     private func call(_ c: ContactEntry) async {
+        guard !opening else { return }
+        opening = true
+        defer { opening = false }
         guard let chat = await APIClient.shared.ctOpenChat(token: token, userID: c.user_id) else {
             problem = Problem(text: NSLocalizedString("ci.call.failed", comment: ""))
             return
@@ -568,21 +576,36 @@ struct ContactsPanel: View {
 
     private func runConfirm(_ c: Confirm) async {
         confirm = nil
-        switch c.kind {
-        case .block: try? await APIClient.shared.block(token: token, userID: c.userID)
-        case .remove: try? await APIClient.shared.ctUnsave(token: token, userID: c.userID)
+        guard !confirming else { return }
+        confirming = true
+        defer { confirming = false }
+        problem = nil
+        do {
+            switch c.kind {
+            case .block: try await APIClient.shared.block(token: token, userID: c.userID)
+            case .remove: try await APIClient.shared.ctUnsave(token: token, userID: c.userID)
+            }
+        } catch {
+            // it did not happen: say so (it was silent and the person simply stayed in the list)
+            problem = Problem(text: NSLocalizedString("settings.failed", comment: ""))
         }
         await load()
     }
 
     private func respond(_ r: ContactRequest, accept: Bool) async {
+        guard !answering.contains(r.id) else { return }
+        answering.insert(r.id)
+        defer { answering.remove(r.id) }
         if (try? await APIClient.shared.respond(token: token, requestID: r.id, accept: accept)) != nil {
             incoming.removeAll { $0.id == r.id }
+        } else {
+            problem = Problem(text: NSLocalizedString("settings.failed", comment: ""))
         }
         await load()
     }
 
     private func open(_ userID: String) async {
+        guard !opening else { return } // a double tap opened the chat request twice
         opening = true
         defer { opening = false }
         if let s = await APIClient.shared.ctOpenChat(token: token, userID: userID) {

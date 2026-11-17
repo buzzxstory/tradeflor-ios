@@ -43,6 +43,9 @@ struct StatusViewerScreen: View {
     @State private var showEmoji = false // the full emoji panel for the reply (the button in the reply box)
 
     private let photoSeconds = 5.0
+    /// What the viewer shows for an empty list (it closes at once): never an out-of-range read.
+    private static let emptyGroup = StatusGroup(user_id: "", username: "", mine: nil, group_id: nil, group_name: nil, can_post: nil,
+                                                posts: [], all_seen: true, latest: 0)
 
     private enum SwipeAxis { case down, up, side }
 
@@ -50,10 +53,11 @@ struct StatusViewerScreen: View {
         self.groups = groups
         self.token = token
         self.onClose = onClose
-        _g = State(initialValue: startGroup)
+        // never an index past the list (a list that changed between the tap and the cover opening crashed here)
+        _g = State(initialValue: min(max(0, startGroup), max(0, groups.count - 1)))
     }
 
-    private var group: StatusGroup { groups[g] }
+    private var group: StatusGroup { groups.indices.contains(g) ? groups[g] : (groups.first ?? StatusViewerScreen.emptyGroup) }
     private var post: StatusPost? { group.posts.indices.contains(p) ? group.posts[p] : nil }
 
     var body: some View {
@@ -472,7 +476,10 @@ struct StatusViewerScreen: View {
         var video: AVPlayer?
         switch post.kind {
         case "image":
-            if let d = await APIClient.shared.statusMedia(token: token, id: post.id) { image = UIImage(data: d) }
+            let d = await APIClient.shared.statusMedia(token: token, id: post.id)
+            // moved on meanwhile: this picture belongs to the story before (it flashed over the next one)
+            if Task.isCancelled { return }
+            if let d { image = UIImage(data: d) }
         case "video", "voice":
             // starts at once (no waiting for the length or a big buffer); the bar follows the video's own clock below
             let pl = StatusVideo.player(token: token, id: post.id, muted: muted)
@@ -712,7 +719,7 @@ struct StatusViewerScreen: View {
     }
 
     private func sendReply() async {
-        guard let post else { return }
+        guard let post, !sending else { return } // Return and the send button together sent the reply twice
         let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         sending = true
@@ -811,6 +818,7 @@ struct TextStatusComposer: View {
     @State private var text = ""
     @State private var bg = StatusStyle.backgrounds[0].id
     @State private var font = StatusStyle.fonts[0].id
+    @State private var sent = false // a quick double tap posted the same text status twice
     @FocusState private var focused: Bool
 
     private var style: String { "\(bg):\(font)" }
@@ -852,7 +860,8 @@ struct TextStatusComposer: View {
                     Spacer()
                     Button {
                         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !t.isEmpty else { return }
+                        guard !t.isEmpty, !sent else { return }
+                        sent = true
                         onPost(t, bg, font)
                         dismiss()
                     } label: {

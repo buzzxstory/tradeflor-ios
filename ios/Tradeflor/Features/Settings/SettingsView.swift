@@ -18,6 +18,7 @@ struct SettingsView: View {
     /// request): Admin Center no longer vanishes on a fast refresh or a refused check (web 5106e98).
     @State private var adminRole = UserDefaults.standard.string(forKey: "tf.admin.role") ?? ""
     @State private var confirmSignOut = false
+    @State private var signingOut = false
     @State private var sharingCount = 0
     @AppStorage("tf.night") private var night = true
     @ObservedObject private var calls = CallManager.shared
@@ -34,7 +35,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     header
-                    NavigationLink { MyProfilePage(onChange: { Task { await load() } }) } label: { profileCard }
+                    NavigationLink { MyProfilePage(onChange: { Task { await load(retryAdmin: false) } }) } label: { profileCard }
                         .padding(.top, 4)
 
                     group("settings.sec.account") {
@@ -102,11 +103,13 @@ struct SettingsView: View {
 
                     // Sign Out: its own card, red only here, behind a confirmation
                     SCard(border: SetUI.dangerEdge) {
-                        Button { confirmSignOut = true } label: {
+                        Button { if !signingOut { confirmSignOut = true } } label: {
                             SMenuRow(icon: "power", title: NSLocalizedString("set.signout", comment: ""),
                                      subtitle: String(format: NSLocalizedString("ux3.set.signout.sub", comment: ""), "@" + username),
                                      danger: true, chevron: false)
+                                .overlay(alignment: .trailing) { if signingOut { ProgressView().tint(SetUI.danger).padding(.trailing, 16) } }
                         }
+                        .disabled(signingOut)
                     }
                     .padding(.top, 10)
 
@@ -119,13 +122,21 @@ struct SettingsView: View {
                 .padding(.bottom, 32)
             }
             .buttonStyle(.plain)
-            .refreshable { await load() }
+            // a pull never waits on the admin check's slow retries (the spinner stayed up to a minute and a half)
+            .refreshable { await load(retryAdmin: false) }
             .background(SettingsBackground())
             .toolbar(.hidden, for: .navigationBar)
         }
         .task { await load() }
         .confirmationDialog(Text("settings.signout.confirm"), isPresented: $confirmSignOut, titleVisibility: .visible) {
-            Button("set.signout", role: .destructive) { Task { await store.signOut() } }
+            Button("set.signout", role: .destructive) {
+                guard !signingOut else { return }
+                signingOut = true
+                Task {
+                    await store.signOut()
+                    signingOut = false
+                }
+            }
         }
     }
 
@@ -197,7 +208,14 @@ struct SettingsView: View {
         .contentShape(Rectangle())
     }
 
-    private func load() async {
+    /// Forgets the cached profile and admin role (sign-out): the next account never shows the previous one's card or
+    /// Admin Center.
+    static func forgetCache() {
+        lastProfile = nil
+        UserDefaults.standard.removeObject(forKey: "tf.admin.role")
+    }
+
+    private func load(retryAdmin: Bool = true) async {
         guard !token.isEmpty else { return }
         do {
             let p = try await APIClient.shared.profile(token: token)
@@ -220,6 +238,7 @@ struct SettingsView: View {
                 return
             case .unknown:
                 // refused for now (429 after many refreshes, network): keep it and ask again in 2 … 30 s
+                guard retryAdmin else { return }
                 try? await Task.sleep(nanoseconds: UInt64(min(30, 2 << n)) * 1_000_000_000)
                 if Task.isCancelled { return }
             }
@@ -464,6 +483,7 @@ struct SettingsPage<Content: View>: View {
             }
             .padding(16)
         }
+        .scrollDismissesKeyboard(.interactively)
         .background(Starfield())
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -499,11 +519,25 @@ struct SettingsPage<Content: View>: View {
             .padding(.top, 4)
             .padding(.bottom, 32)
         }
+        .scrollDismissesKeyboard(.interactively)
         .background(SettingsBackground())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
+    }
+}
+
+/// A "Done" key above the keyboard: number and phone pads have no Return key, so the PIN, phone and code fields on
+/// these pages could not put the keyboard away.
+struct KeyboardDoneBar: ViewModifier {
+    func body(content: Content) -> some View {
+        content.toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("chat.done") { TabChrome.dismissKeyboard() }.font(.system(size: 16, weight: .semibold))
+            }
+        }
     }
 }
 

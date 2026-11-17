@@ -198,7 +198,8 @@ struct IdentityShowcase: View {
             }
         }
         .sheet(item: $shareItem) { item in
-            ActivityShare(items: [item.image, URL(string: link) as Any].compactMap { $0 })
+            // the image, and the link when it reads as one (a nil boxed in Any was handed to the share sheet before)
+            ActivityShare(items: [item.image as Any] + (URL(string: link).map { [$0 as Any] } ?? []))
         }
         .sheet(isPresented: $qrOnly) {
             VStack(spacing: 14) {

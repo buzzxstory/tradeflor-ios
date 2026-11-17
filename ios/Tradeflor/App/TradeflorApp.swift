@@ -100,7 +100,13 @@ struct RootView: View {
             ConnectionRequestSheet(request: r) { chat in LocalNotifier.shared.tappedConversation = chat.conversation_id }
                 .environmentObject(store)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .tfGoTab)) { if let t = $0.object as? String { tab = t } }
+        // only the dock's own tabs (an unknown name left the TabView on a blank page)
+        .onReceive(NotificationCenter.default.publisher(for: .tfGoTab)) { n in
+            if let t = n.object as? String, ["chats", "groups", "tradeflor", "calendar", "settings"].contains(t), tab != t {
+                TabChrome.dismissKeyboard()
+                tab = t
+            }
+        }
         .onChange(of: notifier.tappedConversation) { id in
             // a tapped notification: the right tab; the list there opens the chat
             if let id { tab = id.hasPrefix("grp_") ? "groups" : "chats" }

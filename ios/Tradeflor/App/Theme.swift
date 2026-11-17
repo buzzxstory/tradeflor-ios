@@ -175,7 +175,12 @@ struct SearchPill: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             if !text.isEmpty {
-                Button { text = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.faint) }
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.faint)
+                        .frame(width: 32, height: 32).contentShape(Rectangle()) // a 16 pt glyph was hard to hit
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("cv3.clear"))
             }
         }
         .padding(.horizontal, 16)

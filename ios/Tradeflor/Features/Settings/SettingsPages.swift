@@ -42,6 +42,7 @@ struct MyProfilePage: View {
                     Label("set.edit.profile", systemImage: "pencil").font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 42).background(Theme.accent, in: Capsule())
                 }
+                .disabled(profile == nil) // the sheet needs the profile: before it arrived the sheet opened empty
                 Menu {
                     PhotosPicker(selection: $picked, matching: .images) {
                         Label(LocalizedStringKey((profile?.avatar_id.isEmpty ?? true) ? "set.photo.add" : "set.photo.change"), systemImage: "photo")
@@ -58,6 +59,8 @@ struct MyProfilePage: View {
                     Image(systemName: "ellipsis").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
                         .frame(width: 42, height: 42).background(Theme.card, in: Circle()).overlay(Circle().stroke(Theme.borderStrong, lineWidth: 1))
                 }
+                .disabled(busy)
+                .accessibilityLabel(Text("chat.more"))
             }
             if let pin = identity?.pin {
                 SCard {
@@ -88,8 +91,12 @@ struct MyProfilePage: View {
         }
         .confirmationDialog(Text("set.photo.remove.confirm"), isPresented: $confirmRemove, titleVisibility: .visible) {
             Button("set.photo.remove", role: .destructive) {
+                guard !busy else { return }
                 Task {
+                    busy = true
                     if let p = try? await APIClient.shared.deleteAvatar(token: token) { profile = p; onChange() }
+                    else { note = NSLocalizedString("settings.failed", comment: "") }
+                    busy = false
                 }
             }
         }
@@ -106,6 +113,7 @@ struct MyProfilePage: View {
                 Task {
                     busy = true
                     if let pr = try? await APIClient.shared.uploadAvatar(token: token, jpeg: jpeg) { profile = pr; onChange() }
+                    else { note = NSLocalizedString("settings.failed", comment: "") }
                     busy = false
                 }
             }
@@ -118,7 +126,8 @@ struct MyProfilePage: View {
     }
 
     private func load() async {
-        profile = try? await APIClient.shared.profile(token: token)
+        // a failed read keeps what is on screen (it used to blank the page)
+        if let p = try? await APIClient.shared.profile(token: token) { profile = p }
         if let d = try? await APIClient.shared.getJSON("identity/me", token: token) {
             identity = try? JSONDecoder().decode(StIdentity.self, from: d)
         }
@@ -153,6 +162,7 @@ struct AvatarViewer: View {
             Button { dismiss() } label: {
                 Image(systemName: "xmark").font(.system(size: 17, weight: .bold)).foregroundStyle(.white).frame(width: 44, height: 44)
             }
+            .accessibilityLabel(Text("chat.close"))
             .padding()
         }
         .task {
@@ -274,6 +284,7 @@ struct AccountPage: View {
             if let problem { Text(problem).font(.system(size: 13)).foregroundStyle(Theme.danger) }
             if let note { Text(note).font(.system(size: 13)).foregroundStyle(Theme.accent) }
         }
+        .modifier(KeyboardDoneBar())
         .task { account = try? await APIClient.shared.stPrivateAccount(token: token) }
     }
 
@@ -305,6 +316,7 @@ struct AccountPage: View {
     }
 
     private func save() async {
+        guard !busy else { return }
         busy = true
         problem = nil
         defer { busy = false }
@@ -392,15 +404,20 @@ struct MyIdentityPage: View {
 
     private func check(_ v: String) async {
         let u = v.trimmingCharacters(in: .whitespaces).lowercased()
-        guard u.count >= 3 else { nameNote = nil; nameOK = false; return }
+        // the name changed: the earlier "available" no longer holds until this one is checked (Change could send an
+        // unchecked name in that window)
+        nameOK = false
+        guard u.count >= 3 else { nameNote = nil; return }
         try? await Task.sleep(nanoseconds: 350_000_000)
         guard u == newName.trimmingCharacters(in: .whitespaces).lowercased() else { return }
         let r = await APIClient.shared.stUsernameAvailable(token: token, u)
+        guard u == newName.trimmingCharacters(in: .whitespaces).lowercased() else { return } // typed on meanwhile
         nameOK = r.available
         nameNote = r.available ? NSLocalizedString("set.username.free", comment: "") : (r.reason ?? NSLocalizedString("signup.username.taken", comment: ""))
     }
 
     private func change() async {
+        guard !busy else { return }
         busy = true
         defer { busy = false }
         do {
@@ -425,6 +442,7 @@ struct LiveLocationPage: View {
     @EnvironmentObject private var store: SessionStore
     @State private var mine: [LivePosition] = []
     @State private var names: [String: String] = [:]
+    @State private var stopping = false
     private var token: String { store.session?.token ?? "" }
     private var active: [LivePosition] { mine.filter { $0.stopped != true && Double($0.until) > Date().timeIntervalSince1970 } }
 
@@ -449,18 +467,21 @@ struct LiveLocationPage: View {
                                     .font(.system(size: 12)).foregroundStyle(Theme.faint)
                             }
                             Spacer()
-                            Button("set.stop") { Task { await stop(p.conversation_id) } }.font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.danger)
+                            Button("set.stop") { Task { await stopAll([p.conversation_id]) } }.font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.danger)
+                                .disabled(stopping)
                         }
                         .padding(14)
                         if i < active.count - 1 { SDivider() }
                     }
                 }
                 Button {
-                    Task { for p in active { await stop(p.conversation_id) } }
+                    Task { await stopAll(active.map(\.conversation_id)) }
                 } label: {
                     Text("set.loc.stopall").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.danger)
                         .frame(maxWidth: .infinity, minHeight: 44).overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.danger.opacity(0.5), lineWidth: 1))
                 }
+                .disabled(stopping)
+                .opacity(stopping ? 0.5 : 1)
             }
         }
         .task { await load() }
@@ -476,9 +497,16 @@ struct LiveLocationPage: View {
         names = n
     }
 
-    private func stop(_ conv: String) async {
-        LocationSharer.shared.stop(conversationID: conv)
-        await APIClient.shared.stopLocation(token: token, conversationID: conv)
+    /// Stops sharing in these chats, then reads the list once (it was read again after each one, and a second tap
+    /// started the same stops twice).
+    private func stopAll(_ convs: [String]) async {
+        guard !stopping, !convs.isEmpty else { return }
+        stopping = true
+        defer { stopping = false }
+        for conv in convs {
+            LocationSharer.shared.stop(conversationID: conv)
+            await APIClient.shared.stopLocation(token: token, conversationID: conv)
+        }
         await load()
     }
 }
@@ -489,6 +517,8 @@ struct EventsPage: View {
     @EnvironmentObject private var store: SessionStore
     @State private var items: [SavedEventFull] = []
     @State private var loading = true
+    @State private var working: Set<String> = []
+    @State private var problem: String?
     private var token: String { store.session?.token ?? "" }
     private var now: Int64 { Int64(Date().timeIntervalSince1970) }
     private var upcoming: [SavedEventFull] { items.filter { $0.event_at >= now }.sorted { $0.event_at < $1.event_at } }
@@ -507,6 +537,7 @@ struct EventsPage: View {
             }
             if !upcoming.isEmpty { section("set.events.upcoming", upcoming) }
             if !past.isEmpty { section("set.events.past", past) }
+            if let problem { Text(problem).font(.system(size: 12)).foregroundStyle(Theme.danger) }
         }
         .task { await load() }
     }
@@ -526,7 +557,7 @@ struct EventsPage: View {
                             if e.event_at >= now {
                                 Menu {
                                     ForEach(Self.reminders, id: \.self) { m in
-                                        Button(Self.label(m)) { Task { try? await APIClient.shared.stResaveEvent(token: token, e, remind: m); await load() } }
+                                        Button(Self.label(m)) { Task { await remind(e, m) } }
                                     }
                                 } label: {
                                     Label(Self.label(e.remind_minutes ?? 15), systemImage: "bell").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
@@ -534,11 +565,13 @@ struct EventsPage: View {
                             }
                         }
                         Spacer()
-                        Button {
-                            Task {
-                                if (try? await APIClient.shared.removeSavedEvent(token: token, key: e.event_key)) != nil { items.removeAll { $0.id == e.id } }
-                            }
-                        } label: { Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.faint).frame(width: 28, height: 28) }
+                        Button { Task { await remove(e) } } label: {
+                            Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.faint)
+                                .frame(width: 40, height: 40).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(working.contains(e.event_key))
+                        .accessibilityLabel(Text("set.events.remove"))
                     }
                     .padding(12)
                     if i < list.count - 1 { SDivider() }
@@ -556,6 +589,29 @@ struct EventsPage: View {
         items = (try? await APIClient.shared.stSavedEvents(token: token)) ?? items
         loading = false
     }
+
+    private func remind(_ e: SavedEventFull, _ minutes: Int) async {
+        guard !working.contains(e.event_key) else { return }
+        working.insert(e.event_key)
+        defer { working.remove(e.event_key) }
+        problem = nil
+        do { try await APIClient.shared.stResaveEvent(token: token, e, remind: minutes) } catch {
+            problem = NSLocalizedString("settings.failed", comment: "")
+        }
+        await load()
+    }
+
+    private func remove(_ e: SavedEventFull) async {
+        guard !working.contains(e.event_key) else { return }
+        working.insert(e.event_key)
+        defer { working.remove(e.event_key) }
+        problem = nil
+        if (try? await APIClient.shared.removeSavedEvent(token: token, key: e.event_key)) != nil {
+            items.removeAll { $0.id == e.id }
+        } else {
+            problem = NSLocalizedString("settings.failed", comment: "")
+        }
+    }
 }
 
 // MARK: Notifications / Privacy (account switches)
@@ -572,16 +628,24 @@ final class AccountSwitches: ObservableObject {
     ]
 
     func load(_ token: String) async {
-        let s = (try? await APIClient.shared.stSettings(token: token)) ?? [:]
-        values = Self.defaults.merging(s) { _, new in new }
+        do {
+            let s = try await APIClient.shared.stSettings(token: token)
+            values = Self.defaults.merging(s) { _, new in new }
+        } catch {
+            // not read: the switches show the defaults, and the page says so (they used to pass for the account's own)
+            if values.isEmpty { values = Self.defaults }
+            problem = NSLocalizedString("ls.failed", comment: "")
+        }
     }
 
     func binding(_ key: String, token: String) -> Binding<Bool> {
         Binding(get: { self.values[key] ?? Self.defaults[key] ?? false }, set: { v in
             self.values[key] = v
+            self.problem = nil
             Task {
                 do { try await APIClient.shared.stSetSetting(token: token, key: key, value: v) } catch {
-                    self.values[key] = !v
+                    // back to what the server has, unless the switch was flipped again meanwhile
+                    if self.values[key] == v { self.values[key] = !v }
                     self.problem = NSLocalizedString("settings.failed", comment: "")
                 }
             }
@@ -636,6 +700,7 @@ struct PrivacyPage: View {
     @State private var note: String?
     @State private var problem: String?
     @State private var pinSaved = BiometricPIN.isSaved
+    @State private var savingPIN = false
     @State private var presence: PresencePrivacy?
     @ObservedObject private var calls = CallManager.shared
     private var token: String { store.session?.token ?? "" }
@@ -694,9 +759,10 @@ struct PrivacyPage: View {
                         Divider()
                         SecureField("set.pin.repeat", text: $pin2).keyboardType(.numberPad)
                         Button { Task { await savePIN() } } label: {
-                            Text("settings.save").bold().foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 38).background(Theme.accent, in: Capsule())
+                            Group { if savingPIN { ProgressView().tint(Theme.onAccent) } else { Text("settings.save").bold() } }
+                                .foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 38).background(Theme.accent, in: Capsule())
                         }
-                        .disabled(password.isEmpty || pin1.count < 6)
+                        .disabled(password.isEmpty || pin1.count < 6 || savingPIN)
                     }
                     .foregroundStyle(Theme.text)
                     .padding(.horizontal, 14).padding(.bottom, 14)
@@ -731,6 +797,7 @@ struct PrivacyPage: View {
             if let p = problem ?? sw.problem { Text(p).font(.system(size: 12)).foregroundStyle(Theme.danger) }
             if let note { Text(note).font(.system(size: 12)).foregroundStyle(Theme.accent) }
         }
+        .modifier(KeyboardDoneBar())
         .task {
             await sw.load(token)
             struct Locks: Decodable { let has_pin: Bool?; let unlocked: Bool? }
@@ -742,6 +809,9 @@ struct PrivacyPage: View {
     }
 
     private func savePIN() async {
+        guard !savingPIN else { return }
+        savingPIN = true
+        defer { savingPIN = false }
         problem = nil
         guard pin1 == pin2 else { problem = NSLocalizedString("set.pin.mismatch", comment: ""); return }
         guard pin1.count >= 6, pin1.count <= 10, pin1.allSatisfy(\.isNumber) else { problem = NSLocalizedString("set.pin.rule", comment: ""); return }
@@ -908,11 +978,18 @@ struct CallsPage: View {
                     }
                 }
             }
+            // a switch that did not save (it flips back) and a failed Clear All say so here
+            if let p = sw.problem { Text(p).font(.system(size: 12)).foregroundStyle(Theme.danger) }
         }
         .task { await load() }
         .confirmationDialog(Text("set.c.clear.confirm"), isPresented: $confirmClear, titleVisibility: .visible) {
             Button("set.c.clear", role: .destructive) {
-                Task { try? await APIClient.shared.stClearCallHistory(token: token); await load() }
+                Task {
+                    do { try await APIClient.shared.stClearCallHistory(token: token) } catch {
+                        sw.problem = NSLocalizedString("settings.failed", comment: "")
+                    }
+                    await load()
+                }
             }
         }
     }

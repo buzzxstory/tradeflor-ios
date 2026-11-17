@@ -8,6 +8,7 @@ struct TradeFlorView: View {
     /// nil until the first answer arrives (the web's `events === null`): a quiet skeleton, never "0 high-impact" or "no events"
     @State private var events: [CalendarEvent]? = TradeFlorView.lastEvents
     @State private var saved: Set<String> = []
+    @State private var toggling: Set<String> = []
     @State private var groups: [StatusGroup] = TradeFlorView.lastGroups
     @State private var query = ""
     /// Today's events are shown five at a time (website todayEvents.ts TODAY_PAGE).
@@ -559,7 +560,17 @@ struct TradeFlorView: View {
         if let s = try? await sv { saved = Set(s.map(\.event_key)) }
     }
 
+    /// Forgets the cached answers (sign-out): the next account never sees the previous one's statuses.
+    static func forgetCache() {
+        lastEvents = nil
+        lastGroups = []
+    }
+
     private func toggle(_ e: CalendarEvent) async {
+        // one request per bell at a time: a quick double tap no longer saves and removes in a race
+        guard !toggling.contains(e.id) else { return }
+        toggling.insert(e.id)
+        defer { toggling.remove(e.id) }
         if saved.contains(e.id) {
             saved.remove(e.id)
             if (try? await APIClient.shared.removeSavedEvent(token: token, key: e.id)) == nil { saved.insert(e.id) }
@@ -583,13 +594,15 @@ struct QuietSkeleton: View {
     @State private var dim = false
 
     var body: some View {
+        // the breathing is scoped to the fill's opacity only: a repeatForever started with withAnimation in onAppear
+        // also animated the block's position, so skeletons (and the rows around them) drifted up and down by themselves
         RoundedRectangle(cornerRadius: radius, style: .continuous)
-            .fill(Theme.faint.opacity(dim ? 0.07 : 0.14))
+            .fill(Theme.faint.opacity(0.14))
+            .opacity(dim ? 0.5 : 1)
+            .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: dim)
             .frame(width: width, height: height)
             .frame(maxWidth: width == nil ? .infinity : nil)
-            .onAppear {
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { dim = true }
-            }
+            .onAppear { dim = true }
             .accessibilityHidden(true)
     }
 }

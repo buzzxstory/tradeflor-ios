@@ -21,20 +21,34 @@ final class SessionStore: ObservableObject {
         session = s
     }
 
+    private var signingOut = false
+
     func signOut() async {
+        // one sign-out at a time (a second tap while the first is on its way does nothing)
+        guard !signingOut else { return }
+        signingOut = true
+        defer { signingOut = false }
         if let token = session?.token {
             await APIClient.shared.relockChats(token: token)
             await APIClient.shared.logout(token: token)
         }
         Keychain.delete()
-        ListCache.clear(); ChatMemo.clear() // this account's lists leave the phone with it
+        forgetAccount()
         session = nil
     }
 
     /// The token was revoked elsewhere (e.g. "log out all devices" on the website).
     func sessionExpired() {
         Keychain.delete()
-        ChatMemo.clear()
+        forgetAccount()
         session = nil
+    }
+
+    /// This account's lists, profile card, statuses and admin role leave the phone with it, so the next account to sign
+    /// in never sees them (they were kept in memory across a sign-out before).
+    private func forgetAccount() {
+        ListCache.clear(); ChatMemo.clear()
+        SettingsView.forgetCache()
+        TradeFlorView.forgetCache()
     }
 }

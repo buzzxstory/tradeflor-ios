@@ -150,18 +150,24 @@ final class CallManager: NSObject, ObservableObject {
     struct PendingCall: Identifiable { let id = UUID(); let conversationID: String; let peerName: String; let peerID: String? }
     /// Settings › Calls › Ask Before Starting a Call: the call waiting for "Call" in the confirmation.
     @Published var confirming: PendingCall?
+    /// A call button was tapped and the call is being set up (the settings read, the microphone check): a second tap in
+    /// that window started a second call.
+    private var starting = false
 
     func start(conversationID: String, peerName: String, peerID: String? = nil, confirmed: Bool = false) {
-        guard phase == .idle, enabled else { return }
+        guard phase == .idle, enabled, !starting else { return }
+        starting = true
         if !confirmed {
             Task {
                 let ask = ((try? await APIClient.shared.stSettings(token: token)) ?? [:])["calls.confirm"] ?? false
+                starting = false
                 if ask { confirming = PendingCall(conversationID: conversationID, peerName: peerName, peerID: peerID) }
                 else { start(conversationID: conversationID, peerName: peerName, peerID: peerID, confirmed: true) }
             }
             return
         }
         Task {
+            defer { starting = false }
             guard await micAllowed() else { endReason = "mic_denied"; finish(); return }
             let id = UUID()
             uuid = id

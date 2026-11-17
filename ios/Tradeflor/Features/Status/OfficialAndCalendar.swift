@@ -393,12 +393,14 @@ struct OfficialViewer: View {
             prefetchNext()
             await runVideo(pl)
         } else {
-            if let d = await APIClient.shared.statusMedia(token: token, id: id), let img = UIImage(data: d) {
+            let d = await APIClient.shared.statusMedia(token: token, id: id)
+            // moved on meanwhile: this picture belongs to the post before (it flashed over the next one)
+            if Task.isCancelled { return }
+            if let d, let img = UIImage(data: d) {
                 image = img
             } else {
                 loadFailed = true
             }
-            if Task.isCancelled { return }
             prefetchNext()
             await runClock(imageSeconds)
         }

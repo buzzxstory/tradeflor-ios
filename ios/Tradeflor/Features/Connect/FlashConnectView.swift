@@ -123,6 +123,7 @@ struct ScanResultView: View {
     @State private var state = "loading" // loading | person | adding | bad | group | meet
     @State private var meet: MeetupPeek?
     @State private var info: String?
+    @State private var joining = false
 
     private var token: String { store.session?.token ?? "" }
 
@@ -159,6 +160,7 @@ struct ScanResultView: View {
                                 Text("fc.event.join").bold().foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 44)
                                     .background(Theme.accent, in: Capsule())
                             }
+                            .disabled(joining)
                             if let info { Text(info).font(.system(size: 12)).foregroundStyle(Theme.accent) }
                         }
                         .padding(14)
@@ -250,7 +252,9 @@ struct ScanResultView: View {
     }
 
     private func joinMeet() async {
-        guard case .meet(let tok) = target else { return }
+        guard case .meet(let tok) = target, !joining else { return }
+        joining = true
+        defer { joining = false }
         if (try? await APIClient.shared.ctJoinMeetup(token: token, tok: tok)) != nil {
             info = NSLocalizedString("fc.event.joined", comment: "")
         } else {
@@ -410,6 +414,7 @@ struct EventConnectView: View {
     @State private var title = ""
     @State private var starts = Date().addingTimeInterval(3600)
     @State private var problem: String?
+    @State private var creating = false
 
     private var token: String { store.session?.token ?? "" }
 
@@ -425,7 +430,7 @@ struct EventConnectView: View {
                         Text("fc.event.create").bold().foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 42)
                             .background(Theme.accent, in: Capsule())
                     }
-                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || creating)
                     if let problem { Text(problem).font(.system(size: 12)).foregroundStyle(Theme.danger) }
                 }
                 .padding(14)
@@ -449,6 +454,11 @@ struct EventConnectView: View {
     private func load() async { events = (try? await APIClient.shared.ctMeetups(token: token)) ?? [] }
 
     private func create() async {
+        // a double tap made the same event twice
+        guard !creating else { return }
+        creating = true
+        defer { creating = false }
+        problem = nil
         do {
             _ = try await APIClient.shared.ctCreateMeetup(token: token, title: title, startsAt: starts)
             title = ""
@@ -463,6 +473,9 @@ struct MeetupDetailView: View {
     let meetup: Meetup
     let onOpen: (ConversationSummary) -> Void
     @EnvironmentObject private var store: SessionStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var busy = false
+    @State private var problem: String?
     @State private var code: String?
     @State private var people: [IdentityDetail] = []
     @State private var revoked = false
@@ -486,11 +499,21 @@ struct MeetupDetailView: View {
                 }
                 if let code { FlashConnectView.qrCard("https://app.tradeflor.com/?meet=\(code)").frame(maxWidth: .infinity) }
             } else if meetup.is_host != true {
-                Button { Task { try? await APIClient.shared.ctLeaveMeetup(token: token, id: meetup.id) } } label: {
+                Button {
+                    guard !busy else { return }
+                    busy = true
+                    Task {
+                        defer { busy = false }
+                        if (try? await APIClient.shared.ctLeaveMeetup(token: token, id: meetup.id)) != nil { dismiss() }
+                        else { problem = NSLocalizedString("settings.failed", comment: "") }
+                    }
+                } label: {
                     Text("fc.leave").foregroundStyle(Theme.danger)
                 }
+                .disabled(busy)
             }
             if revoked { Text("fc.revoked").font(.system(size: 13)).foregroundStyle(Theme.faint) }
+            if let problem { Text(problem).font(.system(size: 12)).foregroundStyle(Theme.danger) }
             TFSectionLabel(text: NSLocalizedString("fc.attendees", comment: ""))
             if people.isEmpty { Text("fc.nobody").font(.system(size: 13)).foregroundStyle(Theme.faint) }
             ForEach(people, id: \.user_id) { p in

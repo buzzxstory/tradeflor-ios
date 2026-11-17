@@ -24,7 +24,11 @@ struct CalendarView: View {
     @State private var now = Date()
     @State private var expanded: Set<String> = []
     @State private var visible = 10
-    @State private var picker: String? // "cur" | "cty"
+    @State private var picker: PickKind? // currencies | countries
+    @State private var toggling: Set<String> = []
+
+    /// Which filter sheet is open (its own identity, so the sheet never swaps to the other list while it closes).
+    private struct PickKind: Identifiable { let id: String }
     @State private var pickingDay = false
     @State private var toast: String?
 
@@ -167,8 +171,8 @@ struct CalendarView: View {
                 await loadNext()
             }
         }
-        .sheet(isPresented: Binding(get: { picker != nil }, set: { if !$0 { picker = nil } })) {
-            if picker == "cur" {
+        .sheet(item: $picker) { kind in
+            if kind.id == "cur" {
                 MultiPickSheet(title: NSLocalizedString("cal.currencies", comment: ""),
                                options: seenCurrencies.map { c in (c, c, dayEvents.filter { $0.currency == c }.count) },
                                selection: $currencies)
@@ -457,8 +461,8 @@ struct CalendarView: View {
             chip(NSLocalizedString("calendar.high", comment: ""), dot: P.hi, on: impact == "high") { impact = impact == "high" ? "all" : "high"; visible = 10 }
             chip(NSLocalizedString("calendar.medium", comment: ""), dot: P.md, on: impact == "medium") { impact = impact == "medium" ? "all" : "medium"; visible = 10 }
             chip(NSLocalizedString("calendar.low", comment: ""), dot: P.lo, on: impact == "low") { impact = impact == "low" ? "all" : "low"; visible = 10 }
-            chip(NSLocalizedString("cal.currencies", comment: ""), dot: nil, on: !currencies.isEmpty, count: currencies.count, menu: true) { picker = "cur" }
-            chip(NSLocalizedString("cal.countries", comment: ""), dot: nil, on: !countries.isEmpty, count: countries.count, menu: true) { picker = "cty" }
+            chip(NSLocalizedString("cal.currencies", comment: ""), dot: nil, on: !currencies.isEmpty, count: currencies.count, menu: true) { picker = PickKind(id: "cur") }
+            chip(NSLocalizedString("cal.countries", comment: ""), dot: nil, on: !countries.isEmpty, count: countries.count, menu: true) { picker = PickKind(id: "cty") }
         }
     }
 
@@ -682,7 +686,7 @@ struct CalendarView: View {
                     actionLabel(on ? "cal.alert.set" : "cal.alert", icon: on ? "bell.fill" : "bell", on: on)
                 }
                 .buttonStyle(.plain)
-                .disabled(past)
+                .disabled(past || toggling.contains(e.id))
                 .opacity(past ? 0.5 : 1)
                 if let url = Self.icsFile(e) {
                     ShareLink(item: url) { actionLabel("cal.addcal", icon: "calendar.badge.plus", on: false) }
@@ -911,21 +915,38 @@ struct CalendarView: View {
 
     // MARK: helpers
 
+    /// One DateFormatter per format and zone, made once (a new formatter for every row on every redraw made the page lag).
+    private static var formatters: [String: DateFormatter] = [:]
+
+    private static func formatter(_ key: String, _ make: () -> DateFormatter) -> DateFormatter {
+        if let f = formatters[key] { return f }
+        let f = make()
+        formatters[key] = f
+        return f
+    }
+
     private func time(_ d: Date, seconds: Bool = false) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = seconds ? "HH:mm:ss" : "HH:mm"
-        f.timeZone = zone
-        return f.string(from: d)
+        let fmt = seconds ? "HH:mm:ss" : "HH:mm"
+        let z = zone
+        return Self.formatter("t|\(fmt)|\(z.identifier)") {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = fmt
+            f.timeZone = z
+            return f
+        }.string(from: d)
     }
 
     private func dayString(_ d: Date, _ format: String) -> String {
-        let f = DateFormatter()
-        f.calendar = Calendar(identifier: .gregorian)
-        f.locale = Locale.current
-        f.setLocalizedDateFormatFromTemplate(format)
-        f.timeZone = zone
-        return f.string(from: d)
+        let z = zone
+        return Self.formatter("d|\(format)|\(z.identifier)|\(Locale.current.identifier)") {
+            let f = DateFormatter()
+            f.calendar = Calendar(identifier: .gregorian)
+            f.locale = Locale.current
+            f.setLocalizedDateFormatFromTemplate(format)
+            f.timeZone = z
+            return f
+        }.string(from: d)
     }
 
     /// "15:30", or "Wed 15:30" when it is not today.
@@ -941,11 +962,13 @@ struct CalendarView: View {
     }
 
     static func clock(_ d: Date, _ tz: String) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "HH:mm"
-        f.timeZone = TimeZone(identifier: tz)
-        return f.string(from: d)
+        formatter("c|\(tz)") {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "HH:mm"
+            f.timeZone = TimeZone(identifier: tz)
+            return f
+        }.string(from: d)
     }
 
     static func utc(_ d: Date) -> String {
@@ -973,9 +996,9 @@ struct CalendarView: View {
         let start = f.string(from: d), end = f.string(from: d.addingTimeInterval(1800))
         let title = "\(e.currency) \(e.event)".replacingOccurrences(of: ",", with: "\\,")
         let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//TRADEFLOR//Calendar//EN\r\nBEGIN:VEVENT\r\nUID:\(e.id)@tradeflor\r\nDTSTAMP:\(f.string(from: Date()))\r\nDTSTART:\(start)\r\nDTEND:\(end)\r\nSUMMARY:\(title)\r\nDESCRIPTION:Impact: \(e.impact)\r\nBEGIN:VALARM\r\nTRIGGER:-PT15M\r\nACTION:DISPLAY\r\nDESCRIPTION:\(title)\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
-        let safe = e.id.replacingOccurrences(of: "/", with: "-").prefix(60)
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tradeflor-\(safe).ics")
-        try? ics.data(using: .utf8)?.write(to: url)
+        let safe = e.id.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-").prefix(60)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("tradeflor-\(safe)-\(Int(d.timeIntervalSince1970)).ics")
+        if !FileManager.default.fileExists(atPath: url.path) { try? ics.data(using: .utf8)?.write(to: url) }
         return url
     }
 
@@ -1015,14 +1038,22 @@ struct CalendarView: View {
     }
 
     private func toggle(_ e: CalendarEvent) async {
+        // one request per event at a time, and a failure says so (it was silent)
+        guard !toggling.contains(e.id) else { return }
+        toggling.insert(e.id)
+        defer { toggling.remove(e.id) }
         if saved.contains(e.id) {
             if (try? await APIClient.shared.removeSavedEvent(token: token, key: e.id)) != nil {
                 saved.remove(e.id)
                 toast = NSLocalizedString("ux3.cal.alert.removed", comment: "")
+            } else {
+                toast = NSLocalizedString("settings.failed", comment: "")
             }
         } else if (try? await APIClient.shared.saveEvent(token: token, e)) != nil {
             saved.insert(e.id)
             toast = NSLocalizedString("cal.alert.toast", comment: "")
+        } else {
+            toast = NSLocalizedString("settings.failed", comment: "")
         }
     }
 }

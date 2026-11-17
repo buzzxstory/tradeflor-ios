@@ -7,7 +7,10 @@ struct AdminCenterPage: View {
     @EnvironmentObject private var store: SessionStore
     @State private var tab = ""
     @State private var me: AdminMe?
+    @State private var meLoaded = false
     @State private var openUser: AdminUser?
+    /// Bumped after a change made from a user opened here: the tab on screen reads its figures again.
+    @State private var refresh = 0
 
     private var tabs: [(String, String)] {
         guard let me else { return [] }
@@ -30,25 +33,38 @@ struct AdminCenterPage: View {
                         }
                     }
                 }
-                switch tab {
-                case "users": AdminUsersView(me: me)
-                case "official": AdminOfficialView(library: false, me: me)
-                case "library": AdminOfficialView(library: true, me: me)
-                case "reports": AdminReportsView()
-                case "audit": AdminAuditView(onOpenUser: open)
-                case "settings": AdminSettingsView(me: me, onOpenUser: open)
-                default: AdminOverviewView(onOpenUser: open)
+                Group {
+                    switch tab {
+                    case "users": AdminUsersView(me: me)
+                    case "official": AdminOfficialView(library: false, me: me)
+                    case "library": AdminOfficialView(library: true, me: me)
+                    case "reports": AdminReportsView()
+                    case "audit": AdminAuditView(onOpenUser: open)
+                    case "settings": AdminSettingsView(me: me, onOpenUser: open)
+                    default: AdminOverviewView(onOpenUser: open)
+                    }
                 }
+                .id("\(tab)|\(refresh)")
+            } else if meLoaded {
+                // the access check did not answer: say so instead of a spinner that never ends
+                Text("adm.failed").font(.system(size: 13)).foregroundStyle(Theme.faint)
             } else {
                 ProgressView().tint(Theme.accent).frame(maxWidth: .infinity)
             }
         }
+        .refreshable {
+            if me == nil { me = await APIClient.shared.stAdminMe(token: store.session?.token ?? "") }
+            if tab.isEmpty { tab = tabs.first?.0 ?? "settings" }
+            refresh += 1
+        }
         .task {
             me = await APIClient.shared.stAdminMe(token: store.session?.token ?? "")
+            meLoaded = true
             if tab.isEmpty { tab = tabs.first?.0 ?? "settings" }
         }
         .sheet(item: $openUser) { u in
-            if let me { AdminUserSheet(user: u, me: me) {} }
+            // a suspend / restore / role change made here shows at once in the tab underneath (it was a no-op)
+            if let me { AdminUserSheet(user: u, me: me) { refresh += 1 } }
         }
     }
 
@@ -136,13 +152,15 @@ private struct AdminUsersView: View {
     @State private var page = 1
     @State private var data: AdminUsersPage?
     @State private var open: AdminUser?
+    @State private var loading = false
+    @State private var seq = 0
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SearchPill(placeholder: "adm.search", text: $query)
+                .submitLabel(.search)
                 .onSubmit { page = 1; Task { await load() } }
-                .onChange(of: query) { _ in page = 1; Task { try? await Task.sleep(nanoseconds: 400_000_000); await load() } }
             if let d = data {
                 Text(String(format: NSLocalizedString("adm.count", comment: ""), d.total)).font(.system(size: 12)).foregroundStyle(Theme.faint)
                 SCard {
@@ -166,23 +184,37 @@ private struct AdminUsersView: View {
                     }
                 }
                 HStack {
-                    Button("adm.prev") { page -= 1; Task { await load() } }.disabled(page <= 1)
+                    Button("adm.prev") { page -= 1; Task { await load() } }.disabled(page <= 1 || loading)
                     Spacer()
                     Text("\(page)").foregroundStyle(Theme.faint)
                     Spacer()
-                    Button("adm.next") { page += 1; Task { await load() } }.disabled(page * d.limit >= d.total)
+                    Button("adm.next") { page += 1; Task { await load() } }.disabled(page * d.limit >= d.total || loading)
                 }
                 .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
             } else {
                 ProgressView().tint(Theme.accent).frame(maxWidth: .infinity)
             }
         }
-        .task { await load() }
+        // typing: one search 0.4 s after the last key (each key used to start its own search, and an older, slower answer
+        // could replace the newer one)
+        .task(id: query) {
+            if data != nil {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                if Task.isCancelled { return }
+                page = 1
+            }
+            await load()
+        }
         .sheet(item: $open) { u in AdminUserSheet(user: u, me: me) { Task { await load() } } }
     }
 
     private func load() async {
-        data = try? await APIClient.shared.stAdminUsers(token: token, query: query, page: page)
+        seq += 1
+        let my = seq
+        loading = true
+        defer { if my == seq { loading = false } }
+        guard let d = try? await APIClient.shared.stAdminUsers(token: token, query: query, page: page), my == seq else { return }
+        data = d
     }
 }
 
@@ -196,6 +228,7 @@ private struct AdminUserSheet: View {
     @State private var reason = ""
     @State private var hours = 0
     @State private var note: String?
+    @State private var busy = false
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
@@ -215,12 +248,16 @@ private struct AdminUserSheet: View {
                 if user.status == "suspended" {
                     Section {
                         Button("adm.restore") {
+                            guard !busy else { return }
+                            busy = true
                             Task {
+                                defer { busy = false }
                                 do { try await APIClient.shared.stAdminRestore(token: token, userID: user.id); onChange(); dismiss() } catch {
                                     note = NSLocalizedString("settings.failed", comment: "")
                                 }
                             }
                         }
+                        .disabled(busy)
                         .foregroundStyle(Theme.accent)
                     }
                     .listRowBackground(Theme.surface)
@@ -234,7 +271,10 @@ private struct AdminUserSheet: View {
                             Text("adm.d.forever").tag(0)
                         }
                         Button("adm.suspend", role: .destructive) {
+                            guard !busy else { return }
+                            busy = true
                             Task {
+                                defer { busy = false }
                                 do {
                                     try await APIClient.shared.stAdminSuspend(token: token, userID: user.id, reason: reason, hours: hours)
                                     onChange()
@@ -246,7 +286,7 @@ private struct AdminUserSheet: View {
                                 }
                             }
                         }
-                        .disabled(reason.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(reason.trimmingCharacters(in: .whitespaces).isEmpty || busy)
                     }
                     .listRowBackground(Theme.surface)
                 }
@@ -261,6 +301,7 @@ private struct AdminUserSheet: View {
                             Text("adm.role.owner").tag("owner")
                         }
                     }
+                    .disabled(busy)
                     .listRowBackground(Theme.surface)
                 }
                 if me.audit == true {
@@ -279,12 +320,19 @@ private struct AdminUserSheet: View {
             .background(Theme.ground.ignoresSafeArea())
             .navigationTitle(user.display_name.isEmpty ? user.username : user.display_name)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { if busy { ProgressView() } }
+            }
+            .interactiveDismissDisabled(busy)
         }
     }
 
     private func setRole(_ r: String) {
+        guard !busy else { return }
+        busy = true
         Task {
+            defer { busy = false }
             do {
                 try await APIClient.shared.admSetRole(token: token, userID: user.id, role: r)
                 note = nil
@@ -310,6 +358,8 @@ private struct AdminOfficialView: View {
     private var posts: [AdminOfficialPost] { all.filter { show == "all" || ($0.state ?? "draft") == show } }
     @State private var loading = true
     @State private var note: String?
+    @State private var acting = false
+    @State private var confirmDelete: AdminOfficialPost?
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
@@ -355,11 +405,13 @@ private struct AdminOfficialView: View {
                                 Button("adm.remove") { act(p, "remove") }
                             }
                             if me.users == true && (p.state == "draft" || p.state == "removed" || p.state == "expired") {
-                                Button("adm.delete", role: .destructive) { act(p, "delete") }
+                                Button("adm.delete", role: .destructive) { confirmDelete = p }
                             }
                         } label: {
-                            Image(systemName: "ellipsis").foregroundStyle(Theme.muted).frame(width: 32, height: 32)
+                            Image(systemName: "ellipsis").foregroundStyle(Theme.muted).frame(width: 44, height: 44).contentShape(Rectangle())
                         }
+                        .disabled(acting)
+                        .accessibilityLabel(Text("chat.more"))
                     }
                     .padding(.horizontal, 12).padding(.vertical, 10)
                     if i < posts.count - 1 { TFDivider() }
@@ -369,10 +421,19 @@ private struct AdminOfficialView: View {
         }
         .task { await load() }
         .sheet(isPresented: $composing) { AdminOfficialComposer { Task { await load() } }.environmentObject(store) }
+        // deleting cannot be undone: it asks first (it ran straight from the menu)
+        .confirmationDialog(Text("adm.delete.confirm"), isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
+                            titleVisibility: .visible) {
+            if let p = confirmDelete { Button("adm.delete", role: .destructive) { act(p, "delete") } }
+        }
     }
 
     private func act(_ p: AdminOfficialPost, _ action: String) {
+        guard !acting else { return }
+        acting = true
+        note = nil
         Task {
+            defer { acting = false }
             do { try await APIClient.shared.stAdminOfficialAction(token: token, id: p.id, action: action) } catch APIError.refused(let why) {
                 note = why
             } catch {

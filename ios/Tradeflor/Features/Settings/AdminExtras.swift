@@ -134,6 +134,7 @@ struct AdminAuditView: View {
     @EnvironmentObject private var store: SessionStore
     @State private var log: [AdminAuditEntry]?
     @State private var more = true
+    @State private var loadingMore = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -162,6 +163,7 @@ struct AdminAuditView: View {
                 if more && !log.isEmpty {
                     Button("chat.older") { Task { await load(before: log.last?.id ?? 0) } }
                         .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent).frame(maxWidth: .infinity)
+                        .disabled(loadingMore)
                 }
             } else {
                 ProgressView().tint(Theme.accent).frame(maxWidth: .infinity)
@@ -171,8 +173,19 @@ struct AdminAuditView: View {
     }
 
     private func load(before: Int64) async {
+        // one page at a time: a double tap on "older" appended the same page twice (the same ids twice in the list)
+        if before != 0 {
+            guard !loadingMore else { return }
+            loadingMore = true
+        }
+        defer { if before != 0 { loadingMore = false } }
         let page = await APIClient.shared.admAudit(token: store.session?.token ?? "", user: user, before: before)
-        log = before == 0 ? page : (log ?? []) + page
+        if before == 0 {
+            log = page
+        } else {
+            let have = Set((log ?? []).map(\.id))
+            log = (log ?? []) + page.filter { !have.contains($0.id) }
+        }
         more = page.count == 50
     }
 }
@@ -293,6 +306,7 @@ struct AdminOfficialComposer: View {
                         .disabled(file == nil || busy)
                 }
             }
+            .interactiveDismissDisabled(busy) // a swipe down no longer drops an upload half way
             .onChange(of: item) { it in
                 guard let it else { return }
                 Task {
@@ -308,7 +322,7 @@ struct AdminOfficialComposer: View {
     }
 
     private func submit() async {
-        guard let f = file else { return }
+        guard let f = file, !busy else { return }
         busy = true
         error = nil
         defer { busy = false }

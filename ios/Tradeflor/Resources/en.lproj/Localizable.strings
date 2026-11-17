@@ -1856,3 +1856,6 @@
 "chats.delete.confirm" = "Delete this chat from your list? It comes back when a new message arrives.";
 "grp.m.remove.confirm" = "Remove %@ from the group?";
 "grp.m.ban.confirm" = "Ban %@ from the group? They can't join again unless unbanned.";
+
+"adm.delete.confirm" = "Delete this official status? This cannot be undone.";
+"set.events.remove" = "Remove from Events";
