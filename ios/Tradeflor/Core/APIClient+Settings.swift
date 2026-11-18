@@ -30,9 +30,18 @@ extension APIClient {
         try decode(IdentityCard.self, try await postJSON("identity/username", token: token, body: ["Username": u]))
     }
 
-    func stUpdateProfile(token: String, displayName: String, username: String, bio: String) async throws -> Profile {
-        APIClient.known(try decode(Profile.self, try await postJSON("profile", token: token,
-                                                                    body: ["DisplayName": displayName, "Username": username, "Bio": bio])))
+    /// `username` only when the person changed it (server 501fe26: a different name goes through the identity rules --
+    /// 3-24 chars, the wait between changes, names just left are held). Name and bio are saved first, so a refused
+    /// rename can still leave them saved. 400/409/429 come back as `.refused` with the server's own sentence.
+    func stUpdateProfile(token: String, displayName: String, username: String?, bio: String) async throws -> Profile {
+        var body: [String: Any] = ["DisplayName": displayName, "Bio": bio]
+        if let username { body["Username"] = username }
+        let (data, http) = try await send(request("profile", method: "POST", token: token, body: body))
+        if [400, 409, 429].contains(http.statusCode) {
+            throw APIError.refused(String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+        }
+        try check(http, data)
+        return APIClient.known(try decode(Profile.self, data))
     }
 
     // MARK: settings switches

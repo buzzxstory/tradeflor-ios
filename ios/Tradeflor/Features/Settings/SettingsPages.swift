@@ -76,12 +76,17 @@ struct MyProfilePage: View {
             if let profile {
                 EditProfileSheet(profile: profile) { n, u, b in
                     do {
-                        let p = try await APIClient.shared.stUpdateProfile(token: token, displayName: n, username: u, bio: b)
+                        // the @username goes to the server only when it was changed (the server applies its rename rules to it)
+                        let clean = u.trimmingCharacters(in: CharacterSet(charactersIn: "@＠ ")).lowercased()
+                        let changed = clean != profile.username.lowercased() && !clean.isEmpty
+                        let p = try await APIClient.shared.stUpdateProfile(token: token, displayName: n, username: changed ? clean : nil, bio: b)
                         self.profile = p
                         store.renamed(p.username) // a new @username shows everywhere the session's name is used
                         onChange()
                         return nil
                     } catch APIError.refused(let why) {
+                        // the name and bio may already be saved even when the rename was refused: show what the server has
+                        Task { await load() }
                         // 409: the username is someone else's (the server's line is English)
                         if why.localizedCaseInsensitiveContains("taken") { return NSLocalizedString("signup.username.taken", comment: "") }
                         return why.isEmpty ? NSLocalizedString("settings.failed", comment: "") : why
