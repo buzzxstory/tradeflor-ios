@@ -1,3 +1,4 @@
+import AVFoundation
 import Combine
 import SwiftUI
 import UIKit
@@ -17,6 +18,14 @@ final class CallDeviceGuard {
             .receive(on: DispatchQueue.main) // not RunLoop.main: held back while a list scrolls
             .sink { [weak self] phase, speaker in self?.apply(phase: phase, speaker: speaker) }
             .store(in: &subs)
+        // AirPods / headphones / a car connect or leave: the screen must not blank against the cheek for them
+        NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak calls] _ in
+                guard let self, let calls else { return }
+                self.apply(phase: calls.phase, speaker: calls.speaker)
+            }
+            .store(in: &subs)
     }
 
     private func apply(phase: CallManager.Phase, speaker: Bool) {
@@ -27,7 +36,10 @@ final class CallDeviceGuard {
             holdingIdle = keepAwake
             UIApplication.shared.isIdleTimerDisabled = keepAwake
         }
-        let wantProximity = live && !speaker
+        let external = AVAudioSession.sharedInstance().currentRoute.outputs.contains {
+            [.bluetoothHFP, .bluetoothA2DP, .bluetoothLE, .headphones, .headsetMic, .usbAudio, .carAudio].contains($0.portType)
+        }
+        let wantProximity = live && !speaker && !external
         if wantProximity != proximity {
             proximity = wantProximity
             UIDevice.current.isProximityMonitoringEnabled = wantProximity

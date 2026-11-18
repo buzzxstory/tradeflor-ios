@@ -41,8 +41,21 @@ final class CallTones {
     private lazy var endData = Self.wav([([480], 160, 0.35), ([], 40, 0), ([360], 220, 0.35)])
     private lazy var busyData = Self.wav([([480, 620], 250, 0.35), ([], 250, 0), ([480, 620], 250, 0.35), ([], 250, 0), ([480, 620], 250, 0.35)])
 
+    /// True between CallKit's didActivate and the end of the call: the ringback is played in the call's own audio session
+    /// (earpiece, the call volume), never before it (the session was then whatever the last screen left: a status video's
+    /// loudspeaker playback, or nothing).
+    var sessionActive = false {
+        didSet { if sessionActive, wantRingback { startLoop() } }
+    }
+    private var wantRingback = false
+
     func ringback(_ on: Bool) {
+        wantRingback = on
         if !on { loop?.stop(); loop = nil; return }
+        if sessionActive { startLoop() } // else it starts when the session is switched on
+    }
+
+    private func startLoop() {
         guard loop == nil, let p = try? AVAudioPlayer(data: ringbackData) else { return }
         p.numberOfLoops = -1
         p.play()
@@ -50,7 +63,7 @@ final class CallTones {
     }
 
     func connected() { play(connectedData) }
-    func end() { play(endData) }
+    func end() { wantRingback = false; play(endData) }
     func busy() { play(busyData) }
 
     private func play(_ data: Data) {

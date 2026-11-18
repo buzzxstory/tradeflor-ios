@@ -130,9 +130,64 @@ final class CallManager: NSObject, ObservableObject {
         })
     }
 
+    /// What the user chose with the Speaker button. iOS (or WebRTC starting its audio unit) can drop the loudspeaker
+    /// override without telling the app: the choice is kept and applied again, instead of the button flipping back to off
+    /// (which looked like "the speaker does nothing").
+    private var wantSpeaker = false
+
+    /// One line per audio milestone (route, category, mode, WebRTC's switch): a "no sound" report can then be traced.
+    private func logAudio(_ what: String) {
+        let a = AVAudioSession.sharedInstance()
+        let outs = a.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ",")
+        let ins = a.currentRoute.inputs.map { $0.portType.rawValue }.joined(separator: ",")
+        NSLog("[call-audio] %@ category=%@ mode=%@ out=%@ in=%@ rtcEnabled=%d wantSpeaker=%d own=%d", what,
+              a.category.rawValue, a.mode.rawValue, outs, ins, RTCAudioSession.sharedInstance().isAudioEnabled ? 1 : 0,
+              wantSpeaker ? 1 : 0, ownAudio ? 1 : 0)
+    }
+
+    private func applySpeaker() {
+        let s = RTCAudioSession.sharedInstance()
+        s.lockForConfiguration()
+        try? s.overrideOutputAudioPort(wantSpeaker ? .speaker : .none)
+        s.unlockForConfiguration()
+    }
+
+    /// The audio unit of WebRTC starts a moment after CallKit switches the session on and may reset the route then:
+    /// apply the choice again shortly after.
+    private func reapplySpeakerSoon() {
+        applySpeaker()
+        Task { @MainActor [weak self] in
+            for ms in [350, 900, 2000] as [UInt64] {
+                try? await Task.sleep(nanoseconds: ms * 1_000_000)
+                guard let self, self.lineInUse else { return }
+                let out = AVAudioSession.sharedInstance().currentRoute.outputs
+                if out.contains(where: { Self.isExternal($0.portType) }) { return }
+                if out.contains(where: { $0.portType == .builtInSpeaker }) != self.wantSpeaker { self.applySpeaker() }
+            }
+        }
+    }
+
+    /// Headphones, AirPods, a car, AirPlay...: the phone's own speaker choice does not apply while one of them plays.
+    nonisolated private static func isExternal(_ t: AVAudioSession.Port) -> Bool {
+        switch t {
+        case .bluetoothHFP, .bluetoothA2DP, .bluetoothLE, .headphones, .headsetMic, .usbAudio, .carAudio, .airPlay, .HDMI, .lineOut:
+            return true
+        default: return false
+        }
+    }
+
     private func routeChanged() {
         guard lineInUse, AVAudioSession.sharedInstance().category == .playAndRecord else { return }
-        let onSpeaker = AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
+        let out = AVAudioSession.sharedInstance().currentRoute.outputs
+        if out.contains(where: { Self.isExternal($0.portType) }) {
+            // AirPods or headphones took the call: the Speaker button goes off, as in WhatsApp
+            wantSpeaker = false
+            if speaker { speaker = false }
+            return
+        }
+        let onSpeaker = out.contains { $0.portType == .builtInSpeaker }
+        if wantSpeaker && !onSpeaker { applySpeaker(); return } // iOS dropped the override: put it back
+        if wantSpeaker != onSpeaker { wantSpeaker = onSpeaker }
         if speaker != onSpeaker { speaker = onSpeaker }
     }
 
@@ -144,6 +199,7 @@ final class CallManager: NSObject, ObservableObject {
         try? s.setActive(true)
         s.unlockForConfiguration()
         s.isAudioEnabled = true
+        reapplySpeakerSoon()
     }
 
     /// Clears what the previous call left (its "Call ended" linger may still be on) before a new call starts.
@@ -153,6 +209,7 @@ final class CallManager: NSObject, ObservableObject {
         connectedAt = nil
         muted = false
         speaker = false
+        wantSpeaker = false
         peerMuted = false
         ringing = false
         reconnecting = false
@@ -178,9 +235,17 @@ final class CallManager: NSObject, ObservableObject {
         // DispatchQueue.main, not RunLoop.main: RunLoop.main only delivers in the default run-loop mode, so while a finger
         // scrolls a list an incoming call (and every ICE candidate of a running call) waited until the scroll stopped
         live.calls.receive(on: DispatchQueue.main).sink { [weak self] ev in self?.handle(ev.type, ev.data) }.store(in: &subs)
-        live.opened.receive(on: DispatchQueue.main).sink { [weak self] in self?.send("call.sync", [:]) }.store(in: &subs)
-        Task { enabled = (try? await APIClient.shared.callsEnabled(token: token)) ?? false }
+        live.opened.receive(on: DispatchQueue.main).sink { [weak self] in
+            self?.send("call.sync", [:])
+            self?.refreshEnabled() // the first request may have failed (offline launch): ask again when the socket opens
+        }.store(in: &subs)
+        refreshEnabled()
         applyRingSetting()
+    }
+
+    private func refreshEnabled() {
+        guard !token.isEmpty, !enabled else { return }
+        Task { if let on = try? await APIClient.shared.callsEnabled(token: token) { enabled = on } }
     }
 
     /// Settings › Calls › Ring for incoming calls.
@@ -307,7 +372,10 @@ final class CallManager: NSObject, ObservableObject {
         phase = .connecting
         showScreen = true
         Task {
-            guard await micAllowed() else {
+            let allowed = await micAllowed()
+            // the call may have ended (or another started) while the permission prompt was up
+            guard phase == .connecting, callID == id else { return }
+            guard allowed else {
                 send("call.decline", ["call_id": id])
                 endReason = "mic_denied"
                 finish()
@@ -352,6 +420,10 @@ final class CallManager: NSObject, ObservableObject {
 
     /// CallKit normally activates the call's audio session (provider didActivate). When it refused the call, the app does
     /// it itself, or WebRTC never starts the microphone and speaker (and iOS suspends the app in the background).
+    /// Calls this phone ended (declined, cancelled, hung up) whose message may not have reached the server (socket down):
+    /// a later sync that still lists one is closed again, and never rings.
+    private var endedHere: Set<String> = []
+
     private var ownAudio = false { didSet { callAudioOwned.value = ownAudio } }
     private func audioWithoutCallKit() {
         guard !ownAudio else { return }
@@ -362,6 +434,7 @@ final class CallManager: NSObject, ObservableObject {
         try? s.setActive(true)
         s.unlockForConfiguration()
         s.isAudioEnabled = true
+        CallTones.shared.sessionActive = true
     }
 
     fileprivate func applyHeld(_ value: Bool) {
@@ -394,17 +467,16 @@ final class CallManager: NSObject, ObservableObject {
         let cfg = RTCAudioSessionConfiguration.webRTC()
         cfg.category = AVAudioSession.Category.playAndRecord.rawValue
         cfg.mode = AVAudioSession.Mode.voiceChat.rawValue
-        cfg.categoryOptions = [.allowBluetooth, .allowBluetoothA2DP]
+        cfg.categoryOptions = [.allowBluetooth] // A2DP is output-only: not valid with a microphone in a call
         try? s.setConfiguration(cfg)
         s.unlockForConfiguration()
     }
 
     func toggleSpeaker() {
-        speaker.toggle()
-        let s = RTCAudioSession.sharedInstance()
-        s.lockForConfiguration()
-        try? s.overrideOutputAudioPort(speaker ? .speaker : .none)
-        s.unlockForConfiguration()
+        // with AirPods / headphones connected the button chooses the phone's loudspeaker over them (and back)
+        wantSpeaker.toggle()
+        speaker = wantSpeaker
+        reapplySpeakerSoon()
     }
 
     private func micAllowed() async -> Bool {
@@ -437,6 +509,7 @@ final class CallManager: NSObject, ObservableObject {
             acknowledged = true
             phase = .connecting
             CallTones.shared.ringback(false)
+            arm(seconds: 45) { [weak self] in self?.localReason = "ice_timeout"; self?.hangUp() }
             provider.reportOutgoingCall(with: uuid, startedConnectingAt: nil)
         case "call.accepted":
             // hung up meanwhile: the server ends it (call.ended), nothing more to set up
@@ -469,6 +542,11 @@ final class CallManager: NSObject, ObservableObject {
                 // our invite never reached the server (sent while the socket was down): send it now. The same call id, so
                 // a server that did get it answers with its state (call.outgoing / call.ended) instead of a second call.
                 if phase == .outgoing && !acknowledged { sendInvite() }
+            } else if let c = call, let id = c["call_id"] as? String, endedHere.contains(id), id != callID {
+                // we ended this call while offline: the server still has it
+                if (c["role"] as? String) == "callee" && (c["state"] as? String) == "ringing" { send("call.decline", ["call_id": id]) }
+                else if (c["role"] as? String) == "caller" && (c["state"] as? String) == "ringing" { send("call.cancel", ["call_id": id]) }
+                else { send("call.hangup", ["call_id": id]) }
             } else if let c = call, !lineInUse, (c["state"] as? String) == "ringing", (c["role"] as? String) == "callee",
                       let id = c["call_id"] as? String {
                 ringIncoming(c, id: id)
@@ -808,6 +886,7 @@ final class CallManager: NSObject, ObservableObject {
         safetyTimer?.cancel()
         if connectedAt == nil { connectedAt = Date() }
         CallTones.shared.connected()
+        logAudio("connected")
         // the CallKit call this phone started (also when a glare merge made us the callee): connected, the system clock runs
         if startedHere { provider.reportOutgoingCall(with: uuid, connectedAt: connectedAt) }
     }
@@ -831,6 +910,7 @@ final class CallManager: NSObject, ObservableObject {
         }
         if let id = callID { LocalNotifier.shared.clearIncomingCall(callID: id) }
         CallTones.shared.ringback(false)
+        CallTones.shared.sessionActive = false
         if hadCall { if endReason == "busy" { CallTones.shared.busy() } else { CallTones.shared.end() } }
         safetyTimer?.cancel()
         restartTimer?.cancel(); restartTimer = nil
@@ -849,8 +929,9 @@ final class CallManager: NSObject, ObservableObject {
         held = false
         answering = false
         let s = RTCAudioSession.sharedInstance()
-        if speaker {
+        if speaker || wantSpeaker {
             // the loudspeaker override outlives the call otherwise (the next call or voice note on the speaker)
+            wantSpeaker = false
             s.lockForConfiguration()
             try? s.overrideOutputAudioPort(.none)
             s.unlockForConfiguration()
@@ -884,6 +965,7 @@ final class CallManager: NSObject, ObservableObject {
                 provider.reportCall(with: ended, endedAt: Date(), reason: reason)
             }
         }
+        if let id = callID { endedHere.insert(id); if endedHere.count > 20 { endedHere.removeFirst() } }
         callID = nil
         lastDuration = connectedAt.map { Date().timeIntervalSince($0) }
         phase = .ended
@@ -896,6 +978,7 @@ final class CallManager: NSObject, ObservableObject {
                 connectedAt = nil
                 muted = false
                 speaker = false
+                wantSpeaker = false
                 peerMuted = false
                 ringing = false
                 reconnecting = false
@@ -985,16 +1068,18 @@ extension CallManager: CXProviderDelegate {
         s.audioSessionDidActivate(audioSession)
         s.isAudioEnabled = true
         Task { @MainActor in
-            // Speaker tapped before CallKit switched the audio on: the override failed then; it applies now
-            guard self.speaker, self.lineInUse else { return }
-            s.lockForConfiguration()
-            try? s.overrideOutputAudioPort(.speaker)
-            s.unlockForConfiguration()
+            CallTones.shared.sessionActive = true
+            self.logAudio("didActivate")
+            // Speaker tapped before CallKit switched the audio on: the override failed then; it applies now (and again a
+            // moment later, when WebRTC's audio unit has started)
+            guard self.lineInUse else { return }
+            self.reapplySpeakerSoon()
         }
     }
     nonisolated func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
         let s = RTCAudioSession.sharedInstance()
         s.audioSessionDidDeactivate(audioSession)
+        Task { @MainActor in CallTones.shared.sessionActive = false }
         // after a CallKit reset the app runs the audio itself (audioWithoutCallKit): CallKit's late deactivation of the
         // call it forgot must not silence the call that goes on
         if !callAudioOwned.value { s.isAudioEnabled = false }
