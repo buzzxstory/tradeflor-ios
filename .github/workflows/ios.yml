@@ -116,8 +116,7 @@ jobs:
           security set-keychain-settings -lut 21600 "$KC"
           security unlock-keychain -p "$KCPASS" "$KC"
           if ! security import "$P12" -k "$KC" -P "$IOS_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security 2>import.err; then
-            echo "::warning::direct .p12 import failed ($(tr -d '
-' < import.err | cut -c1-120)); retrying through OpenSSL 3 (.p12 files made by OpenSSL 3 use an encryption macOS cannot read)"
+            echo "::warning::direct .p12 import failed ($(cut -c1-120 import.err | head -1)); retrying through OpenSSL 3 (.p12 files made by OpenSSL 3 use an encryption macOS cannot read)"
             brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3 >/dev/null
             OSSL="$(brew --prefix openssl@3)/bin/openssl"
             export TF_P12_PW="$IOS_P12_PASSWORD"
