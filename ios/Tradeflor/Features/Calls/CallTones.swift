@@ -36,9 +36,9 @@ final class CallTones {
         return d
     }
 
-    private lazy var ringbackData = Self.wav([([425], 1000, 0.35), ([], 3000, 0)])
-    private lazy var connectedData = Self.wav([([660], 90, 0.3), ([], 10, 0), ([990], 120, 0.3)])
-    private lazy var endData = Self.wav([([480], 160, 0.35), ([], 40, 0), ([360], 220, 0.35)])
+    private lazy var ringbackData = Self.wav([([425], 1000, 0.7), ([], 3000, 0)])
+    private lazy var connectedData = Self.wav([([660], 90, 0.6), ([], 10, 0), ([990], 120, 0.6)])
+    private lazy var endData = Self.wav([([480], 160, 0.6), ([], 40, 0), ([360], 220, 0.6)])
     private lazy var busyData = Self.wav([([480, 620], 250, 0.35), ([], 250, 0), ([480, 620], 250, 0.35), ([], 250, 0), ([480, 620], 250, 0.35)])
 
     /// True between CallKit's didActivate and the end of the call: the ringback is played in the call's own audio session

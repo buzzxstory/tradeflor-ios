@@ -28,7 +28,7 @@ final class CallManager: NSObject, ObservableObject {
     }
     @Published private(set) var peerName = ""
     @Published private(set) var muted = false
-    @Published private(set) var speaker = false
+    @Published private(set) var speaker = false { didSet { applyRemoteVolume() } }
     @Published private(set) var peerMuted = false
     @Published private(set) var connectedAt: Date?
     @Published private(set) var endReason: String?
@@ -79,6 +79,12 @@ final class CallManager: NSObject, ObservableObject {
     }()
     private var pc: RTCPeerConnection?
     private var audioTrack: RTCAudioTrack?
+    /// The other person's voice. On the loudspeaker the call (voice-chat mode) is quiet: its gain is raised (WebRTC's own
+    /// 0...10 volume of a remote track), back to normal on the earpiece and on headsets.
+    private var remoteTrack: RTCAudioTrack?
+    private func applyRemoteVolume() {
+        remoteTrack?.source.volume = speaker ? 4 : 1
+    }
     private var micAttached = false
     private var makingOffer = false
     private var pendingSignals: [[String: Any]] = []
@@ -921,6 +927,7 @@ final class CallManager: NSObject, ObservableObject {
         pc?.close()
         pc = nil
         audioTrack = nil
+        remoteTrack = nil
         micAttached = false
         makingOffer = false
         pendingSignals = []
@@ -995,6 +1002,13 @@ final class CallManager: NSObject, ObservableObject {
 extension CallManager: RTCPeerConnectionDelegate {
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
+    nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
+        guard let t = rtpReceiver.track as? RTCAudioTrack else { return }
+        Task { @MainActor in
+            self.remoteTrack = t
+            self.applyRemoteVolume()
+        }
+    }
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     nonisolated func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
         Task { @MainActor in
