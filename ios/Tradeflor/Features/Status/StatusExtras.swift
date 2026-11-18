@@ -191,7 +191,7 @@ func statusFittedRect(kind: String?, image: UIImage?, player: AVPlayer?, in size
 /// this the default session keeps a video silent on silent, or leaves a leftover call/recording route (earpiece: very
 /// quiet). Never during a call: a .playback category would cut the call's microphone.
 enum StatusAudio {
-    static func prepare() {
+    @MainActor static func prepare() {
         guard !CallManager.shared.lineInUse else { return }
         let s = AVAudioSession.sharedInstance()
         // only when something else changed it (a recording, the camera, a call): setting it again on every story could glitch
@@ -202,7 +202,7 @@ enum StatusAudio {
     }
 
     /// The viewer is gone: other apps' audio (music, a podcast) may carry on. Never during a call.
-    static func release() {
+    @MainActor static func release() {
         guard !CallManager.shared.lineInUse else { return }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
