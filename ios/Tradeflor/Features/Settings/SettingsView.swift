@@ -705,7 +705,7 @@ struct EditProfileSheet: View {
                 .listRowBackground(Theme.surface)
                 Section(header: Text("signup.username")) {
                     TextField("signup.username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .onChange(of: username) { v in let c = Self.clip(v, 32); if c != v { username = c } }
+                        .onChange(of: username) { v in let c = Self.clip(v, 24); if c != v { username = c } }
                 }
                 .listRowBackground(Theme.surface)
                 Section(header: Text("settings.bio"), footer: Text(verbatim: "\(bio.unicodeScalars.count)/200")) {

@@ -780,6 +780,7 @@ final class AccountSwitches: ObservableObject {
         do {
             let s = try await APIClient.shared.stSettings(token: token)
             values = Self.defaults.merging(s) { _, new in new }
+            problem = nil
         } catch {
             // not read: the switches show the defaults, and the page says so (they used to pass for the account's own)
             if values.isEmpty { values = Self.defaults }
