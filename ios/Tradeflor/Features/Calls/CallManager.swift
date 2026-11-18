@@ -407,8 +407,9 @@ final class CallManager: NSObject, ObservableObject {
         case .connecting, .active: send("call.hangup", ["call_id": id])
         default: break
         }
-        // the server answers with call.ended; if the socket is down, end here
-        if !(live?.connected ?? false) { finish() } else { arm(seconds: 5) { [weak self] in self?.finish() } }
+        // end here at once (the card closes and the microphone is released without waiting for the server's call.ended, which
+        // is ignored when it arrives: the call id is gone). A frame that was lost is closed again by the next sync (endedHere).
+        finish()
     }
 
     func toggleMute() {
