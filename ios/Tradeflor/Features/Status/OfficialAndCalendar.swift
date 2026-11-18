@@ -132,9 +132,11 @@ struct OfficialViewer: View {
             }
         }
         .onChange(of: muted) { m in player?.isMuted = m }
+        .modifier(StatusAudioKeeper { restoreAudio() })
         .onDisappear {
             player?.pause()
             player = nil
+            StatusAudio.release() // other apps' music may carry on
             // the Official ring and every status list are read again once the "seen" calls have arrived
             Task { @MainActor in
                 await StatusSeenQueue.shared.drain()
@@ -221,6 +223,9 @@ struct OfficialViewer: View {
             if post?.kind == "video" {
                 StatusHeadButton(systemName: muted ? "speaker.slash" : "speaker.wave.2", label: LocalizedStringKey(muted ? "stx.unmute" : "stx.mute")) {
                     muted.toggle()
+                    if !muted { StatusAudio.prepare() }
+                    player?.isMuted = muted
+                    StatusAudio.full(player)
                 }
             }
             StatusHeadButton(systemName: userPaused ? "play.fill" : "pause", label: LocalizedStringKey(userPaused ? "stx.play" : "stx.pause"), size: 16) {
@@ -346,6 +351,15 @@ struct OfficialViewer: View {
 
     private func resume() { setPaused(mustHold) }
 
+    /// After an interruption, a route change or coming back to the front: sound as the speaker button says, play on unless held.
+    private func restoreAudio() {
+        guard !closing, post?.kind == "video" else { return }
+        if !muted { StatusAudio.prepare() }
+        player?.isMuted = muted
+        StatusAudio.full(player)
+        if !paused { player?.play() }
+    }
+
     private func setPaused(_ v: Bool) {
         paused = v
         if v { player?.pause() } else { player?.play() }
@@ -389,6 +403,7 @@ struct OfficialViewer: View {
         StatusSeenQueue.shared.add { await APIClient.shared.officialSeen(token: tok, id: pid) }
         let id = "official-" + post.id
         if post.kind == "video" {
+            StatusAudio.prepare() // this viewer never set the phone's audio up: silent on silent, or a leftover quiet route
             let pl = StatusVideo.player(token: token, id: id, muted: muted)
             player = pl
             if !paused { pl.play() }

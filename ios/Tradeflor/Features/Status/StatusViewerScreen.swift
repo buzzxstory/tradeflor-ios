@@ -139,6 +139,13 @@ struct StatusViewerScreen: View {
         .onChange(of: deleteFailed) { _ in resume() }
         // web: silent during a call (the story's sound went into the call)
         .onAppear { if CallManager.shared.lineInUse { muted = true } }
+        // the story's task may have made its players before that line ran: they always follow `muted`
+        .onChange(of: muted) { m in
+            player?.isMuted = m
+            musicPlayer?.isMuted = m
+        }
+        // sound comes back after a call, Siri, another app's audio, the phone returning to the front, AirPods in or out
+        .modifier(StatusAudioKeeper { restoreAudio() })
         // the status on screen was deleted meanwhile: its players stop, the note shows, and the viewer moves on
         .onReceive(NotificationCenter.default.publisher(for: .tfStatusGone)) { n in
             guard let id = n.object as? String, id == post?.id else { return }
@@ -161,6 +168,7 @@ struct StatusViewerScreen: View {
             player = nil
             musicPlayer?.pause()
             musicPlayer = nil
+            StatusAudio.release() // other apps' music may carry on
             // the lists are read again once the "seen" calls have arrived, so no ring stays turquoise after watching
             let done = onClose
             Task { @MainActor in
@@ -294,6 +302,17 @@ struct StatusViewerScreen: View {
 
     private func resume() { setPaused(mustHold) }
 
+    /// After an interruption, a route change or coming back to the front: the audio is set up again, the players follow the
+    /// speaker button (`muted`) and play on unless the story is held.
+    private func restoreAudio() {
+        guard !closing, post != nil, !postGone else { return }
+        if !muted { StatusAudio.prepare() }
+        player?.isMuted = muted
+        StatusAudio.full(player)
+        musicPlayer?.isMuted = muted
+        if !paused { player?.play(); musicPlayer?.play() }
+    }
+
     @ViewBuilder private var content: some View {
         if postGone {
             Text("stx.gone").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
@@ -359,7 +378,11 @@ struct StatusViewerScreen: View {
             if post?.kind == "video" || post?.kind == "voice" || post?.music != nil {
                 StatusHeadButton(systemName: muted ? "speaker.slash" : "speaker.wave.2", label: LocalizedStringKey(muted ? "stx.unmute" : "stx.mute")) {
                     muted.toggle()
+                    // turning the sound on also makes sure the phone's audio is set up for it (it was not when the story
+                    // opened during a call, or with a leftover call route), then the players follow
+                    if !muted { StatusAudio.prepare() }
                     player?.isMuted = muted
+                    StatusAudio.full(player)
                     musicPlayer?.isMuted = muted
                 }
             }
@@ -543,10 +566,7 @@ struct StatusViewerScreen: View {
             if let d { image = UIImage(data: d) }
         case "video", "voice":
             // heard with the ring / silent switch on silent (the default session kept a voice status mute); never during a call
-            if !CallManager.shared.lineInUse {
-                try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                try? AVAudioSession.sharedInstance().setActive(true)
-            }
+            StatusAudio.prepare()
             // starts at once (no waiting for the length or a big buffer); the bar follows the video's own clock below
             let pl = StatusVideo.player(token: token, id: post.id, muted: muted)
             player = pl
@@ -567,8 +587,7 @@ struct StatusViewerScreen: View {
         }
         // the status's music (the app's own library): plays while it is on screen; photos and text stay 15 s to hear it
         if let m = post.music, !m.isEmpty, let url = APIClient.shared.stMusicURL(m) {
-            if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers]) } // never cut a running call's microphone
-            if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setActive(true) } // never cut a running call's microphone
+            StatusAudio.prepare() // never during a call (it would cut the microphone)
             let mp = AVPlayer(url: url)
             mp.isMuted = muted
             musicPlayer = mp

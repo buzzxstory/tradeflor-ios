@@ -470,7 +470,7 @@ struct MusicPickerSheet: View {
     private func toggle(_ id: String) {
         if playing == id { player?.pause(); playing = nil; return }
         guard let url = APIClient.shared.stMusicURL(id) else { return }
-        if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setCategory(.playback) } // never cut a running call's microphone
+        StatusAudio.prepare() // media playback at full level (also after a recording or the camera); never during a call
         let p = AVPlayer(url: url)
         player?.pause()
         player = p
@@ -644,7 +644,7 @@ struct VoiceStatusRecorder: View {
     private func listen() {
         guard let d = done else { return }
         if playing { player?.pause(); playing = false; return }
-        if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setCategory(.playback) } // never cut a running call's microphone
+        StatusAudio.prepare() // media playback at full level (the recorder left a quiet record session); never during a call
         if let p = player, p.currentTime > 0, p.currentTime < p.duration {
             p.play() // carries on where it was paused
         } else {

@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import Combine
 
 /// The like (the heart) is a private reaction: the owner sees it in "Viewed by", nothing goes to the chat.
 let statusLike = "❤️"
@@ -185,6 +186,56 @@ func statusFittedRect(kind: String?, image: UIImage?, player: AVPlayer?, in size
 
 /// A status (or Official) video, set up to start fast: it plays as soon as a little has arrived instead of waiting for a
 /// big buffer (AVPlayer then stops on a stall instead of waiting, so the viewer's clock resumes it; see `resumeIfStalled`).
+/// The phone's audio for a status with sound. A story's sound is media: it plays through the loudspeaker at the media
+/// volume, also with the ring/silent switch on silent (WhatsApp does the same), and it stops other apps' audio. Without
+/// this the default session keeps a video silent on silent, or leaves a leftover call/recording route (earpiece: very
+/// quiet). Never during a call: a .playback category would cut the call's microphone.
+enum StatusAudio {
+    static func prepare() {
+        guard !CallManager.shared.lineInUse else { return }
+        let s = AVAudioSession.sharedInstance()
+        // only when something else changed it (a recording, the camera, a call): setting it again on every story could glitch
+        if s.category != .playback || s.mode != .moviePlayback {
+            try? s.setCategory(.playback, mode: .moviePlayback, options: [])
+        }
+        try? s.setActive(true)
+    }
+
+    /// The viewer is gone: other apps' audio (music, a podcast) may carry on. Never during a call.
+    static func release() {
+        guard !CallManager.shared.lineInUse else { return }
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    /// Full level for a player (the media volume of the phone still decides how loud it is).
+    static func full(_ p: AVPlayer?) { p?.volume = 1 }
+}
+
+/// For the status viewers only (gone with the viewer): after a phone call, Siri or another app's audio ends, when the
+/// phone comes back to the front, or when headphones / AirPods connect or leave, `restore` sets the audio up again and
+/// puts the players back to what the speaker button says.
+struct StatusAudioKeeper: ViewModifier {
+    let restore: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification).receive(on: DispatchQueue.main)) { n in
+                let raw = (n.userInfo?[AVAudioSessionInterruptionTypeKey] as? NSNumber)?.uintValue ?? 0
+                if AVAudioSession.InterruptionType(rawValue: raw) == .ended { restore() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification).receive(on: DispatchQueue.main)) { n in
+                let raw = (n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? NSNumber)?.uintValue ?? 0
+                switch AVAudioSession.RouteChangeReason(rawValue: raw) {
+                case .newDeviceAvailable, .oldDeviceUnavailable: restore()
+                default: break
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification).receive(on: DispatchQueue.main)) { _ in
+                restore()
+            }
+    }
+}
+
 enum StatusVideo {
     static func player(token: String, id: String, muted: Bool) -> AVPlayer {
         let asset = AVURLAsset(url: APIClient.shared.statusMediaURL(id: id),
@@ -195,6 +246,7 @@ enum StatusVideo {
         p.automaticallyWaitsToMinimizeStalling = false
         p.actionAtItemEnd = .pause
         p.isMuted = muted
+        p.volume = 1
         return p
     }
 
