@@ -647,7 +647,8 @@ struct ChatView: View {
                 })
         } else {
             Text("group.readonly").font(.footnote).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity).padding(.vertical, 14).background(.bar)
+                .frame(maxWidth: .infinity).padding(.vertical, 14)
+                .background(barColor.ignoresSafeArea(edges: .bottom))
         }
     }
 
@@ -1218,7 +1219,8 @@ struct ChatView: View {
                 }
                 .accessibilityLabel(Text("attach.title"))
                 HStack(alignment: .center, spacing: 0) {
-                    if !isGroup || groupCanSendMedia {
+                    // not in a group: the + menu already has Document, and the text field needs the room (375 pt screen, admin)
+                    if !isGroup {
                         Button { showDocPicker = true } label: { composerIcon("paperclip") }
                             .accessibilityLabel(Text("attach.document"))
                     }
@@ -1246,7 +1248,7 @@ struct ChatView: View {
                 .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .stroke(composerFocused ? Theme.borderActive : Theme.hex(0x1C8CB2, 0.85), lineWidth: 1.5))
                 .shadow(color: Theme.hex(0x00BEDC, 0.12), radius: 6)
-                if draftIsEmpty && CameraPicker.isAvailable && (!isGroup || groupCanSendMedia) {
+                if draftIsEmpty && CameraPicker.isAvailable && (!isGroup || groupCanSendMedia) && !(isGroup && composerFocused) {
                     Button { showCamera = true } label: { composerIcon("camera") }
                         .accessibilityLabel(Text("chat.camera"))
                 }

@@ -145,7 +145,7 @@ struct MobileTabBar: View {
 /// with the keyboard up (the dock steps aside then).
 struct DockSpace: ViewModifier {
     @ObservedObject private var chrome = TabChrome.shared
-    static let height: CGFloat = 52 + 12 + 8 + 6
+    static let height: CGFloat = 52 + 12 + 8 + 18 // the orb is lifted 22 pt: it must not cover the last row
 
     func body(content: Content) -> some View {
         content.safeAreaInset(edge: .bottom, spacing: 0) {
