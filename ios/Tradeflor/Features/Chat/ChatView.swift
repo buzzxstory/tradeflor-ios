@@ -96,6 +96,9 @@ struct ChatView: View {
     @State private var unreadMarkCount = 0
     @State private var unreadMarkSet = false
     @State private var openedAtEnd = false
+    /// The list stays hidden while it opens at its end, so the pictures it holds take their real size first (a photo or
+    /// video never seen has no size yet, and rows grew under the reader: the "jump"). Shown at once after 0.7 s at most.
+    @State private var revealed = false
     /// I scrolled up to read: nothing pulls me back to the end by itself.
     @State private var userScrolledUp = false
     /// When the chat settled at its end: older pages load by themselves only after this (no jump while opening).
@@ -232,6 +235,12 @@ struct ChatView: View {
     private func messageScrollView(_ proxy: ScrollViewProxy) -> some View {
         ScrollView {
             messageStack(proxy)
+        }
+        .opacity(revealed ? 1 : 0)
+        .task {
+            // at most 0.7 s hidden, as the web (useHistoryScroll settleOpen): then shown already at the end
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            revealed = true
         }
         .scrollDismissesKeyboard(.interactively)
         .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })
