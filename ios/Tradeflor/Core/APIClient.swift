@@ -574,6 +574,11 @@ final class APIClient {
     func file(token: String, fileID: String, thumb: Bool) async -> Data? {
         let key = "\(fileID)/\(thumb ? "t" : "f")" as NSString
         if let hit = avatarCache.object(forKey: key) { return hit as Data }
+        // a copy kept on this phone: no request again for a file already downloaded (also after a background)
+        if let kept = FileDiskCache.load(key as String) {
+            avatarCache.setObject(kept as NSData, forKey: key, cost: kept.count)
+            return kept
+        }
         guard var comps = URLComponents(url: base.appendingPathComponent("files").appendingPathComponent(fileID),
                                         resolvingAgainstBaseURL: false) else { return nil }
         if thumb { comps.queryItems = [URLQueryItem(name: "thumb", value: "1")] }
@@ -585,6 +590,7 @@ final class APIClient {
         if let unlock = unlockToken { req.setValue(unlock, forHTTPHeaderField: "X-Tradeflor-Unlock") }
         guard let out = try? await send(req), out.1.statusCode == 200, !out.0.isEmpty else { return nil }
         avatarCache.setObject(out.0 as NSData, forKey: key, cost: out.0.count)
+        FileDiskCache.save(key as String, out.0)
         return out.0
     }
 

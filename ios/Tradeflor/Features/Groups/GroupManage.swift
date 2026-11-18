@@ -446,11 +446,14 @@ struct GroupInfoView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: tg ? 0 : 12) {
                     if admin {
-                        Picker("", selection: $tab) {
-                            Text("grp.tab.info").tag(0)
-                            Text(String(format: NSLocalizedString("grp.tab.members", comment: ""), group?.member_count ?? members.count)).tag(1)
+                        // the app's own look (soul ground, cyan selection), not the system segmented control
+                        HStack(spacing: 4) {
+                            groupTabChip(NSLocalizedString("grp.tab.info", comment: ""), 0)
+                            groupTabChip(String(format: NSLocalizedString("grp.tab.members", comment: ""), group?.member_count ?? members.count), 1)
                         }
-                        .pickerStyle(.segmented)
+                        .padding(4)
+                        .background(Theme.soulCard, in: Capsule())
+                        .overlay(Capsule().stroke(Theme.soulCardBorder, lineWidth: 1))
                         .padding(.top, 12)
                     }
                     if let g = group {
@@ -470,11 +473,17 @@ struct GroupInfoView: View {
                 .padding(.horizontal, tg ? 0 : 14)
             }
             .background(Theme.soul.ignoresSafeArea())
-            .navigationTitle(tg ? Text("") : Text("grp.info.title"))
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Theme.soul, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
+                // the chat header's title (ChatView: 18 pt semibold, Theme.text) on the soul bar
+                ToolbarItem(placement: .principal) {
+                    if !tg {
+                        Text("grp.info.title").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                    }
+                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button { dismiss() } label: { Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)) }
                         .accessibilityLabel(Text("chat.close"))
@@ -684,7 +693,7 @@ struct GroupInfoView: View {
     }
 
     private func pillLabel(_ key: LocalizedStringKey, _ fg: Color, _ line: Color) -> some View {
-        Text(key).font(.system(size: 12, weight: .semibold)).foregroundStyle(fg)
+        Text(key).font(.system(size: 12, weight: .semibold)).foregroundStyle(fg).lineLimit(1)
             .padding(.horizontal, 12).padding(.vertical, 5)
             .background(line.opacity(0.06), in: Capsule()).overlay(Capsule().stroke(line.opacity(0.35), lineWidth: 1))
     }
@@ -1054,11 +1063,13 @@ struct GroupInfoView: View {
                         tint: Color = Theme.dyn(0x5FE6EE, 0x0097A5), textTint: Color = Theme.text) -> some View {
         HStack(spacing: 12) {
             Image(systemName: icon).font(.system(size: 16)).foregroundStyle(tint).frame(width: 24)
-            Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(textTint)
-            Spacer()
-            if let trailing { Text(trailing).font(.system(size: 14)).foregroundStyle(Theme.faint) }
+            Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(textTint).lineLimit(2)
+            Spacer(minLength: 8)
+            if let trailing { Text(trailing).font(.system(size: 14)).foregroundStyle(Theme.faint).lineLimit(1) }
             if chevron { Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.faint) }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
         .padding(.vertical, 12)
         .contentShape(Rectangle())
     }
@@ -1406,14 +1417,36 @@ struct GroupInfoView: View {
 
     // MARK: pieces
 
+    /// One half of the Info / Members switch: the cyan gradient when selected, as the app's chips.
+    private func groupTabChip(_ title: String, _ value: Int) -> some View {
+        let on = tab == value
+        return Button {
+            withAnimation(.easeOut(duration: 0.15)) { tab = value }
+        } label: {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(on ? Theme.onAccent : Theme.muted)
+                .lineLimit(1).minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .background(on ? AnyShapeStyle(LinearGradient(colors: [Theme.hex(0x2FF0F3), Theme.hex(0x08A8B8)],
+                                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                                : AnyShapeStyle(Color.clear), in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
     private func actionLabel(_ icon: String, _ key: LocalizedStringKey) -> some View {
         VStack(spacing: 5) {
             Image(systemName: icon).font(.system(size: 18)).foregroundStyle(Theme.accent)
             Text(key).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.text)
+                .lineLimit(1).minimumScaleFactor(0.75)
         }
         .frame(maxWidth: .infinity, minHeight: 64)
-        .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.borderStrong, lineWidth: 1))
+        .background(Theme.soulCard, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.soulCardBorder, lineWidth: 1))
+        .contentShape(Rectangle())
     }
 
     private func actionButton(_ icon: String, _ key: LocalizedStringKey, action: @escaping () -> Void) -> some View {

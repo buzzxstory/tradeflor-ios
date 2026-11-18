@@ -92,6 +92,19 @@ struct GroupsListView: View {
 
     @State private var lastReload = Date.distantPast
 
+    /// Back from a chat: the counts are read again at once. The .task that loads the list does not run again when a
+    /// pushed chat closes, and the throttle below could skip the refresh, so the badge kept the count of before.
+    private func reloadAfterReturn() {
+        pendingReload?.cancel()
+        pendingReload = Task {
+            try? await Task.sleep(nanoseconds: 500_000_000) // the chat's read mark goes to the server first
+            guard !Task.isCancelled else { return }
+            pendingReload = nil
+            lastReload = Date()
+            await load()
+        }
+    }
+
     /// At most one reload every 3 s: a busy chat used to reload the list (3-4 requests) for nearly every message.
     private func reloadSoon() {
         guard pendingReload == nil else { return } // one is already on its way and will include this
@@ -191,6 +204,7 @@ struct GroupsListView: View {
         }
         .onReceive(live.messages) { m in if m.conversation_id.hasPrefix("grp_") { reloadSoon() } }
         .onReceive(live.groupChanged) { _ in reloadSoon() }
+        .onChange(of: path.count) { n in if n == 0 { reloadAfterReturn() } }
     }
 
     /// Website phone header (GroupsView.tsx .sidebar-head): the big "Groups" and the 43 pt square new-group button

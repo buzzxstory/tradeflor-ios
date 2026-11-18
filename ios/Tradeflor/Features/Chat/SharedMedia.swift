@@ -48,12 +48,22 @@ struct SharedMediaCard: View {
                         ForEach(items.filter { $0.file_id != nil }) { m in
                             let isVideo = (m.file_mime ?? "").hasPrefix("video/") || VideoNotePrep.isNote(m)
                             ZStack {
-                                RemoteImage(token: token, fileID: m.file_id ?? "")
+                                Theme.card
+                                if isVideo {
+                                    // a video's cover (its own picture, or a frame of the video): never the photo request, which 404s
+                                    VideoTile(token: token, fileID: m.file_id ?? "")
+                                } else {
+                                    RemoteImage(token: token, fileID: m.file_id ?? "", contentMode: .fit)
+                                }
                                 if isVideo {
                                     Image(systemName: "play.circle.fill").font(.system(size: 26)).foregroundStyle(.white.opacity(0.9))
+                                        .shadow(color: .black.opacity(0.35), radius: 3)
                                 }
                             }
-                            .frame(height: 104).clipped().contentShape(Rectangle())
+                            // a square cell that shows the whole picture (fit, not cropped)
+                            .aspectRatio(1, contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .contentShape(Rectangle())
                             .onTapGesture {
                                 if isVideo { video = ViewedPhoto(id: m.file_id ?? "") } else { photo = ViewedPhoto(id: m.file_id ?? "") }
                             }
@@ -79,6 +89,33 @@ struct SharedMediaCard: View {
         .fullScreenCover(item: $photo) { p in PhotoViewer(token: token, fileID: p.id) }
         .fullScreenCover(item: $video) { v in VideoScreen(token: token, fileID: v.id) }
         .fullScreenCover(item: $doc) { d in DocumentPreview(url: d.url).ignoresSafeArea() }
+    }
+
+    /// A video's cover for the grid: RemoteMedia.cover (its picture, else a frame read from the file), tried again with
+    /// growing waits, so a tile never stays on a spinner or a "Tap to retry".
+    private struct VideoTile: View {
+        let token: String
+        let fileID: String
+        @State private var cover: UIImage?
+
+        var body: some View {
+            ZStack {
+                if let cover {
+                    Image(uiImage: cover).resizable().aspectRatio(contentMode: .fit)
+                } else {
+                    ProgressView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .task(id: fileID) {
+                if let hit = RemoteMedia.cachedCover(fileID) { cover = hit; return }
+                for wait in [0, 1, 2, 4, 8, 16] as [UInt64] {
+                    if wait > 0 { try? await Task.sleep(nanoseconds: wait * 1_000_000_000) }
+                    if Task.isCancelled { return }
+                    if let c = await RemoteMedia.cover(token: token, fileID: fileID) { cover = c; return }
+                }
+            }
+        }
     }
 
     private func row(_ m: Message) -> some View {

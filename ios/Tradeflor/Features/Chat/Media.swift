@@ -131,10 +131,14 @@ struct RemoteImage: View {
         }
         .task(id: fileID + (thumb ? "t" : "f") + String(attempt)) {
             if image != nil && attempt == 0 { return }
-            for wait in [0, 1_000_000_000, 3_000_000_000] as [UInt64] {
-                if wait > 0 { try? await Task.sleep(nanoseconds: wait) }
+            // by itself first: waits of 1, 2, 4 ... 30 s (a dropped connection, a server restart); only then the tap is offered
+            for wait in [0, 1, 2, 4, 8, 16, 30] as [UInt64] {
+                if wait > 0 { try? await Task.sleep(nanoseconds: wait * 1_000_000_000) }
                 if Task.isCancelled { return }
-                if let d = await APIClient.shared.file(token: token, fileID: fileID, thumb: thumb), let raw = UIImage(data: d) {
+                // the server's small picture; one without it answers 404, so the full file is asked for instead
+                var got = await APIClient.shared.file(token: token, fileID: fileID, thumb: thumb)
+                if got == nil && thumb { got = await APIClient.shared.file(token: token, fileID: fileID, thumb: false) }
+                if let d = got, let raw = UIImage(data: d) {
                     // decoded off the main thread (a big picture decoded while drawing stalled the scroll)
                     let img = await raw.byPreparingForDisplay() ?? raw
                     if Task.isCancelled { return }

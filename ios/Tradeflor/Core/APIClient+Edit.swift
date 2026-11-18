@@ -13,15 +13,54 @@ extension APIClient {
     }
 }
 
+/// Attachment files kept on this phone (Caches), so a picture already downloaded is never asked for again: not after
+/// leaving the chat, and not after the app went to the background (iOS empties NSCache when memory runs low). Only
+/// files up to 8 MB (pictures and thumbnails); cleared on sign-out with the lists (ListCache.clear).
+enum FileDiskCache {
+    static let maxBytes = 8 << 20
+
+    private static var dir: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("tf-files", isDirectory: true)
+    }
+
+    /// "fileID/t" -> a file name that is safe on disk.
+    private static func url(_ key: String) -> URL? {
+        let safe = String(key.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character($0) : "_" })
+        return dir?.appendingPathComponent(safe)
+    }
+
+    static func load(_ key: String) -> Data? {
+        guard let u = url(key) else { return nil }
+        return try? Data(contentsOf: u)
+    }
+
+    static func save(_ key: String, _ data: Data) {
+        guard data.count <= maxBytes, let d = dir, let u = url(key) else { return }
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        try? data.write(to: u, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    static func clear() {
+        if let dir { try? FileManager.default.removeItem(at: dir) }
+    }
+}
+
 extension APIClient {
     /// A photo I just sent shows at once from my own copy (web seedPhoto): no spinner after the upload.
     func seedFile(fileID: String, data: Data) {
-        avatarCache.setObject(data as NSData, forKey: "\(fileID)/t" as NSString, cost: data.count)
+        let key = "\(fileID)/t"
+        avatarCache.setObject(data as NSData, forKey: key as NSString, cost: data.count)
+        FileDiskCache.save(key, data)
     }
 
-    /// What is already in memory, without a request (a cached picture shows at once, no spinner).
+    /// What is already here, without a request (a cached picture shows at once, no spinner): memory first, then the
+    /// copy kept on this phone (which is then remembered in memory again).
     func cachedFile(fileID: String, thumb: Bool) -> Data? {
-        avatarCache.object(forKey: "\(fileID)/\(thumb ? "t" : "f")" as NSString) as Data?
+        let key = "\(fileID)/\(thumb ? "t" : "f")"
+        if let hit = avatarCache.object(forKey: key as NSString) { return hit as Data }
+        guard let kept = FileDiskCache.load(key) else { return nil }
+        avatarCache.setObject(kept as NSData, forKey: key as NSString, cost: kept.count)
+        return kept
     }
 }
 
@@ -113,5 +152,6 @@ enum ListCache {
 
     static func clear() {
         if let dir { try? FileManager.default.removeItem(at: dir) }
+        FileDiskCache.clear()
     }
 }

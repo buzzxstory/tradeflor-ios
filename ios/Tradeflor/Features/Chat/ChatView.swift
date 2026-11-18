@@ -594,7 +594,15 @@ struct ChatView: View {
                     return
                 }
                 // at the end, new messages are simply followed; up in the history they are counted instead
-                if bottomVisible || messages.last?.sender_id == me { scrollToBottom(proxy) }
+                // only while the end is on screen: a message arriving while I read up in the history never moves the list
+                if bottomVisible { scrollToBottom(proxy) }
+            }
+            // the composer grew a line while I am at the end: keep the end in view, without an animation that fights the typing
+            .onChange(of: min(6, draft.components(separatedBy: "\n").count)) { _ in
+                guard bottomVisible else { return }
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             // while the chat is still opening, anything added above (the server's page after the copy kept on this
             // phone, the unread line, a day label) must not push the end out of view: settle on it again
@@ -614,7 +622,8 @@ struct ChatView: View {
                 pendingCountSeen = n
                 if added || bottomVisible { scrollToBottom(proxy) }
             }
-            .onChange(of: composerFocused) { f in if f { scrollToBottom(proxy) } }
+            // focusing the composer moves to the end only when the end is already on screen (never while reading history)
+            .onChange(of: composerFocused) { f in if f && bottomVisible { scrollToBottom(proxy) } }
     }
 
     @ViewBuilder private var chatFooter: some View {
@@ -1161,9 +1170,9 @@ struct ChatView: View {
         return Array(members.filter { $0.user_id != me && !formerIDs.contains($0.user_id) && (q.isEmpty || $0.username.lowercased().hasPrefix(q) || $0.title.lowercased().hasPrefix(q)) }.prefix(6))
     }
 
-    private var typingBar: some View {
-        VStack(spacing: 6) {
-            if !mentionMatches.isEmpty {
+    /// The @ suggestions float above the bar as an overlay: they take no room in the composer, so the list does not move.
+    @ViewBuilder private var mentionPanel: some View {
+        if !mentionMatches.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     Text("chat.mention").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.faint).padding(.horizontal, 12).padding(.top, 8)
                     ForEach(mentionMatches) { m in
@@ -1184,7 +1193,11 @@ struct ChatView: View {
                 }
                 .background(Theme.card, in: RoundedRectangle(cornerRadius: 14))
                 .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.borderStrong, lineWidth: 1))
-            }
+        }
+    }
+
+    private var typingBar: some View {
+        VStack(spacing: 6) {
             HStack(alignment: .center, spacing: 8) {
                 if holdRec {
                     holdStrip
@@ -1200,8 +1213,6 @@ struct ChatView: View {
                         Button { showDocPicker = true } label: { composerIcon("paperclip") }
                             .accessibilityLabel(Text("attach.document"))
                     }
-                    Button { showLocationSheet = true } label: { composerIcon("mappin.and.ellipse") }
-                        .accessibilityLabel(Text("location.share"))
                     DraftField(box: box, placeholder: LocalizedStringKey(isGroup ? "chat.placeholder.group" : "chat.placeholder"),
                                focus: $composerFocused) {
                         guard editing == nil, Date().timeIntervalSince(lastTypingSent) > 3 else { return }
@@ -1259,6 +1270,7 @@ struct ChatView: View {
                 }
             }
         }
+        .overlay(alignment: .top) { mentionPanel.alignmentGuide(.top) { d in d[.bottom] + 6 } }
     }
 
     private var holdStrip: some View {
