@@ -17,10 +17,24 @@ struct CalendarView: View {
     @State private var impact = "all" // all | high | medium | low
     @State private var currencies: Set<String> = []
     @State private var countries: Set<String> = []
-    @State private var tzID = "" // "" = Auto (this device)
-    @State private var day = Calendar.current.startOfDay(for: Date())
+    /// "" = Auto (this device). Kept like the website's tf.cal.tz, so the chosen zone survives a relaunch.
+    @AppStorage("tf.cal.tz") private var tzID = ""
+    @State private var day: Date
     @State private var failed = false
+    /// The server's own answer was the last good data while the provider is down (web data.stale).
+    @State private var serverStale = false
     @State private var updatedAt: Date?
+    /// The open day's high/medium/low events, sorted, worked out once per answer (not on every read during a redraw).
+    @State private var dayList: [CalendarEvent] = []
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        // today in the saved zone (web S.day = todayIn())
+        var c = Calendar(identifier: .gregorian)
+        let saved = UserDefaults.standard.string(forKey: "tf.cal.tz") ?? ""
+        c.timeZone = saved.isEmpty ? .current : (TimeZone(identifier: saved) ?? .current)
+        _day = State(initialValue: c.startOfDay(for: Date()))
+    }
     @State private var now = Date()
     @State private var expanded: Set<String> = []
     @State private var visible = 10
@@ -38,7 +52,7 @@ struct CalendarView: View {
         ("CA", "Canada"), ("CH", "Switzerland"), ("CN", "China"), ("NZ", "New Zealand"), ("DE", "Germany"),
         ("FR", "France"), ("IT", "Italy"), ("ES", "Spain"),
     ]
-    static let zones = ["Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Istanbul", "Africa/Cairo", "Asia/Beirut", "Asia/Riyadh",
+    static let zones = ["UTC", "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Istanbul", "Africa/Cairo", "Asia/Beirut", "Asia/Riyadh",
                         "Asia/Dubai", "Asia/Karachi", "Asia/Kolkata", "Asia/Bangkok", "Asia/Singapore", "Asia/Hong_Kong", "Asia/Tokyo",
                         "Australia/Sydney", "Pacific/Auckland", "America/Sao_Paulo", "America/New_York", "America/Chicago",
                         "America/Denver", "America/Los_Angeles"]
@@ -88,12 +102,16 @@ struct CalendarView: View {
     private var key: String { "\(Int(day.timeIntervalSince1970))|\(tzID)" }
     private var loaded: Bool { shownKey == key }
     private var isToday: Bool { cal.isDate(day, inSameDayAs: now) }
-    private var dayEvents: [CalendarEvent] {
-        guard loaded else { return [] }
-        return events.filter { e in
-            ["high", "medium", "low"].contains(e.impact) && (e.date.map { cal.isDate($0, inSameDayAs: day) } ?? false)
+    private var dayEvents: [CalendarEvent] { loaded ? dayList : [] }
+
+    /// The day's high/medium/low events in time order (web usable + sort), for the day and zone the answer was asked for.
+    private static func bucket(_ list: [CalendarEvent], day: Date, cal: Calendar) -> [CalendarEvent] {
+        list.compactMap { e -> (CalendarEvent, Date)? in
+            guard ["high", "medium", "low"].contains(e.impact), let d = e.date, cal.isDate(d, inSameDayAs: day) else { return nil }
+            return (e, d)
         }
-        .sorted { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
+        .sorted { $0.1 < $1.1 }
+        .map(\.0)
     }
     private var filtered: [CalendarEvent] {
         dayEvents.filter { e in
@@ -104,11 +122,23 @@ struct CalendarView: View {
     }
     /// Next event: from now forward whichever day is open; medium or high first, else any (web tickNext).
     private var next: CalendarEvent? {
-        let up = nextList.filter { ($0.date ?? .distantPast) > now }.sorted { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
+        // holidays are not events (web usable()): one used to win as "Next Event" because it is not "low"
+        let up = nextList.filter { ["high", "medium", "low"].contains($0.impact) && ($0.date ?? .distantPast) > now }
+            .sorted { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
         return up.first { $0.impact != "low" } ?? up.first
     }
     private var seenCurrencies: [String] {
         Array(Set(Self.allCurrencies + events.map(\.currency).filter { !$0.isEmpty })).sorted()
+    }
+    /// The known countries plus any the server's answer names (web adds them to CTY), by name.
+    private var countryOptions: [(code: String, name: String)] {
+        var list = Self.allCountries
+        var seen = Set(list.map(\.code))
+        for e in events {
+            let c = e.country_code.uppercased()
+            if !c.isEmpty, !seen.contains(c) { seen.insert(c); list.append((c, e.country.isEmpty ? c : e.country)) }
+        }
+        return list.sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 
     var body: some View {
@@ -127,7 +157,10 @@ struct CalendarView: View {
                 .padding(.top, 4)
                 .padding(.bottom, 24)
             }
-            .refreshable { await load(manual: true) }
+            .refreshable {
+                await load(manual: true)
+                await loadNext()
+            }
             .background(
                 ZStack {
                     Starfield()
@@ -158,11 +191,25 @@ struct CalendarView: View {
         .task(id: tzID) { await loadNext() }
         .task {
             while !Task.isCancelled {
-                // the page needs the minute only; the next-event countdown ticks by itself (TickText)
-                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                // the page needs the minute only; the next-event countdown ticks by itself (TickText). When the next event
+                // comes sooner, wake then, so the card moves on to the following one instead of showing "0m 00s" for 20 s.
+                var wait: TimeInterval = 20
+                if let d = next?.date { wait = min(wait, max(0.5, d.timeIntervalSinceNow + 0.2)) }
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                 now = Date()
             }
         }
+        .onChange(of: scenePhase) { phase in
+            // web: visibilitychange refreshes at once (the 60 s timer may have slept in the background)
+            guard phase == .active else { return }
+            now = Date()
+            Task {
+                await load(manual: false)
+                await loadNext()
+            }
+        }
+        .onChange(of: currencies) { _ in visible = 10 }
+        .onChange(of: countries) { _ in visible = 10 }
         .task {
             // quiet refresh, as the page does: same key, so nothing blinks
             while !Task.isCancelled {
@@ -172,15 +219,16 @@ struct CalendarView: View {
             }
         }
         .sheet(item: $picker) { kind in
+            // the counts are the open day's events per option (one pass, not one filter per row)
             if kind.id == "cur" {
+                let n = Dictionary(dayEvents.map { ($0.currency, 1) }, uniquingKeysWith: +)
                 MultiPickSheet(title: NSLocalizedString("cal.currencies", comment: ""),
-                               options: seenCurrencies.map { c in (c, c, dayEvents.filter { $0.currency == c }.count) },
+                               options: seenCurrencies.map { c in (c, c, n[c] ?? 0) },
                                selection: $currencies)
             } else {
+                let n = Dictionary(dayEvents.map { ($0.country_code.uppercased(), 1) }, uniquingKeysWith: +)
                 MultiPickSheet(title: NSLocalizedString("cal.countries", comment: ""),
-                               options: Self.allCountries.map { c in
-                                   (c.code, Self.flag(c.code) + "  " + c.name, dayEvents.filter { $0.country_code.uppercased() == c.code }.count)
-                               },
+                               options: countryOptions.map { c in (c.code, Self.flag(c.code) + "  " + c.name, n[c.code] ?? 0) },
                                selection: $countries)
             }
         }
@@ -349,7 +397,7 @@ struct CalendarView: View {
             dayNav
             feedLine
             chips
-            if failed && loaded {
+            if (failed || serverStale) && loaded {
                 staleBanner.padding(.top, 6)
             }
             eventsBlock.padding(.top, 6)
@@ -361,22 +409,20 @@ struct CalendarView: View {
 
     private var tzMenu: some View {
         Menu {
-            Button { tzID = ""; day = Calendar.current.startOfDay(for: Date()) } label: {
-                Text(String(format: NSLocalizedString("cal.tz.auto", comment: ""), TimeZone.current.identifier))
+            Button { pickZone("") } label: {
+                Text(String(format: NSLocalizedString("cal.tz.auto", comment: ""), Self.zoneLabel(.current)))
             }
             ForEach(Self.zones, id: \.self) { z in
-                Button(z.split(separator: "/").last.map { String($0).replacingOccurrences(of: "_", with: " ") } ?? z) {
-                    tzID = z
-                    var c = Calendar(identifier: .gregorian)
-                    c.timeZone = TimeZone(identifier: z) ?? .current
-                    day = c.startOfDay(for: Date())
+                Button { pickZone(z) } label: {
+                    if tzID == z { Label(Self.zoneLabel(TimeZone(identifier: z) ?? .current), systemImage: "checkmark") }
+                    else { Text(Self.zoneLabel(TimeZone(identifier: z) ?? .current)) }
                 }
             }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "globe").font(.system(size: 14)).foregroundStyle(P.cyan)
-                Text(tzID.isEmpty ? String(format: NSLocalizedString("cal.tz.auto", comment: ""), TimeZone.current.identifier)
-                                  : tzID.replacingOccurrences(of: "_", with: " "))
+                Text(tzID.isEmpty ? String(format: NSLocalizedString("cal.tz.auto", comment: ""), Self.zoneLabel(.current))
+                                  : Self.zoneLabel(zone))
                     .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(P.chipTx).lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down").font(.system(size: 10, weight: .bold)).foregroundStyle(P.mu)
@@ -419,6 +465,24 @@ struct CalendarView: View {
         .environment(\.layoutDirection, .leftToRight)
     }
 
+    /// Web #tzSel change: the zone is kept, the day becomes today in that zone, the list starts again at 10.
+    private func pickZone(_ z: String) {
+        tzID = z
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = z.isEmpty ? .current : (TimeZone(identifier: z) ?? .current)
+        day = c.startOfDay(for: Date())
+        visible = 10
+        expanded = []
+    }
+
+    /// "Asia/Beirut (GMT+2)" (web zoneLabel).
+    static func zoneLabel(_ z: TimeZone) -> String {
+        let s = z.secondsFromGMT(for: Date())
+        let h = abs(s) / 3600, m = (abs(s) % 3600) / 60
+        let off = s == 0 ? "GMT" : "GMT" + (s < 0 ? "-" : "+") + (m > 0 ? String(format: "%d:%02d", h, m) : "\(h)")
+        return z.identifier.replacingOccurrences(of: "_", with: " ") + " (" + off + ")"
+    }
+
     private func shift(_ n: Int) {
         day = cal.date(byAdding: .day, value: n, to: day) ?? day
         visible = 10
@@ -436,15 +500,20 @@ struct CalendarView: View {
     /// .feed: "LIVE · updated 13:43:05" in green, "STALE · …" in amber, "Connecting…" before the first answer.
     private var feedLine: some View {
         let state: (String, Color, Color) = {
-            guard updatedAt != nil else {
-                return (NSLocalizedString(failed ? "ux3.cal.offline" : "ux3.cal.connecting", comment: ""), P.mu, P.mu2)
+            // a new day or zone has no answer yet (web META.loaded false): Connecting…, or Offline when it failed; never the
+            // previous day's LIVE / STALE time
+            guard loaded, updatedAt != nil else {
+                return (NSLocalizedString(errorKey == key ? "ux3.cal.offline" : "ux3.cal.connecting", comment: ""), P.mu, P.mu2)
             }
-            if failed { return (NSLocalizedString("cal.stale", comment: ""), Theme.dyn(0xFFD48A, 0xA86A00), P.md) }
+            if failed || serverStale {
+                return (String(format: NSLocalizedString("ux4.cal.stale", comment: ""), updatedAt.map { time($0, seconds: true) } ?? ""),
+                        Theme.dyn(0xFFD48A, 0xA86A00), P.md)
+            }
             return (String(format: NSLocalizedString("cal.live", comment: ""), updatedAt.map { time($0, seconds: true) } ?? ""),
                     Theme.dyn(0x9FF0CF, 0x0C7A4F), P.up)
         }()
         return HStack(spacing: 6) {
-            Circle().fill(state.2).frame(width: 7, height: 7).shadow(color: updatedAt == nil ? .clear : state.2, radius: 4)
+            Circle().fill(state.2).frame(width: 7, height: 7).shadow(color: loaded && updatedAt != nil ? state.2 : .clear, radius: 4)
             Text(state.0).font(.system(size: 11.5, weight: .bold)).foregroundStyle(state.1).lineLimit(1)
         }
         .frame(maxWidth: .infinity, minHeight: 28)
@@ -510,16 +579,23 @@ struct CalendarView: View {
             }
         } else if !loaded {
             emptyBox(title: "ux3.cal.unavailable", sub: "ux3.cal.unavailable.sub", retry: true)
-        } else if filtered.isEmpty {
+        } else {
+            matchingBlock(filtered)
+        }
+    }
+
+    /// The filtered list worked out once per redraw (it was filtered again for the empty check, the cards, Load More and the count).
+    @ViewBuilder private func matchingBlock(_ all: [CalendarEvent]) -> some View {
+        if all.isEmpty {
             if dayEvents.isEmpty { emptyBox(title: "ux3.cal.noevents", sub: "ux3.cal.noevents.sub") }
             else { emptyBox(title: "cal.nomatch", sub: "ux3.cal.nomatch.sub") }
         } else {
-            let list = Array(filtered.prefix(visible))
+            let list = Array(all.prefix(visible))
             VStack(spacing: 10) {
                 ForEach(list) { e in eventCard(e) }
             }
-            loadMore
-            Text(String(format: NSLocalizedString("cal.showing", comment: ""), list.count, filtered.count))
+            loadMore(total: all.count)
+            Text(String(format: NSLocalizedString("cal.showing", comment: ""), list.count, all.count))
                 .font(.system(size: 12.5)).foregroundStyle(P.mu).frame(maxWidth: .infinity).padding(.top, 2)
         }
     }
@@ -548,7 +624,8 @@ struct CalendarView: View {
             Text(LocalizedStringKey(title)).font(.system(size: 16, weight: .bold)).foregroundStyle(P.tx).multilineTextAlignment(.center)
             Text(LocalizedStringKey(sub)).font(.system(size: 14)).foregroundStyle(P.mu).multilineTextAlignment(.center)
             if retry {
-                Button { Task { await load(manual: true) } } label: { actionLabel("ux3.cal.retry", icon: "arrow.clockwise", on: false) }
+                // back to the quiet skeleton while it tries (it looked dead, and repeated taps sent repeated requests)
+                Button { errorKey = ""; Task { await load(manual: true) } } label: { actionLabel("ux3.cal.retry", icon: "arrow.clockwise", on: false) }
                     .buttonStyle(.plain).padding(.top, 8)
             }
         }
@@ -726,8 +803,8 @@ struct CalendarView: View {
     }
 
     /// .lm: a 46 pt pill with a cyan edge between two fading cyan rules; "All events loaded" when nothing is left.
-    private var loadMore: some View {
-        let done = visible >= filtered.count
+    private func loadMore(total: Int) -> some View {
+        let done = visible >= total
         return HStack(spacing: 12) {
             LinearGradient(colors: [.clear, Theme.hex(0x35E6F2, 0.6)], startPoint: .leading, endPoint: .trailing).frame(height: 1)
             Button { visible += 10 } label: {
@@ -994,7 +1071,11 @@ struct CalendarView: View {
         f.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
         f.timeZone = TimeZone(identifier: "UTC")
         let start = f.string(from: d), end = f.string(from: d.addingTimeInterval(1800))
-        let title = "\(e.currency) \(e.event)".replacingOccurrences(of: ",", with: "\\,")
+        // RFC 5545 text escaping (web calendarIcs clean): backslash, newline, comma and semicolon
+        let title = "\(e.currency) \(e.event)"
+            .replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\r\n", with: "\\n")
+            .replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: ",", with: "\\,")
+            .replacingOccurrences(of: ";", with: "\\;")
         let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//TRADEFLOR//Calendar//EN\r\nBEGIN:VEVENT\r\nUID:\(e.id)@tradeflor\r\nDTSTAMP:\(f.string(from: Date()))\r\nDTSTART:\(start)\r\nDTEND:\(end)\r\nSUMMARY:\(title)\r\nDESCRIPTION:Impact: \(e.impact)\r\nBEGIN:VALARM\r\nTRIGGER:-PT15M\r\nACTION:DISPLAY\r\nDESCRIPTION:\(title)\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
         let safe = e.id.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-").prefix(60)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("tradeflor-\(safe)-\(Int(d.timeIntervalSince1970)).ics")
@@ -1008,16 +1089,20 @@ struct CalendarView: View {
         guard !token.isEmpty else { return }
         let k = key
         let from = day
-        let to = cal.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
+        let c = cal
+        let to = c.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86400)
         do {
-            let list = try await APIClient.shared.calendar(token: token, from: from, to: to)
+            let feed = try await APIClient.shared.calendarFeed(token: token, from: from, to: to)
             guard k == key else { return }
             if shownKey != k { expanded = [] }
-            events = list
+            events = feed.events
+            dayList = Self.bucket(feed.events, day: from, cal: c)
             shownKey = k
             errorKey = ""
             failed = false
-            updatedAt = Date()
+            serverStale = feed.stale
+            // the server's fetch time (web META.updatedAt), not the moment this phone got the answer
+            updatedAt = feed.updatedAt ?? Date()
             if manual { toast = NSLocalizedString("cal.refreshed", comment: "") }
         } catch {
             guard k == key else { return }

@@ -122,9 +122,11 @@ extension APIClient {
         return try decode(AdminOverview.self, try await getJSON("admin/overview?tz=\(TimeZone.current.secondsFromGMT())", token: token))
     }
 
-    func stAdminUsers(token: String, query: String, page: Int) async throws -> AdminUsersPage {
+    func stAdminUsers(token: String, query: String, page: Int, filter: String = "all", sort: String = "newest") async throws -> AdminUsersPage {
         let day = Int64(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)
-        let path = "admin/users?q=\(APIClient.q(query))&filter=all&sort=newest&page=\(page)&limit=25&day_start=\(day)"
+        // trimmed and at most 80 characters, as the website's search box
+        let q = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+        let path = "admin/users?q=\(APIClient.q(q))&filter=\(APIClient.q(filter))&sort=\(APIClient.q(sort))&page=\(page)&limit=25&day_start=\(day)"
         return try decode(AdminUsersPage.self, try await getJSON(path, token: token))
     }
 

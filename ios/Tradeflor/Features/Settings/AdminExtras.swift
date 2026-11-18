@@ -19,6 +19,15 @@ struct AdminAuditEntry: Decodable, Identifiable {
     let ip: String?
 }
 
+/// GET /admin/users/{id} details-only fields (web UserDrawer).
+struct AdminUserExtra: Decodable {
+    var suspended_by: String? = nil
+    var suspended_at: Int64? = nil
+    var suspended_until: Int64? = nil
+    var devices: Int? = nil
+    var early_member: Bool? = nil
+}
+
 struct AdminAccount: Decodable, Identifiable {
     let user_id: String
     let username: String
@@ -30,8 +39,9 @@ struct AdminAccount: Decodable, Identifiable {
 }
 
 extension APIClient {
-    func admAudit(token: String, user: String = "", before: Int64 = 0) async -> [AdminAuditEntry] {
-        (try? await list(AdminAuditEntry.self, "admin/audit?user=\(APIClient.q(user))&before=\(before)", token: token)) ?? []
+    /// nil = the request failed (it used to read as an empty log: "Nothing recorded yet").
+    func admAudit(token: String, user: String = "", before: Int64 = 0) async -> [AdminAuditEntry]? {
+        try? await list(AdminAuditEntry.self, "admin/audit?user=\(APIClient.q(user))&before=\(before)", token: token)
     }
     func admAdmins(token: String) async -> [AdminAccount] {
         (try? await list(AdminAccount.self, "admin/admins", token: token)) ?? []
@@ -40,8 +50,14 @@ extension APIClient {
         _ = try await postJSON("admin/admins", token: token, body: ["UserID": userID, "Role": role])
     }
     func admUser(token: String, id: String) async -> AdminUser? {
-        guard let d = try? await getJSON("admin/users/\(id)", token: token) else { return nil }
-        return try? JSONDecoder().decode(AdminUser.self, from: d)
+        await admUserDetail(token: token, id: id)?.0
+    }
+    /// The account's record plus the details-only fields (suspension, devices) the list rows do not carry.
+    func admUserDetail(token: String, id: String) async -> (AdminUser, AdminUserExtra)? {
+        guard let d = try? await getJSON("admin/users/\(APIClient.q(id))", token: token),
+              let u = try? JSONDecoder().decode(AdminUser.self, from: d) else { return nil }
+        let x = (try? JSONDecoder().decode(AdminUserExtra.self, from: d)) ?? AdminUserExtra()
+        return (u, x)
     }
 
     /// Multipart POST /admin/official: the fields first, then the file (the server decides before it keeps the file).
@@ -78,6 +94,14 @@ enum AdminFmt {
         Date(timeIntervalSince1970: Double(s > 100_000_000_000 ? s / 1000 : s)).formatted(date: .abbreviated, time: .shortened)
     }
     static func roleLabel(_ r: String) -> String { NSLocalizedString("adm.role." + (r.isEmpty ? "none" : r), comment: "") }
+    /// web nameOf: the display name, else @username, else "Sign-up not finished" (a pending account has neither).
+    static func name(_ u: AdminUser) -> String {
+        !u.display_name.isEmpty ? u.display_name : (!u.username.isEmpty ? "@" + u.username : NSLocalizedString("ux4.adm.pending", comment: ""))
+    }
+    /// "@name", or "no username yet".
+    static func handle(_ u: AdminUser) -> String {
+        u.username.isEmpty ? NSLocalizedString("ux4.adm.nouser", comment: "") : "@" + u.username
+    }
 }
 
 /// Registrations per day / week / month as bars.
@@ -135,17 +159,19 @@ struct AdminAuditView: View {
     @State private var log: [AdminAuditEntry]?
     @State private var more = true
     @State private var loadingMore = false
+    @State private var failed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if user.isEmpty { Text("adm.audit.note").font(.system(size: 12)).foregroundStyle(Theme.faint) }
+            if failed { Text("adm.failed").font(.system(size: 13)).foregroundStyle(Theme.danger) }
             if let log {
-                if log.isEmpty { Text("adm.audit.none").font(.system(size: 13)).foregroundStyle(Theme.faint) }
+                if log.isEmpty && !failed { Text("adm.audit.none").font(.system(size: 13)).foregroundStyle(Theme.faint) }
                 SCard {
                     ForEach(Array(log.enumerated()), id: \.element.id) { i, e in
                         VStack(alignment: .leading, spacing: 3) {
                             HStack {
-                                Text(e.action.replacingOccurrences(of: "_", with: " ").capitalized).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
+                                Text(e.action.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: ".", with: " ").capitalized).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
                                 Spacer()
                                 Text(AdminFmt.date(e.at)).font(.system(size: 10)).foregroundStyle(Theme.faint)
                             }
@@ -179,7 +205,12 @@ struct AdminAuditView: View {
             loadingMore = true
         }
         defer { if before != 0 { loadingMore = false } }
-        let page = await APIClient.shared.admAudit(token: store.session?.token ?? "", user: user, before: before)
+        guard let page = await APIClient.shared.admAudit(token: store.session?.token ?? "", user: user, before: before) else {
+            failed = true
+            if log == nil { log = [] }
+            return
+        }
+        failed = false
         if before == 0 {
             log = page
         } else {

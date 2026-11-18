@@ -893,7 +893,7 @@
 "adm.d.7d" = "7 أيام";
 "adm.d.30d" = "30 يوماً";
 "adm.d.forever" = "حتى الاستعادة";
-"adm.official.note" = "تُنشأ المنشورات الرسمية الجديدة من الموقع.";
+"adm.official.note" = "أنشئ منشوراً رسمياً جديداً بزر + أو من الموقع.";
 "adm.official.none" = "لا منشورات رسمية بعد.";
 "adm.views" = "مشاهدة";
 "adm.publish" = "نشر";
@@ -1871,3 +1871,25 @@
 "grp.unlock" = "إلغاء قفل المجموعة";
 "grp.locked.none" = "لا توجد مجموعات مقفلة. اضغط مطولاً على مجموعة واختر قفل المجموعة.";
 "grp.delete.others" = "حذف لدى الجميع (مشرف)";
+
+"ux4.cal.stale" = "قديمة · آخر تحديث %@";
+"ux4.adm.official.viewers" = "مشاهدون مختلفون";
+"ux4.adm.pending" = "لم يكتمل التسجيل";
+"ux4.adm.nouser" = "لا يوجد اسم مستخدم بعد";
+"ux4.adm.nomatch" = "لا توجد حسابات مطابقة.";
+"ux4.adm.sort" = "ترتيب";
+"ux4.adm.sort.newest" = "أحدث التسجيلات";
+"ux4.adm.sort.oldest" = "أقدم التسجيلات";
+"ux4.adm.sort.active" = "نشط مؤخرًا";
+"ux4.adm.sort.username" = "اسم المستخدم";
+"ux4.adm.yes" = "نعم";
+"ux4.adm.no" = "لا";
+"ux4.adm.lastactive" = "آخر نشاط";
+"ux4.adm.until" = "موقوف حتى";
+"ux4.adm.by" = "أوقفه";
+"ux4.adm.devices" = "الأجهزة المسجّل دخولها";
+
+"stx.gone" = "هذه الحالة لم تعد متاحة.";
+"grp.search.invite" = "استخدم رابط الدعوة هذا";
+"grp.public.none" = "لا توجد مجموعة عامة تطابق \"%@\". اطلب رابط المجموعة من مالكها.";
+"cv3.err.load" = "تعذّر تحميل جهات اتصالك.";

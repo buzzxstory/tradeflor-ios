@@ -233,6 +233,23 @@ struct GroupPlusGlyph: View {
 
 // MARK: - search
 
+/// What the list search fields match with: case, accents / Arabic diacritics (tashkeel) and the Arabic letter forms
+/// (أ إ آ → ا, ة → ه, ى → ي) are ignored, and a leading "@" is how a username is typed, not part of it.
+enum ListSearch {
+    /// The typed text made ready to compare ("" = no search).
+    static func needle(_ raw: String) -> String {
+        var q = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.hasPrefix("@") { q.removeFirst() }
+        return ChatFolder.fold(q.trimmingCharacters(in: .whitespaces))
+    }
+
+    /// Whether any of `fields` holds the needle (made by `needle`).
+    static func matches(_ needle: String, _ fields: String...) -> Bool {
+        guard !needle.isEmpty else { return true }
+        return fields.contains { !$0.isEmpty && ChatFolder.fold($0).contains(needle) }
+    }
+}
+
 /// The round search field of the phone lists (27-chats-list.css .sidebar-search: 52 pt, 1 px #26636c, rgba(11,52,62,.88)).
 struct ListSearchField: View {
     let placeholder: LocalizedStringKey

@@ -303,6 +303,14 @@ final class LiveConnection: ObservableObject {
             }
             return
         }
+        if env.type == "status" {
+            // a status was posted or deleted (server status_routes.go): a deleted one leaves an open viewer and its kept copy
+            // goes; every status list reads the feed again at once instead of two minutes later (web preferences.tsx "status")
+            let d = ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] as? [String: Any]) ?? [:]
+            if (d["action"] as? String) == "deleted", let id = d["id"] as? String { StatusGone.shared.mark(id) }
+            NotificationCenter.default.post(name: .tfStatusChanged, object: nil)
+            return
+        }
         if env.type == "flash" {
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let d = obj["data"] as? [String: Any] {
                 flash.send(d)

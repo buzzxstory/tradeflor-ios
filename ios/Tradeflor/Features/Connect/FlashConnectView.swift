@@ -124,8 +124,79 @@ struct ScanResultView: View {
     @State private var meet: MeetupPeek?
     @State private var info: String?
     @State private var joining = false
+    @State private var groupPreview: GrpInvitePreview?
+    @State private var groupSent = false
 
     private var token: String { store.session?.token ?? "" }
+
+    /// A scanned group invitation: its name and size, then Join / Request to join / Open (web InviteJoin).
+    private func groupCard(_ g: GrpInvitePreview) -> some View {
+        TFCard {
+            VStack(spacing: 10) {
+                Text("grp.invited").font(.system(size: 11, weight: .heavy)).tracking(1).foregroundStyle(Theme.accent)
+                if case .group(let tok) = target, tok.hasPrefix("g:") {
+                    LinkAvatar(token: token, handle: String(tok.dropFirst(2)), title: g.name, hasAvatar: g.has_avatar, size: 80)
+                } else {
+                    Image(systemName: "person.3.fill").font(.system(size: 28)).foregroundStyle(Theme.accent)
+                        .frame(width: 80, height: 80).background(Theme.avatarGradient, in: Circle())
+                }
+                Text(g.name).font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text).multilineTextAlignment(.center)
+                Text(String(format: NSLocalizedString("groups.members", comment: ""), g.member_count))
+                    .font(.system(size: 13)).foregroundStyle(Theme.faint)
+                if g.already_member ?? false {
+                    Text("grp.already").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                    groupButton("grp.open") { Task { await openGroup(g.conversation_id ?? "") } }
+                } else if groupSent || (g.request_pending ?? false) {
+                    Text("gp2.inv.sent").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.text)
+                    Text("gp2.inv.sent.note").font(.system(size: 13)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
+                } else {
+                    if g.needs_approval ?? false {
+                        Text("grp.approval.note").font(.system(size: 13)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
+                    }
+                    groupButton(joining ? "grp.joining" : ((g.needs_approval ?? false) ? "grp.request.join" : "grp.join")) {
+                        Task { await joinGroup() }
+                    }
+                    .disabled(joining)
+                }
+                if let info { Text(info).font(.system(size: 12)).foregroundStyle(Theme.danger).multilineTextAlignment(.center) }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func groupButton(_ key: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(key).bold().foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 44).background(Theme.accent, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func joinGroup() async {
+        guard case .group(let tok) = target, !joining else { return }
+        joining = true
+        defer { joining = false }
+        info = nil
+        do {
+            let id = try await APIClient.shared.joinGroup(token: token, link: tok.hasPrefix("g:")
+                ? "https://app.tradeflor.com/g/" + tok.dropFirst(2) : "https://app.tradeflor.com/join/" + tok)
+            if id.isEmpty { groupSent = true } else { await openGroup(id) }
+        } catch APIError.refused(let why) {
+            info = why.isEmpty ? NSLocalizedString("group.join.bad", comment: "") : why
+        } catch {
+            info = NSLocalizedString("chat.action.failed", comment: "")
+        }
+    }
+
+    /// The group's chat, when it is in my list; else just "you joined".
+    private func openGroup(_ id: String) async {
+        if !id.isEmpty, let g = ((try? await APIClient.shared.groups(token: token)) ?? []).first(where: { $0.conversation_id == id }) {
+            onOpen(g.asConversation)
+        } else {
+            info = NSLocalizedString("fc.group.joined", comment: "")
+            state = "group"
+        }
+    }
 
     var body: some View {
         if case .mutual(let tok) = target {
@@ -150,6 +221,8 @@ struct ScanResultView: View {
                 Text(info ?? NSLocalizedString("fc.notours", comment: "")).foregroundStyle(Theme.faint)
             case "group":
                 Text(info ?? "").foregroundStyle(Theme.text)
+            case "groupPreview":
+                if let g = groupPreview { groupCard(g) }
             case "meet":
                 if let m = meet {
                     TFCard {
@@ -218,10 +291,11 @@ struct ScanResultView: View {
                 meet = try await APIClient.shared.ctPeekMeetup(token: token, tok: tok)
                 state = "meet"
             case .group(let tok):
-                let id = try await APIClient.shared.joinGroup(token: token, link: tok.hasPrefix("g:")
-                    ? "https://app.tradeflor.com/g/" + tok.dropFirst(2) : "https://app.tradeflor.com/join/" + tok)
-                info = NSLocalizedString(id.isEmpty ? "group.join.pending" : "fc.group.joined", comment: "")
-                state = "group"
+                // the invitation first (name, members, already in it?), then Join on a tap -- a scan never joins by itself
+                // (web FlashConnect "target" group → InviteJoin)
+                let path = tok.hasPrefix("g:") ? "group-links/\(tok.dropFirst(2))" : "group-invites/\(tok)"
+                groupPreview = try JSONDecoder().decode(GrpInvitePreview.self, from: try await APIClient.shared.getJSON(path, token: token))
+                state = "groupPreview"
             }
         } catch APIError.refused(let why) {
             info = why.isEmpty ? nil : why

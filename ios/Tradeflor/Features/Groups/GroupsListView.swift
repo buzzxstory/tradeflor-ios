@@ -21,6 +21,26 @@ struct GroupsListView: View {
     @State private var showJoin = false
     @State private var query = ""
     @State private var discovered: [GrpDiscover] = []
+    /// The search the public groups on screen answer (an answer for older text is never shown for newer text).
+    @State private var discoveredFor = ""
+    /// A pasted invitation link: Join Group opens with it filled in.
+    @State private var joinLink: String?
+
+    /// The public-group search: 2+ characters, without the "@" (web GroupDiscover).
+    private var discoverNeedle: String {
+        var q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.hasPrefix("@") { q.removeFirst() }
+        return q.count >= 2 && pastedInvite == nil ? q : ""
+    }
+
+    /// An invitation pasted in the search (https://…/join/<32 hex>, …/g/<handle>, or the bare token): web parseInviteToken.
+    private var pastedInvite: String? {
+        let t = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count >= 6 else { return nil }
+        if t.range(of: "/g/[A-Za-z][A-Za-z0-9_]{4,31}/?$", options: .regularExpression) != nil { return t }
+        if t.range(of: "(^|/join/)[0-9A-Fa-f]{32}/?$", options: .regularExpression) != nil { return t }
+        return nil
+    }
     @State private var joining: GrpDiscover?
     @State private var leaving: GroupSummary?
     @State private var problem: String?
@@ -54,10 +74,10 @@ struct GroupsListView: View {
                 g = g.filter { f.contains(id: $0.conversation_id, title: $0.name, unread: isUnread($0)) }
             }
         }
-        // "Search groups or @link": a leading "@" is part of how a link is typed, not of a name
-        var q = query.trimmingCharacters(in: .whitespaces)
-        if q.hasPrefix("@") { q.removeFirst() }
-        if !q.isEmpty { g = g.filter { $0.name.localizedCaseInsensitiveContains(q) } }
+        // "Search groups or @link": a leading "@" is part of how a link is typed, not of a name; Arabic / accents / case folded.
+        // A pasted invitation link filters nothing (web: inviteToken !== null), its "Join group" row is shown instead.
+        let q = ListSearch.needle(query)
+        if !q.isEmpty, pastedInvite == nil { g = g.filter { ListSearch.matches(q, $0.name) } }
         g.sort { a, b in
             let pa = prefs[a.conversation_id]?.pinned_at ?? 0, pb = prefs[b.conversation_id]?.pinned_at ?? 0
             if (pa > 0) != (pb > 0) { return pa > 0 }
@@ -152,17 +172,22 @@ struct GroupsListView: View {
             }
         }
         .task { await load() }
-        .task(id: query) {
-            let q = query.trimmingCharacters(in: .whitespaces)
-            guard !q.isEmpty else { discovered = []; return }
-            try? await Task.sleep(nanoseconds: 350_000_000)
+        .task(id: discoverNeedle) {
+            // web GroupDiscover: 2+ characters, 300 ms after the last key; what was found for older text is not kept on screen
+            let q = discoverNeedle
+            guard !q.isEmpty else { discovered = []; discoveredFor = ""; return }
+            try? await Task.sleep(nanoseconds: 300_000_000)
             if Task.isCancelled { return }
             let found = await APIClient.shared.grpDiscover(token: token, query: q)
-            if Task.isCancelled { return } // a newer search is on its way: an older answer never replaces it
+            if Task.isCancelled || q != discoverNeedle { return } // a newer search is on its way: an older answer never replaces it
             // a group I am already in shows in my own rows; one found only by its @link (its name does not match) stays here,
             // where its sheet offers "Open" (group names are unique on the server)
-            let onScreen = Set(shown.map { $0.name.lowercased() })
-            discovered = found.filter { !($0.already_member ?? false) || !onScreen.contains($0.name.lowercased()) }
+            let onScreen = Set(shown.map { ChatFolder.fold($0.name) })
+            discovered = found.filter { !($0.already_member ?? false) || !onScreen.contains(ChatFolder.fold($0.name)) }
+            discoveredFor = q
+        }
+        .sheet(isPresented: Binding(get: { joinLink != nil }, set: { if !$0 { joinLink = nil } })) {
+            JoinGroupView(onJoined: { id in Task { await open(id) } }, initialLink: joinLink ?? "")
         }
         .onReceive(live.messages) { m in if m.conversation_id.hasPrefix("grp_") { reloadSoon() } }
         .onReceive(live.groupChanged) { _ in reloadSoon() }
@@ -304,8 +329,13 @@ struct GroupsListView: View {
         if loading && groups.isEmpty {
             ProgressView().tint(Theme.accent).padding(.top, 60)
         } else if shown.isEmpty {
-            ListEmptyNote(text: NSLocalizedString(filter == "locked" ? "grp.locked.none"
-                                                  : (showArchived ? "grp.archived.none" : (filter == "unread" ? "grp.unread.none" : "groups.empty")), comment: ""))
+            if !groups.isEmpty, !ListSearch.needle(query).isEmpty, pastedInvite == nil {
+                // searching: "no match", not "you have no groups"
+                ListEmptyNote(text: String(format: NSLocalizedString("ux1.chats.nomatch", comment: ""), query.trimmingCharacters(in: .whitespaces)))
+            } else if pastedInvite == nil {
+                ListEmptyNote(text: NSLocalizedString(filter == "locked" ? "grp.locked.none"
+                                                      : (showArchived ? "grp.archived.none" : (filter == "unread" ? "grp.unread.none" : "groups.empty")), comment: ""))
+            }
         } else {
             let rows = shown
             LazyVStack(spacing: 0) {
@@ -320,10 +350,38 @@ struct GroupsListView: View {
 
     /// Public groups that match the search (GET /discover/groups).
     @ViewBuilder private var discover: some View {
-        if !discovered.isEmpty {
+        if pastedInvite != nil && filter != "locked" {
+            // web GroupsView: a pasted invitation link is a "Join group · Use this invite link" row
+            Button { joinLink = pastedInvite } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "link").font(.system(size: 20, weight: .semibold)).foregroundStyle(Theme.accent)
+                        .frame(width: 50, height: 50).background(Theme.avatarGradient, in: Circle())
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("group.join").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                        Text("grp.search.invite").font(.system(size: 13)).foregroundStyle(Theme.faint).lineLimit(1)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 16).frame(minHeight: 68)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 8)
+        }
+        // public groups: not in the Locked tab (web), and only for the text on screen now
+        if !discoverNeedle.isEmpty && filter != "locked" {
             VStack(alignment: .leading, spacing: 0) {
                 TFSectionLabel(text: NSLocalizedString("grp.public", comment: "")).padding(.horizontal, 12)
-                ForEach(discovered) { d in
+                if discoveredFor != discoverNeedle {
+                    Text("ct.searching").font(.system(size: 13)).foregroundStyle(Theme.faint)
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                } else if discovered.isEmpty {
+                    Text(String(format: NSLocalizedString("grp.public.none", comment: ""), discoverNeedle))
+                        .font(.system(size: 13)).foregroundStyle(Theme.faint)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                }
+                ForEach(discoveredFor == discoverNeedle ? discovered : []) { d in
                     Button { joining = d } label: {
                         HStack(spacing: 14) {
                             LinkAvatar(token: token, handle: d.handle, title: d.name, hasAvatar: d.has_avatar)

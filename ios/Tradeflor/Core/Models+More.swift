@@ -152,6 +152,13 @@ struct CalendarEvent: Decodable, Identifiable, Equatable {
     var date: Date? { Self.iso.date(from: date_time) ?? Self.isoFrac.date(from: date_time) }
 }
 
+/// GET /calendar/events as a whole: the events plus the server's fetch time and stale flag.
+struct CalendarFeed {
+    let events: [CalendarEvent]
+    let updatedAt: Date?
+    let stale: Bool
+}
+
 struct SavedEvent: Decodable, Identifiable {
     let event_key: String
     let title: String

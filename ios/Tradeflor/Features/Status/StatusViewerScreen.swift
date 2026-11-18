@@ -46,8 +46,19 @@ struct StatusViewerScreen: View {
     /// bumped to start the same story again (a tap back on the very first one: the bar went to 0 but the clock ran on)
     @State private var round = 0
     @State private var deleteFailed = false
+    /// bumped when a status is marked gone while this screen is open (redraws the "no longer available" note)
+    @State private var goneTick = 0
 
     private let photoSeconds = 5.0
+    /// How long "This status is no longer available" stays before the viewer moves on (web GONE_MS).
+    private let goneSeconds = 1.4
+
+    /// Deleted (the owner, live; or the server refused it) or past its 24 hours: never shown from what this screen holds.
+    private var postGone: Bool {
+        _ = goneTick
+        guard let post else { return false }
+        return StatusGone.shared.contains(post.id) || StatusGone.expired(post.expires_at)
+    }
     /// What the viewer shows for an empty list (it closes at once): never an out-of-range read.
     private static let emptyGroup = StatusGroup(user_id: "", username: "", mine: nil, group_id: nil, group_name: nil, can_post: nil,
                                                 posts: [], all_seen: true, latest: 0)
@@ -126,6 +137,14 @@ struct StatusViewerScreen: View {
             Button("chat.close", role: .cancel) {}
         }
         .onChange(of: deleteFailed) { _ in resume() }
+        // web: silent during a call (the story's sound went into the call)
+        .onAppear { if CallManager.shared.lineInUse { muted = true } }
+        // the status on screen was deleted meanwhile: its players stop, the note shows, and the viewer moves on
+        .onReceive(NotificationCenter.default.publisher(for: .tfStatusGone)) { n in
+            guard let id = n.object as? String, id == post?.id else { return }
+            goneTick += 1
+            round += 1
+        }
         .overlay {
             // web .status-burst: 104 pt, a little below the middle, floats up and fades
             if let b = burst {
@@ -276,7 +295,10 @@ struct StatusViewerScreen: View {
     private func resume() { setPaused(mustHold) }
 
     @ViewBuilder private var content: some View {
-        if let post {
+        if postGone {
+            Text("stx.gone").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
+                .multilineTextAlignment(.center).padding(24)
+        } else if let post {
             switch post.kind {
             case "text":
                 let (bg, font) = StatusStyle.parts(post.style)
@@ -341,7 +363,7 @@ struct StatusViewerScreen: View {
                     musicPlayer?.isMuted = muted
                 }
             }
-            if canManage, post != nil {
+            if canManage, post != nil, !postGone {
                 StatusHeadButton(systemName: "trash", label: "stx.delete") {
                     guard !deleting else { return }
                     setPaused(true)
@@ -354,7 +376,7 @@ struct StatusViewerScreen: View {
 
     /// web .status-music-chip: centred under the head (74 pt below the safe area), 32 pt high, dark glass.
     @ViewBuilder private var musicChip: some View {
-        if let m = post?.music, !m.isEmpty {
+        if let m = post?.music, !m.isEmpty, !postGone {
             Label(StatusMusic.title(m), systemImage: "music.note")
                 .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
                 .lineLimit(1)
@@ -372,6 +394,9 @@ struct StatusViewerScreen: View {
 
     @ViewBuilder private var footer: some View {
         VStack(spacing: 12) {
+            if postGone {
+                EmptyView()
+            } else {
             if let c = post?.caption, !c.isEmpty {
                 // web .status-caption: a full-width band with a dark fade, not a bubble
                 StatusCaptionBand(text: c)
@@ -476,6 +501,7 @@ struct StatusViewerScreen: View {
                 .padding(.horizontal, 2)
                 .padding(.bottom, 14)
             }
+            }
         }
     }
 
@@ -496,6 +522,12 @@ struct StatusViewerScreen: View {
             if groups.allSatisfy({ $0.posts.isEmpty }) { close() }
             return
         }
+        if postGone {
+            // deleted or past its 24 hours: "no longer available" for a moment, then the next one (web GONE_MS)
+            try? await Task.sleep(nanoseconds: UInt64(goneSeconds * 1_000_000_000))
+            if !Task.isCancelled { next() }
+            return
+        }
         if !group.isMine && !post.seen {
             let tok = token, id = post.id
             StatusSeenQueue.shared.add { await APIClient.shared.statusSeen(token: tok, id: id) }
@@ -510,6 +542,11 @@ struct StatusViewerScreen: View {
             if Task.isCancelled { return }
             if let d { image = UIImage(data: d) }
         case "video", "voice":
+            // heard with the ring / silent switch on silent (the default session kept a voice status mute); never during a call
+            if !CallManager.shared.lineInUse {
+                try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                try? AVAudioSession.sharedInstance().setActive(true)
+            }
             // starts at once (no waiting for the length or a big buffer); the bar follows the video's own clock below
             let pl = StatusVideo.player(token: token, id: post.id, muted: muted)
             player = pl
@@ -806,6 +843,7 @@ struct StatusViewerScreen: View {
         defer { deleting = false }
         do {
             try await APIClient.shared.statusDelete(token: token, id: post.id)
+            StatusGone.shared.mark(post.id) // its kept picture goes too
             close()
         } catch {
             setPaused(true)

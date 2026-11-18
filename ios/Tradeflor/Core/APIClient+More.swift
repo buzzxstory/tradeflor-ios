@@ -200,13 +200,32 @@ extension APIClient {
         return (try decode(Out.self, data)).events ?? []
     }
 
+    /// The whole answer (web load()): the events, when the server last fetched them from the provider, and whether these are
+    /// the last good data while the provider is down (stale data is never shown as LIVE).
+    func calendarFeed(token: String, from: Date, to: Date) async throws -> CalendarFeed {
+        let f = ISO8601DateFormatter()
+        struct Out: Decodable { let events: [CalendarEvent]?; let updated_at: String?; let stale: Bool? }
+        let data = try await getJSON("calendar/events?from=\(f.string(from: from))&to=\(f.string(from: to))", token: token)
+        let out = try decode(Out.self, data)
+        var at: Date?
+        if let s = out.updated_at {
+            let frac = ISO8601DateFormatter()
+            frac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            at = frac.date(from: s) ?? f.date(from: s)
+            // Go's zero time ("0001-01-01T00:00:00Z") when nothing was fetched yet
+            if let d = at, d.timeIntervalSince1970 < 0 { at = nil }
+        }
+        return CalendarFeed(events: out.events ?? [], updatedAt: at, stale: out.stale ?? false)
+    }
+
     func savedEvents(token: String) async throws -> [SavedEvent] {
         try await list(SavedEvent.self, "calendar/saved", token: token)
     }
 
     func saveEvent(token: String, _ e: CalendarEvent) async throws {
         _ = try await postJSON("calendar/saved", token: token,
-                               body: ["event_key": e.id, "title": String(e.event.prefix(140)), "currency": e.currency,
+                               body: ["event_key": e.id, "title": String(((e.currency.isEmpty ? "" : e.currency + " ") + e.event).prefix(140)),
+                                      "currency": e.currency,
                                       "country_code": e.country_code, "impact": e.impact,
                                       "event_at": Int64((e.date ?? Date()).timeIntervalSince1970), "remind_minutes": 15])
     }

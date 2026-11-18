@@ -683,7 +683,9 @@ final class APIClient {
     }
 
     func statusSeen(token: String, id: String) async {
-        _ = try? await send(request("status/\(id)/seen", method: "POST", token: token, body: nil))
+        // 404: deleted, past its 24 hours, or no longer mine to watch: it is gone everywhere (web markStatusGone)
+        let out = try? await send(request("status/\(id)/seen", method: "POST", token: token, body: nil))
+        if let out, out.1.statusCode == 404 { StatusGone.shared.mark(id) }
     }
 
     func statusDelete(token: String, id: String) async throws {

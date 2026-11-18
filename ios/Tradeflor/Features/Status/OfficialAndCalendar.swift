@@ -376,6 +376,13 @@ struct OfficialViewer: View {
             if posts.isEmpty { close() } // nothing to show: the viewer goes instead of staying black
             return
         }
+        if StatusGone.expired(post.expires_at) {
+            // past its time while the viewer was open (or a list kept too long): the dimmed orb a moment, then the next one
+            loadFailed = true
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            if !Task.isCancelled { next() }
+            return
+        }
         // asked every time it is opened, as on the web (it is idempotent)
         let pid = post.id
         let tok = token

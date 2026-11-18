@@ -182,11 +182,15 @@ final class QRCamera: NSObject, ObservableObject, AVCaptureMetadataOutputObjects
     }
 
     func toggleTorch() {
+        // setting the torch without the lock (another app holds the camera) or while it is unavailable (too hot, camera not
+        // running) raises an Objective-C exception: a crash. Both are checked first.
         guard let id = currentID, let device = AVCaptureDevice(uniqueID: id), device.hasTorch else { return }
-        try? device.lockForConfiguration()
-        device.torchMode = torch ? .off : .on
+        let on = !torch
+        guard !on || (device.isTorchAvailable && device.isTorchModeSupported(.on)) else { return }
+        guard (try? device.lockForConfiguration()) != nil else { return }
+        device.torchMode = on ? .on : .off
         device.unlockForConfiguration()
-        torch.toggle()
+        torch = on
     }
 
     func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {

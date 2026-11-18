@@ -305,6 +305,8 @@ struct CreateGroupView: View {
 /// Join a group from an invite link or a public group link.
 struct JoinGroupView: View {
     let onJoined: (String) -> Void
+    /// A link already pasted elsewhere (the Groups search): the field starts with it.
+    var initialLink: String = ""
     @EnvironmentObject private var store: SessionStore
     @Environment(\.dismiss) private var dismiss
     @State private var link = ""
@@ -337,6 +339,7 @@ struct JoinGroupView: View {
                 }
             }
         }
+        .onAppear { if link.isEmpty && !initialLink.isEmpty { link = initialLink } }
     }
 
     private func join() async {

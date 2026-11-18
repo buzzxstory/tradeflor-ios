@@ -11,6 +11,8 @@ struct AdminCenterPage: View {
     @State private var openUser: AdminUser?
     /// Bumped after a change made from a user opened here: the tab on screen reads its figures again.
     @State private var refresh = 0
+    /// The Users filter an Overview figure opens (web goUsers).
+    @State private var userFilter = "all"
 
     private var tabs: [(String, String)] {
         guard let me else { return [] }
@@ -35,13 +37,13 @@ struct AdminCenterPage: View {
                 }
                 Group {
                     switch tab {
-                    case "users": AdminUsersView(me: me)
+                    case "users": AdminUsersView(me: me, filter: userFilter)
                     case "official": AdminOfficialView(library: false, me: me)
                     case "library": AdminOfficialView(library: true, me: me)
                     case "reports": AdminReportsView()
                     case "audit": AdminAuditView(onOpenUser: open)
                     case "settings": AdminSettingsView(me: me, onOpenUser: open)
-                    default: AdminOverviewView(onOpenUser: open)
+                    default: AdminOverviewView(onOpenUser: open) { f in userFilter = f; tab = "users" }
                     }
                 }
                 .id("\(tab)|\(refresh)")
@@ -75,6 +77,8 @@ struct AdminCenterPage: View {
 
 private struct AdminOverviewView: View {
     var onOpenUser: (String) -> Void
+    /// A figure opens Users with its filter (web Overview goUsers).
+    var goUsers: (String) -> Void = { _ in }
     @EnvironmentObject private var store: SessionStore
     @State private var o: AdminOverview?
     @State private var failed = false
@@ -83,18 +87,19 @@ private struct AdminOverviewView: View {
         Group {
             if let o {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                    stat("adm.total", o.total)
-                    stat("adm.today", o.today)
-                    stat("adm.7d", o.last_7_days)
-                    stat("adm.30d", o.last_30_days)
-                    stat("adm.active24", o.active_24h)
+                    stat("adm.total", o.total, filter: "all")
+                    stat("adm.today", o.today, filter: "today")
+                    stat("adm.7d", o.last_7_days, filter: "7d")
+                    stat("adm.30d", o.last_30_days, filter: "30d")
+                    stat("adm.active24", o.active_24h, filter: "active")
                     stat("adm.active7", o.active_7d)
-                    stat("adm.online", o.online)
-                    stat("adm.verified", o.verified)
-                    stat("adm.unverified", o.unverified)
-                    stat("adm.suspended", o.suspended)
+                    stat("adm.online", o.online, filter: "online")
+                    stat("adm.verified", o.verified, filter: "verified")
+                    stat("adm.unverified", o.unverified, filter: "unverified")
+                    stat("adm.suspended", o.suspended, filter: "suspended")
                     stat("adm.official.live", o.official_live)
                     stat("adm.official.views", o.official_views)
+                    if let v = o.official_viewers { stat("ux4.adm.official.viewers", v) }
                 }
                 if let d = o.daily, !d.isEmpty {
                     AdminBars(daily: d, weekly: o.weekly ?? [], monthly: o.monthly ?? [])
@@ -107,10 +112,10 @@ private struct AdminOverviewView: View {
                             Button { onOpenUser(u.id) } label: {
                                 HStack(spacing: 10) {
                                     Avatar(token: store.session?.token ?? "", userID: u.id, avatarID: u.avatar_id.isEmpty ? nil : u.avatar_id,
-                                           title: u.display_name.isEmpty ? u.username : u.display_name, size: 34, online: u.online)
+                                           title: u.display_name.isEmpty ? (u.username.isEmpty ? "?" : u.username) : u.display_name, size: 34, online: u.online)
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text(u.display_name.isEmpty ? u.username : u.display_name).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
-                                        Text("@\(u.username) · \(AdminFmt.date(u.created_at))").font(.system(size: 11)).foregroundStyle(Theme.faint)
+                                        Text(AdminFmt.name(u)).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
+                                        Text("\(AdminFmt.handle(u)) · \(AdminFmt.date(u.created_at))").font(.system(size: 11)).foregroundStyle(Theme.faint)
                                     }
                                     Spacer()
                                     if !u.country.isEmpty { Text(IdentityCardFace.flag(u.country)) }
@@ -129,19 +134,32 @@ private struct AdminOverviewView: View {
             }
         }
         .task {
-            do { o = try await APIClient.shared.stAdminOverview(token: store.session?.token ?? "") } catch { failed = true }
+            // a quiet refresh every minute while this is open (web); a failed refresh keeps the figures on screen
+            while !Task.isCancelled {
+                do {
+                    o = try await APIClient.shared.stAdminOverview(token: store.session?.token ?? "")
+                    failed = false
+                } catch {
+                    if o == nil { failed = true }
+                }
+                try? await Task.sleep(nanoseconds: 60_000_000_000)
+            }
         }
     }
 
-    private func stat(_ key: String, _ v: Int) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(LocalizedStringKey(key)).font(.system(size: 11)).foregroundStyle(Theme.faint)
-            Text("\(v)").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text)
+    private func stat(_ key: String, _ v: Int, filter: String? = nil) -> some View {
+        Button { if let filter { goUsers(filter) } } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(LocalizedStringKey(key)).font(.system(size: 11)).foregroundStyle(Theme.faint)
+                Text("\(v)").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.borderStrong, lineWidth: 1))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Theme.cardGradient, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.borderStrong, lineWidth: 1))
+        .buttonStyle(.plain)
+        .disabled(filter == nil)
     }
 }
 
@@ -154,24 +172,67 @@ private struct AdminUsersView: View {
     @State private var open: AdminUser?
     @State private var loading = false
     @State private var seq = 0
+    @State private var failed = false
+    /// web Users filter chips and sort (the server does both; they were fixed to all / newest)
+    @State private var filter: String
+    @State private var sort = "newest"
     private var token: String { store.session?.token ?? "" }
+
+    init(me: AdminMe, filter: String = "all") {
+        self.me = me
+        _filter = State(initialValue: filter)
+    }
+
+    private static let filters: [(String, String)] = [
+        ("all", "adm.state.all"), ("today", "adm.today"), ("7d", "adm.7d"), ("30d", "adm.30d"), ("active", "adm.active24"),
+        ("online", "adm.online"), ("verified", "adm.verified"), ("unverified", "adm.unverified"), ("suspended", "adm.suspended"),
+    ]
+    private static let sorts: [(String, String)] = [
+        ("newest", "ux4.adm.sort.newest"), ("oldest", "ux4.adm.sort.oldest"), ("active", "ux4.adm.sort.active"), ("username", "ux4.adm.sort.username"),
+    ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SearchPill(placeholder: "adm.search", text: $query)
-                .submitLabel(.search)
-                .onSubmit { page = 1; Task { await load() } }
-            if let d = data {
+            HStack(spacing: 8) {
+                SearchPill(placeholder: "adm.search", text: $query)
+                    .submitLabel(.search)
+                    .onSubmit { page = 1; Task { await load() } }
+                Menu {
+                    Picker("", selection: $sort) {
+                        ForEach(Self.sorts, id: \.0) { s in Text(LocalizedStringKey(s.1)).tag(s.0) }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
+                        .frame(width: 40, height: 40).contentShape(Rectangle())
+                }
+                .accessibilityLabel(Text("ux4.adm.sort"))
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Self.filters, id: \.0) { f in
+                        FilterChip(title: NSLocalizedString(f.1, comment: ""), selected: filter == f.0) { filter = f.0 }
+                    }
+                }
+            }
+            if failed && data == nil {
+                VStack(spacing: 8) {
+                    Text("adm.failed").font(.system(size: 13)).foregroundStyle(Theme.faint)
+                    Button("ux3.cal.retry") { Task { await load() } }.font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
+                }
+                .frame(maxWidth: .infinity)
+            } else if let d = data {
                 Text(String(format: NSLocalizedString("adm.count", comment: ""), d.total)).font(.system(size: 12)).foregroundStyle(Theme.faint)
+                if failed { Text("adm.failed").font(.system(size: 12)).foregroundStyle(Theme.danger) }
+                if (d.users ?? []).isEmpty { Text("ux4.adm.nomatch").font(.system(size: 13)).foregroundStyle(Theme.faint) }
                 SCard {
                     ForEach(Array((d.users ?? []).enumerated()), id: \.element.id) { i, u in
                         Button { open = u } label: {
                             HStack(spacing: 10) {
                                 Avatar(token: token, userID: u.id, avatarID: u.avatar_id.isEmpty ? nil : u.avatar_id,
-                                       title: u.display_name.isEmpty ? u.username : u.display_name, size: 36, online: u.online)
+                                       title: u.display_name.isEmpty ? (u.username.isEmpty ? "?" : u.username) : u.display_name, size: 36, online: u.online)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(u.display_name.isEmpty ? u.username : u.display_name).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
-                                    Text("@\(u.username) · \(u.pin)").font(.system(size: 11)).foregroundStyle(Theme.faint)
+                                    Text(AdminFmt.name(u)).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                                    Text(AdminFmt.handle(u) + (u.pin.isEmpty ? "" : " · " + u.pin)).font(.system(size: 11)).foregroundStyle(Theme.faint)
                                 }
                                 Spacer()
                                 Text(LocalizedStringKey("adm.status." + u.status)).font(.system(size: 11, weight: .semibold))
@@ -186,9 +247,9 @@ private struct AdminUsersView: View {
                 HStack {
                     Button("adm.prev") { page -= 1; Task { await load() } }.disabled(page <= 1 || loading)
                     Spacer()
-                    Text("\(page)").foregroundStyle(Theme.faint)
+                    Text("\(page) / \(max(1, Int(ceil(Double(d.total) / Double(max(1, d.limit))))))").foregroundStyle(Theme.faint)
                     Spacer()
-                    Button("adm.next") { page += 1; Task { await load() } }.disabled(page * d.limit >= d.total || loading)
+                    Button("adm.next") { page += 1; Task { await load() } }.disabled(page * max(1, d.limit) >= d.total || loading)
                 }
                 .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
             } else {
@@ -205,6 +266,8 @@ private struct AdminUsersView: View {
             }
             await load()
         }
+        .onChange(of: filter) { _ in page = 1; Task { await load() } }
+        .onChange(of: sort) { _ in page = 1; Task { await load() } }
         .sheet(item: $open) { u in AdminUserSheet(user: u, me: me) { Task { await load() } } }
     }
 
@@ -213,8 +276,16 @@ private struct AdminUsersView: View {
         let my = seq
         loading = true
         defer { if my == seq { loading = false } }
-        guard let d = try? await APIClient.shared.stAdminUsers(token: token, query: query, page: page), my == seq else { return }
-        data = d
+        // a failure said nothing (an endless spinner on the first page, a silent no-op on the others)
+        do {
+            let d = try await APIClient.shared.stAdminUsers(token: token, query: query, page: page, filter: filter, sort: sort)
+            guard my == seq else { return }
+            data = d
+            failed = false
+        } catch {
+            guard my == seq else { return }
+            failed = true
+        }
     }
 }
 
@@ -231,6 +302,7 @@ private struct AdminUserSheet: View {
     @State private var busy = false
     @State private var confirmSuspend = false
     @State private var fresh: AdminUser?
+    @State private var extra: AdminUserExtra?
     private var token: String { store.session?.token ?? "" }
     /// The account as the server has it now (details), the list's row until then.
     private var shown: AdminUser { fresh ?? user }
@@ -239,9 +311,19 @@ private struct AdminUserSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    LabeledContent("signup.username", value: "@" + shown.username)
-                    LabeledContent("PIN", value: shown.pin)
-                    LabeledContent("signup.email", value: shown.email)
+                    LabeledContent("signup.username", value: AdminFmt.handle(shown))
+                    LabeledContent("PIN", value: shown.pin.isEmpty ? "—" : shown.pin)
+                    LabeledContent("signup.email", value: shown.email.isEmpty ? "—" : shown.email)
+                    if !shown.email.isEmpty {
+                        LabeledContent("adm.verified", value: NSLocalizedString(shown.email_verified ? "ux4.adm.yes" : "ux4.adm.no", comment: ""))
+                    }
+                    LabeledContent("ux4.adm.lastactive", value: shown.online ? NSLocalizedString("adm.online", comment: "")
+                                   : (shown.last_active_at > 0 ? AdminFmt.date(shown.last_active_at) : "—"))
+                    if let x = extra {
+                        if x.suspended_until ?? 0 > 0 { LabeledContent("ux4.adm.until", value: AdminFmt.date(x.suspended_until ?? 0)) }
+                        if let by = x.suspended_by, !by.isEmpty, shown.status == "suspended" { LabeledContent("ux4.adm.by", value: "@" + by) }
+                        LabeledContent("ux4.adm.devices", value: "\(x.devices ?? 0)")
+                    }
                     if !shown.phone.isEmpty { LabeledContent("set.phone", value: shown.phone) }
                     LabeledContent("set.country", value: shown.country)
                     LabeledContent("set.joined", value: Date(timeIntervalSince1970: Double(shown.created_at)).formatted(date: .abbreviated, time: .omitted))
@@ -265,8 +347,10 @@ private struct AdminUserSheet: View {
                         .foregroundStyle(Theme.accent)
                     }
                     .listRowBackground(Theme.surface)
-                } else if shown.type != "administrator" && shown.id != store.session?.userID {
-                    // never my own account (the web says "You cannot suspend yourself")
+                } else if shown.id != store.session?.userID && shown.role != "owner"
+                            && (shown.type != "administrator" || me.role == "owner") {
+                    // never my own account (the web says "You cannot suspend yourself"), never an owner; an owner may suspend
+                    // another administrator (server admin.Suspend) — it was hidden for every administrator, owners included
                     Section(header: Text("adm.suspend")) {
                         TextField("adm.reason", text: $reason)
                             .onChange(of: reason) { v in if v.count > 300 { reason = String(v.prefix(300)) } } // web maxLength
@@ -313,7 +397,7 @@ private struct AdminUserSheet: View {
                 Button("adm.suspend", role: .destructive) { suspend() }
             }
             // the list row has no suspension details (reason, …): the account's own record is read
-            .task { if let d = await APIClient.shared.admUser(token: token, id: user.id) { fresh = d } }
+            .task { if let d = await APIClient.shared.admUserDetail(token: token, id: user.id) { fresh = d.0; extra = d.1 } }
             .scrollContentBackground(.hidden)
             .background(Theme.ground.ignoresSafeArea())
             .navigationTitle(shown.display_name.isEmpty ? shown.username : shown.display_name)
@@ -415,7 +499,9 @@ private struct AdminOfficialView: View {
                         }
                         Spacer()
                         Menu {
-                            if !library && (p.state == "draft" || p.state == "removed" || p.state == "expired") {
+                            // the server publishes drafts only (UPDATE … WHERE state = 'draft'): on a removed or expired
+                            // post this answered "not found"
+                            if !library && p.state == "draft" {
                                 Button("adm.publish") { act(p, "publish") }
                             }
                             if !library && (p.state == "active" || p.state == "scheduled") {
@@ -466,7 +552,13 @@ private struct AdminOfficialView: View {
     }
 
     private func load() async {
-        all = (try? await APIClient.shared.stAdminOfficial(token: token)) ?? all
+        // a failed first read said "No official posts yet"; now it says it could not load (and keeps any list on screen)
+        do {
+            all = try await APIClient.shared.stAdminOfficial(token: token)
+            if note == NSLocalizedString("adm.failed", comment: "") { note = nil }
+        } catch {
+            note = NSLocalizedString("adm.failed", comment: "")
+        }
         loading = false
     }
 }

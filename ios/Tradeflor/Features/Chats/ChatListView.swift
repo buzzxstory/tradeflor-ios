@@ -46,12 +46,14 @@ struct ChatListView: View {
     private var token: String { store.session?.token ?? "" }
 
     private var shown: [ConversationSummary] {
-        let q = query.trimmingCharacters(in: .whitespaces)
+        let q = ListSearch.needle(query)
         let notHidden = chats.filter { c in
             guard let h = hiddenAt[c.conversation_id] else { return true }
             return Double(c.last_message_at > 100_000_000_000 ? c.last_message_at / 1000 : c.last_message_at) > h
         }
-        let visible = notHidden.filter { showArchived == (prefs[$0.conversation_id]?.archived ?? false) && !lockedIDs.contains($0.conversation_id) }
+        // a blocked chat is only under the Blocked chip (web visibleConversations: !blockedIds.has(peer) outside that tab)
+        let visible = notHidden.filter { showArchived == (prefs[$0.conversation_id]?.archived ?? false) && !lockedIDs.contains($0.conversation_id)
+            && !blockedIDs.contains($0.peer_id) }
         var base: [ConversationSummary]
         switch filter {
         case "locked": base = notHidden.filter { lockedIDs.contains($0.conversation_id) }
@@ -71,9 +73,8 @@ struct ChatListView: View {
             return a.last_message_at > b.last_message_at
         }
         guard !q.isEmpty else { return base }
-        return base.filter {
-            $0.title.localizedCaseInsensitiveContains(q) || $0.peer_username.localizedCaseInsensitiveContains(q)
-        }
+        // the name shown, the @username (a leading "@" typed is ignored), Arabic / accents / case folded
+        return base.filter { ListSearch.matches(q, $0.title, $0.peer_username) }
     }
 
     @State private var pendingReload: Task<Void, Never>?
@@ -181,6 +182,9 @@ struct ChatListView: View {
         .onReceive(live.changes) { id in if !id.hasPrefix("grp_") { reloadSoon() } }
         // a status watched (here or in the status row), posted or deleted: the rings on the rows change at once
         .onReceive(NotificationCenter.default.publisher(for: .tfStatusChanged)) { _ in Task { await loadStatuses() } }
+        // the last blocked / locked chat left its tab (its chip is gone): back to All, as the web
+        .onChange(of: blockedIDs) { b in if filter == "blocked" && b.isEmpty { filter = "all" } }
+        .onChange(of: lockedIDs) { l in if filter == "locked" && l.isEmpty { filter = "all" } }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             await load()
@@ -306,7 +310,8 @@ struct ChatListView: View {
 
     /// Unread chats outside Archived and Locked (the Unread chip's number, website unreadChats).
     private var unreadCount: Int {
-        chats.filter { isUnread($0) && !(prefs[$0.conversation_id]?.archived ?? false) && !lockedIDs.contains($0.conversation_id) }.count
+        chats.filter { isUnread($0) && !(prefs[$0.conversation_id]?.archived ?? false) && !lockedIDs.contains($0.conversation_id)
+            && !blockedIDs.contains($0.peer_id) }.count
     }
 
     /// How many of a folder's chats are unread (website folderUnread).

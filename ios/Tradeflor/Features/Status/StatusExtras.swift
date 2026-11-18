@@ -98,6 +98,45 @@ extension Notification.Name {
     /// A status was watched, posted or deleted: every status list (the row on Chats, the rings on the chat rows, the
     /// TradeFlor cards) reads the feed again at once (web "tf-status").
     static let tfStatusChanged = Notification.Name("tf.status.changed")
+    /// A status is gone (deleted by its owner, or the server refused it): an open viewer leaves it (web onStatusGone).
+    static let tfStatusGone = Notification.Name("tf.status.gone")
+}
+
+/// Statuses that are gone while the app runs (web statusMedia.ts markStatusGone / isStatusGone): deleted (the server's live
+/// "status" event, or a 404 when one is opened) or past its 24 hours. Never shown again from what a screen still holds.
+final class StatusGone: @unchecked Sendable {
+    static let shared = StatusGone()
+    private var ids: Set<String> = []
+    private let lock = NSLock()
+
+    func contains(_ id: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return ids.contains(id)
+    }
+
+    /// Marks it gone, forgets its kept picture / poster, and tells an open viewer (on the main thread).
+    func mark(_ id: String) {
+        guard !id.isEmpty else { return }
+        lock.lock()
+        let isNew = ids.insert(id).inserted
+        lock.unlock()
+        guard isNew else { return }
+        APIClient.shared.avatarCache.removeObject(forKey: "status/\(id)/false" as NSString)
+        APIClient.shared.avatarCache.removeObject(forKey: "status/\(id)/true" as NSString)
+        DispatchQueue.main.async { NotificationCenter.default.post(name: .tfStatusGone, object: id) }
+    }
+
+    /// Sign-out: the next account starts clean.
+    func clear() {
+        lock.lock(); defer { lock.unlock() }
+        ids = []
+    }
+
+    /// Past its own 24 hours by this phone's clock (expires_at in seconds or milliseconds).
+    static func expired(_ expiresAt: Int64?, now: Date = Date()) -> Bool {
+        guard let e = expiresAt, let d = serverDate(e) else { return false }
+        return d <= now
+    }
 }
 
 enum StatusSeenAt {

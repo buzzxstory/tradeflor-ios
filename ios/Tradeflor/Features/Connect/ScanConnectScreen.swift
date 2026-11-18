@@ -121,6 +121,8 @@ struct ScanConnectScreen: View {
         }
         .onChange(of: scenePhase) { p in
             if p == .background { camera.pause() }
+            // back in front on the Scan tab: the camera comes back by itself (it stayed on "paused" with a button before)
+            if p == .active, tab == .scan, camera.state == .paused, !paste { camera.start() }
         }
         .onChange(of: picked) { item in
             guard let item else { return }

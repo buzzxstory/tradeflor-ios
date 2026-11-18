@@ -35,6 +35,7 @@ struct ContactsPanel: View {
     @State private var contacts: [ContactEntry] = []
     @State private var incoming: [ContactRequest] = []
     @State private var loaded = false
+    @State private var loadFailed = false
     @State private var confirm: Confirm?
     @State private var showScanner = false
     /// Chats opened from here stay above Contacts: Back from the chat returns to Contacts (search and scroll kept),
@@ -63,8 +64,9 @@ struct ContactsPanel: View {
     private var shown: [ContactEntry] {
         let list = contacts.sorted { nameOf($0).localizedCaseInsensitiveCompare(nameOf($1)) == .orderedAscending }
         guard let p = parsed else { return list }
-        let needle = p.value
-        return list.filter { nameOf($0).localizedCaseInsensitiveContains(needle) || $0.username.localizedCaseInsensitiveContains(needle) }
+        // the name, nickname or @username; Arabic letter forms, tashkeel, accents and case do not matter
+        let needle = ListSearch.needle(p.value)
+        return list.filter { ListSearch.matches(needle, nameOf($0), $0.username, $0.alias ?? "") }
     }
 
     private var card: IdentityDetail? {
@@ -119,7 +121,10 @@ struct ContactsPanel: View {
             .fullScreenCover(isPresented: $showScanner) {
                 ScanConnectScreen(initial: .scan, onOpen: { c in
                     showScanner = false
-                    openHere(c)
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 450_000_000) // after the cover has gone
+                        openHere(c)
+                    }
                 }) { text in
                     showScanner = false
                     Task { await handleScanned(text) }
@@ -274,6 +279,10 @@ struct ContactsPanel: View {
             switch f {
             case .searching:
                 Text("ct.searching").font(.system(size: 14.5)).foregroundStyle(CV3.muted)
+            case .nomatch where hideNoMatch:
+                // a plain name ("john") is also tried as a username; when it finds no one but my own contacts match, the
+                // "no one found" line under the field contradicted the list below it
+                EmptyView()
             case .nomatch:
                 Text(String(format: NSLocalizedString("cv3.nomatch", comment: ""), query.trimmingCharacters(in: .whitespaces)))
                     .font(.system(size: 14.5)).foregroundStyle(CV3.muted)
@@ -283,6 +292,12 @@ struct ContactsPanel: View {
                 EmptyView()
             }
         }
+    }
+
+    /// A plain word (no "@", not a PIN) that the server did not know as a username, while my own contacts match it.
+    private var hideNoMatch: Bool {
+        guard case .username? = parsed else { return false }
+        return !query.trimmingCharacters(in: .whitespaces).hasPrefix("@") && !shown.isEmpty
     }
 
     private func isSaved(_ c: IdentityDetail) -> Bool {
@@ -399,7 +414,11 @@ struct ContactsPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             sectionTitle("cv3.mycontacts", count: contacts.count, hot: false).padding(.bottom, 8)
             let list = shown
-            if loaded && list.isEmpty {
+            if loadFailed && contacts.isEmpty {
+                problemLine(Problem(text: NSLocalizedString("cv3.err.load", comment: ""), retry: { Task { await load() } }))
+            } else if !loaded && list.isEmpty {
+                ProgressView().tint(CV3.cyan).frame(maxWidth: .infinity).padding(.vertical, 12)
+            } else if loaded && list.isEmpty {
                 Text(LocalizedStringKey(parsed == nil ? "cv3.none" : "cv3.nomatch.local")).font(.system(size: 14.5)).foregroundStyle(CV3.muted)
             } else {
                 LazyVStack(spacing: 0) {
@@ -467,7 +486,12 @@ struct ContactsPanel: View {
     private func load() async {
         async let c = APIClient.shared.ctContacts(token: token)
         async let i = APIClient.shared.incomingRequests(token: token)
-        contacts = (try? await c) ?? contacts
+        if let list = try? await c {
+            contacts = list
+            loadFailed = false
+        } else {
+            loadFailed = true // said with a retry; it showed "no contacts yet" before
+        }
         incoming = (try? await i) ?? incoming
         loaded = true
     }
@@ -559,6 +583,8 @@ struct ContactsPanel: View {
                 problem = Problem(text: NSLocalizedString("fc.nomatch", comment: ""))
             }
         case .mutual, .meet, .group:
+            // pushed once the scanner's cover has gone (a push during its dismissal could be dropped)
+            try? await Task.sleep(nanoseconds: 450_000_000)
             scanTarget = t
         }
     }

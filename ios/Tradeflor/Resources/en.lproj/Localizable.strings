@@ -893,7 +893,7 @@
 "adm.d.7d" = "7 days";
 "adm.d.30d" = "30 days";
 "adm.d.forever" = "Until restored";
-"adm.official.note" = "New official posts are created on the website.";
+"adm.official.note" = "Create a new official post with the + button, or on the website.";
 "adm.official.none" = "No official posts yet.";
 "adm.views" = "views";
 "adm.publish" = "Publish";
@@ -1871,3 +1871,25 @@
 "grp.unlock" = "Unlock group";
 "grp.locked.none" = "No locked groups. Press and hold a group and choose Lock group.";
 "grp.delete.others" = "Delete for everyone (admin)";
+
+"ux4.cal.stale" = "STALE · last update %@";
+"ux4.adm.official.viewers" = "Different viewers";
+"ux4.adm.pending" = "Sign-up not finished";
+"ux4.adm.nouser" = "no username yet";
+"ux4.adm.nomatch" = "No accounts match.";
+"ux4.adm.sort" = "Sort";
+"ux4.adm.sort.newest" = "Newest registrations";
+"ux4.adm.sort.oldest" = "Oldest registrations";
+"ux4.adm.sort.active" = "Recently active";
+"ux4.adm.sort.username" = "Username";
+"ux4.adm.yes" = "Yes";
+"ux4.adm.no" = "No";
+"ux4.adm.lastactive" = "Last active";
+"ux4.adm.until" = "Suspended until";
+"ux4.adm.by" = "Suspended by";
+"ux4.adm.devices" = "Signed-in devices";
+
+"stx.gone" = "This status is no longer available.";
+"grp.search.invite" = "Use this invite link";
+"grp.public.none" = "No public group matches \"%@\". Ask the owner for the group's link.";
+"cv3.err.load" = "Couldn't load your contacts.";

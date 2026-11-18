@@ -12,6 +12,9 @@ struct StatusStrip: View {
     @State private var myAvatar: String?
     @State private var open: StatusOpen?
     @State private var openOfficial = false
+    /// The Official posts as they were when the ring was tapped: a reload while the viewer is open (every two minutes, or a
+    /// live status event) no longer swaps the list under it, which moved the viewer onto another post
+    @State private var officialShown: [OfficialPost] = []
     @State private var manage = false
 
     private var token: String { store.session?.token ?? "" }
@@ -69,7 +72,7 @@ struct StatusStrip: View {
             StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) {}
         }
         .fullScreenCover(isPresented: $openOfficial) {
-            OfficialViewer(token: token, posts: official?.posts ?? [])
+            OfficialViewer(token: token, posts: officialShown, name: official.flatMap { $0.name.isEmpty ? nil : $0.name })
         }
         .fullScreenCover(isPresented: $manage) {
             StatusCreatorSheet { NotificationCenter.default.post(name: .tfStatusChanged, object: nil) }
@@ -123,7 +126,11 @@ struct StatusStrip: View {
     /// line with the blue verified seal.
     private func officialItem(_ o: OfficialChannel) -> some View {
         let fresh = !o.all_seen
-        return Button { openOfficial = true } label: {
+        return Button {
+            // only posts still within their time (a copy kept from an earlier visit may hold expired ones)
+            officialShown = (o.posts ?? []).filter { !StatusGone.expired($0.expires_at) }
+            if !officialShown.isEmpty { openOfficial = true }
+        } label: {
             VStack(spacing: 4) {
                 ZStack {
                     Circle().fill(RadialGradient(colors: [Theme.hex(0x0F3340), Theme.hex(0x04141B)],
@@ -171,6 +178,8 @@ struct StatusStrip: View {
         async let off = APIClient.shared.official(token: token)
         async let prof = APIClient.shared.profile(token: token)
         groups = (try? await feed) ?? groups
+        // my picture first: the Official retry below returns early (my new photo never reached "My status" while it ran)
+        if let p = try? await prof { myAvatar = p.avatar_id.isEmpty ? nil : p.avatar_id }
         if let o = try? await off {
             official = o
             OfficialFeedCache.keep(o)
@@ -191,6 +200,5 @@ struct StatusStrip: View {
                 officialRetry = 0
             }
         }
-        if let p = try? await prof { myAvatar = p.avatar_id.isEmpty ? nil : p.avatar_id }
     }
 }
