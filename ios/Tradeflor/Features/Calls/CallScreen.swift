@@ -18,8 +18,9 @@ struct CallScreen: View {
             CallBackdrop(photo: photo)
             VStack(spacing: 0) {
                 topBar
-                header.padding(.top, 30)
-                Spacer(minLength: 24)
+                Spacer(minLength: 12)
+                hero
+                Spacer(minLength: 12)
                 bottom
             }
             .padding(.bottom, 8)
@@ -36,56 +37,57 @@ struct CallScreen: View {
 
     // MARK: top
 
+    /// Like WhatsApp's call screen: minimize at the left, the name and the status centred at the top.
     private var topBar: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .top, spacing: 0) {
             Button {
                 calls.showScreen = false
             } label: {
-                Image(systemName: "chevron.backward")
-                    .font(.system(size: 20, weight: .semibold))
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 17, weight: .semibold))
                     .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+                    .background(Color.black.opacity(0.35), in: Circle())
+                    .contentShape(Circle())
             }
             .accessibilityLabel(Text("call.minimize"))
             .opacity(live ? 1 : 0)
             .disabled(!live)
             Spacer(minLength: 8)
-            HStack(spacing: 5) {
-                Image(systemName: "lock.fill").font(.system(size: 11, weight: .semibold))
-                Text("call2.e2e").font(.footnote)
-            }
-            .foregroundStyle(Color.white.opacity(0.75))
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            .accessibilityElement(children: .combine)
+            titleBlock.padding(.top, 2)
             Spacer(minLength: 8)
-            // keeps the encryption line centred (no add-participant: calls are one to one)
+            // keeps the name centred (no add-participant: calls are one to one)
             Color.clear.frame(width: 44, height: 44)
         }
-        .padding(.horizontal, 8)
-        .padding(.top, 4)
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
     }
 
-    // MARK: who and status
-
-    private var header: some View {
-        VStack(spacing: 10) {
-            ZStack {
-                if calls.phase == .outgoing || calls.phase == .incoming { PulseRings(size: 140) }
-                photoCircle(size: 140)
-            }
-            .frame(width: 200, height: 170)
-            .accessibilityHidden(true)
+    private var titleBlock: some View {
+        VStack(spacing: 4) {
             Text(calls.peerName)
-                .font(.title.weight(.semibold))
+                .font(.title2.weight(.bold))
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .padding(.horizontal, 28)
                 .accessibilityAddTraits(.isHeader)
             status
-                .font(.body)
+                .font(.callout)
                 .foregroundStyle(Color.white.opacity(0.8))
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: the big photo
+
+    private var hero: some View {
+        let size = min(UIScreen.main.bounds.width * 0.54, 290)
+        return VStack(spacing: 16) {
+            ZStack {
+                if live { CallAura(size: size, ripples: calls.phase != .active) }
+                photoCircle(size: size)
+            }
+            .frame(width: size * 1.7, height: size * 1.7)
+            .accessibilityHidden(true)
             if calls.peerMuted && calls.phase == .active {
                 Label("call.peer.muted", systemImage: "mic.slash.fill")
                     .font(.footnote.weight(.medium))
@@ -93,8 +95,14 @@ struct CallScreen: View {
                     .background(Color.black.opacity(0.3), in: Capsule())
                     .foregroundStyle(Color.white.opacity(0.85))
             }
+            HStack(spacing: 5) {
+                Image(systemName: "lock.fill").font(.system(size: 11, weight: .semibold))
+                Text("call2.e2e").font(.footnote)
+            }
+            .foregroundStyle(Color.white.opacity(0.6))
+            .lineLimit(1)
+            .accessibilityElement(children: .combine)
         }
-        .accessibilityElement(children: .contain)
     }
 
     private func photoCircle(size: CGFloat) -> some View {
@@ -173,21 +181,36 @@ struct CallScreen: View {
         }
     }
 
-    /// WhatsApp's dark rounded sheet of round buttons. Video is left out: calls are voice only (server and website).
+    /// WhatsApp's dark rounded sheet: Speaker, Message and Mute on the first row, End under them, each with its name.
+    /// Video, More and Share are left out: calls are voice only (server and website), and a button must do something.
     private var panel: some View {
-        HStack(spacing: 0) {
-            CallToggleButton(icon: calls.speaker ? "speaker.wave.3.fill" : "speaker.wave.2.fill", label: "call.speaker",
-                             on: calls.speaker) { calls.toggleSpeaker() }
-                .frame(maxWidth: .infinity)
-            CallToggleButton(icon: "mic.slash.fill", label: "call.mute", on: calls.muted) { calls.toggleMute() }
-                .frame(maxWidth: .infinity)
-            CallRoundButton(icon: "phone.down.fill", color: Theme.hex(0xF0525B), size: 60, label: "call.hangup") {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                calls.hangUp()
+        VStack(spacing: 22) {
+            HStack(spacing: 0) {
+                labelled("call.speaker") {
+                    CallToggleButton(icon: calls.speaker ? "speaker.wave.3.fill" : "speaker.wave.2.fill", label: "call.speaker",
+                                     on: calls.speaker) { calls.toggleSpeaker() }
+                }
+                labelled("call2.message") {
+                    CallToggleButton(icon: "message.fill", label: "call2.message", on: false) {
+                        let conv = calls.conversation
+                        calls.showScreen = false
+                        if let conv { LocalNotifier.shared.tappedConversation = conv }
+                    }
+                    .opacity(calls.conversation == nil ? 0.4 : 1)
+                    .disabled(calls.conversation == nil)
+                }
+                labelled("call.mute") {
+                    CallToggleButton(icon: "mic.slash.fill", label: "call.mute", on: calls.muted) { calls.toggleMute() }
+                }
             }
-            .frame(maxWidth: .infinity)
+            labelled("call.hangup") {
+                CallRoundButton(icon: "phone.down.fill", color: Theme.hex(0xF0525B), size: 64, label: "call.hangup") {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    calls.hangUp()
+                }
+            }
         }
-        .padding(.vertical, 18)
+        .padding(.vertical, 22)
         .padding(.horizontal, 10)
         .background(
             RoundedRectangle(cornerRadius: 34, style: .continuous)
@@ -199,6 +222,15 @@ struct CallScreen: View {
         .padding(.horizontal, 12)
         .opacity(live ? 1 : 0.45)
         .disabled(!live)
+    }
+
+    private func labelled<B: View>(_ title: LocalizedStringKey, @ViewBuilder _ button: () -> B) -> some View {
+        VStack(spacing: 8) {
+            button()
+            Text(title).font(.footnote).foregroundStyle(Color.white.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.8)
+                .accessibilityHidden(true)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var incomingControls: some View {
@@ -327,22 +359,40 @@ struct CallBackdrop: View {
     }
 }
 
-/// Soft rings breathing out of the photo while the call rings.
-private struct PulseRings: View {
+/// Around the photo: a soft teal glow that breathes, a slowly turning gradient ring, and (while it rings or connects) three
+/// ripples spreading out. Calmer once the call is on.
+private struct CallAura: View {
     let size: CGFloat
+    let ripples: Bool
     @State private var go = false
+    @State private var spin = false
+    @State private var breathe = false
 
     var body: some View {
         ZStack {
-            ForEach(0..<2, id: \.self) { i in
-                Circle()
-                    .stroke(Theme.hex(0x08D9D9, 0.5), lineWidth: 2)
-                    .frame(width: size, height: size)
-                    .scaleEffect(go ? 1.35 : 1)
-                    .opacity(go ? 0 : 0.9)
-                    .animation(.easeOut(duration: 1.8).repeatForever(autoreverses: false).delay(Double(i) * 0.9), value: go)
+            Circle()
+                .fill(RadialGradient(colors: [Theme.hex(0x08D9D9, 0.35), Color.clear], center: .center,
+                                     startRadius: size * 0.4, endRadius: size * 0.85))
+                .frame(width: size * 1.7, height: size * 1.7)
+                .scaleEffect(breathe ? 1.06 : 0.94)
+                .animation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true), value: breathe)
+            if ripples {
+                ForEach(0..<3, id: \.self) { i in
+                    Circle()
+                        .stroke(Theme.hex(0x08D9D9, 0.55), lineWidth: 2)
+                        .frame(width: size, height: size)
+                        .scaleEffect(go ? 1.6 : 1)
+                        .opacity(go ? 0 : 0.8)
+                        .animation(.easeOut(duration: 2.4).repeatForever(autoreverses: false).delay(Double(i) * 0.8), value: go)
+                }
             }
+            Circle()
+                .strokeBorder(AngularGradient(colors: [Theme.hex(0x08D9D9), Theme.hex(0x14D99A), Theme.hex(0x08D9D9, 0.05), Theme.hex(0x08D9D9)],
+                                              center: .center), lineWidth: 4)
+                .frame(width: size + 18, height: size + 18)
+                .rotationEffect(.degrees(spin ? 360 : 0))
+                .animation(.linear(duration: 5).repeatForever(autoreverses: false), value: spin)
         }
-        .onAppear { go = true }
+        .onAppear { go = true; spin = true; breathe = true }
     }
 }
