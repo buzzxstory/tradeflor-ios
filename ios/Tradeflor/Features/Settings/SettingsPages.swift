@@ -768,12 +768,12 @@ struct EventsPage: View {
 final class AccountSwitches: ObservableObject {
     @Published var values: [String: Bool] = [:]
     @Published var problem: String?
-    /// The server's own defaults (messaging/prefs.go settingDefaults): "when_focused" and "calls.confirm" are on there,
+    /// The server's own defaults (messaging/prefs.go settingDefaults): "when_focused" and "calls.confirm" is off there since 2026-11-18 (the owner asked: a call starts at once),
     /// and a page that could not read the account showed them off.
     static let defaults: [String: Bool] = [
         "notifications.enabled": true, "notifications.sound": true, "notifications.previews": true, "notifications.when_focused": true,
         "notifications.groups": true, "notifications.mentions": true, "notifications.mentions_in_muted": true,
-        "privacy.read_receipts": true, "privacy.calls_enabled": true, "privacy.calls_contacts_only": false, "calls.confirm": true,
+        "privacy.read_receipts": true, "privacy.calls_enabled": true, "privacy.calls_contacts_only": false, "calls.confirm": false,
     ]
 
     func load(_ token: String) async {
