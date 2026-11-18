@@ -454,7 +454,8 @@ struct GroupInfoView: View {
                         .padding(.top, 12)
                     }
                     if let g = group {
-                        if tab == 0 { infoTab(g) } else { membersTab(g) }
+                        // erased per tab: the page's full type was too deep for the runtime to build (stack overflow crash)
+                        if tab == 0 { AnyView(infoTab(g)) } else { AnyView(membersTab(g)) }
                     } else if loadFailed {
                         VStack(spacing: 12) {
                             Text("chat.action.failed").font(.system(size: 14)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
@@ -595,7 +596,12 @@ struct GroupInfoView: View {
 
     /// A block of Group Info: the owner's view draws rounded cards (#041D26, radius 16); the member view draws flat full-width
     /// blocks separated by the panel's own colour, like Telegram (website 65-group-info-cards.css).
-    @ViewBuilder private func block<C: View>(danger: Bool = false, @ViewBuilder _ content: () -> C) -> some View {
+    /// Erased (AnyView): every card is its own type, so the page's type stays shallow (a deep one crashed the runtime).
+    private func block<C: View>(danger: Bool = false, @ViewBuilder _ content: () -> C) -> AnyView {
+        AnyView(blockBody(danger: danger, content))
+    }
+
+    @ViewBuilder private func blockBody<C: View>(danger: Bool, _ content: () -> C) -> some View {
         if tg {
             VStack(alignment: .leading, spacing: 0) { content() }
                 .padding(.horizontal, 18).padding(.vertical, 4)
@@ -717,15 +723,16 @@ struct GroupInfoView: View {
         .padding(.top, tg ? 10 : 0)
     }
 
+    /// Each section is its own erased view: together their nested types were too deep for the Swift runtime (crash).
     @ViewBuilder private func infoTab(_ g: GrpInfo) -> some View {
-        identity(g)
-        tiles(g)
+        AnyView(identity(g))
+        AnyView(tiles(g))
         if g.isAdmin && (!requests.isEmpty || g.join_approval == true) {
-            joinRequestsCard
+            AnyView(joinRequestsCard
                 .padding(.horizontal, tg ? 14 : 0)
-                .padding(.top, tg ? 12 : 0)
+                .padding(.top, tg ? 12 : 0))
         }
-        if tg { memberBlocks(g) } else { ownerBlocks(g) }
+        if tg { AnyView(memberBlocks(g)) } else { AnyView(ownerBlocks(g)) }
     }
 
     // MARK: join requests (website .jr, 3c68bec): right under the tiles, owners and admins
@@ -999,8 +1006,8 @@ struct GroupInfoView: View {
         }
         SharedMediaCard(token: token, conversationID: groupID)
 
-        inviteBlock(g)
-        management(g)
+        AnyView(inviteBlock(g))
+        AnyView(management(g))
 
         // join requests: the card right under the tiles (infoTab)
 

@@ -183,7 +183,9 @@ struct ChatView: View {
     // `body` is split into small pieces: as one expression (the list, its overlays and every sheet) the compiler could
     // no longer type-check it in reasonable time. Behaviour is the same as when it was one chain.
     var body: some View {
-        chatTail2(chatTail(chatMiddle2(chatMiddle(chatHead2(chatHead(chatColumn))))))
+        // erased between the stages: the whole chain as one type could be too deep for the Swift runtime to build
+        // (the same stack-overflow crash as Group Info, crash report 2026-11-18 13:34)
+        chatTail2(chatTail(AnyView(chatMiddle2(chatMiddle(AnyView(chatHead2(chatHead(AnyView(chatColumn)))))))))
     }
 
     private var chatColumn: some View {
