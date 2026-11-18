@@ -1866,3 +1866,8 @@
 "set.n.os.notyet" = "Tradeflor has not been allowed to send notifications on this iPhone yet.";
 "adm.remove.confirm" = "Remove this status from public view now? It stays in the library.";
 "adm.suspend.confirm" = "Suspend @%@? The account is signed out on every device at once and cannot sign in until it is restored.";
+
+"grp.lock" = "Lock group";
+"grp.unlock" = "Unlock group";
+"grp.locked.none" = "No locked groups. Press and hold a group and choose Lock group.";
+"grp.delete.others" = "Delete for everyone (admin)";

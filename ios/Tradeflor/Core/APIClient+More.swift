@@ -29,10 +29,14 @@ extension APIClient {
 
     // MARK: groups management
 
-    func createGroup(token: String, name: String, description: String, isPublic: Bool, memberIDs: [String]) async throws -> String {
-        let data = try await postJSON("groups", token: token,
-                                      body: ["Name": name, "Description": description, "Privacy": isPublic ? "public" : "private",
-                                             "MemberIDs": memberIDs], key: UUID().uuidString.lowercased())
+    /// The permanent link goes with the group (server POST /groups "Handle"): a taken or invalid link is refused before
+    /// anything is created, instead of a group made without it. The same key on a retry returns the group already made.
+    func createGroup(token: String, name: String, description: String, isPublic: Bool, memberIDs: [String],
+                     handle: String = "", key: String = UUID().uuidString.lowercased()) async throws -> String {
+        var body: [String: Any] = ["Name": name, "Description": description, "Privacy": isPublic ? "public" : "private",
+                                   "MemberIDs": memberIDs]
+        if !handle.isEmpty { body["Handle"] = handle }
+        let data = try await postJSON("groups", token: token, body: body, key: key)
         struct G: Decodable { let conversation_id: String }
         return try decode(G.self, data).conversation_id
     }
@@ -68,12 +72,20 @@ extension APIClient {
 
     /// Joins by an invite link (.../join/<token>) or a permanent link (.../g/<handle>). Empty id = waiting for approval.
     func joinGroup(token: String, link: String) async throws -> String {
-        let s = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        var s = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        // a link shared with "?ref=…" or "#…" after it: the token / handle ends there (it was sent with the query and refused)
+        if let cut = s.firstIndex(where: { $0 == "?" || $0 == "#" }) { s = String(s[..<cut]) }
+        func part(after r: Range<String.Index>) -> String {
+            String(s[r.upperBound...].split(separator: "/").first ?? "")
+        }
         let path: String
         if let r = s.range(of: "/g/") {
-            path = "group-links/\(String(s[r.upperBound...]).split(separator: "/").first ?? "")/join"
+            path = "group-links/\(part(after: r))/join"
         } else if let r = s.range(of: "/join/") {
-            path = "group-invites/\(String(s[r.upperBound...]).split(separator: "/").first ?? "")/join"
+            path = "group-invites/\(part(after: r))/join"
+        } else if s.hasPrefix("@") {
+            // "@mygroup": a public group's permanent link, as the search field takes it
+            path = "group-links/\(String(s.dropFirst()))/join"
         } else {
             path = "group-invites/\(s)/join"
         }

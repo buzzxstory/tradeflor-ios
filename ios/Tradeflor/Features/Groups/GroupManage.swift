@@ -35,6 +35,8 @@ struct CreateGroupView: View {
     @State private var logo: UIImage?
     @State private var busy = false
     @State private var error: String?
+    @State private var createKey = ""
+    @State private var createSig = ""
 
     private var token: String { store.session?.token ?? "" }
     private var isEdit: Bool { editing != nil }
@@ -260,6 +262,7 @@ struct CreateGroupView: View {
     }
 
     private func submit() async {
+        guard !busy else { return } // a second tap before the button greys out
         busy = true
         error = nil
         defer { busy = false }
@@ -279,9 +282,12 @@ struct CreateGroupView: View {
                                                      privacy: g.isOwner && wanted != g.privacy ? wanted : nil)
                 if !handleLocked && !h.isEmpty { try await APIClient.shared.grpSetHandle(token: token, id: id, handle: h) }
             } else {
+                // one key per form content (website createGroup): a retry after a lost answer returns the group already made,
+                // a changed form is a new group
+                let sig = [cleanName, about, isPublic ? "1" : "0", h].joined(separator: "\u{1}")
+                if createSig != sig { createSig = sig; createKey = UUID().uuidString.lowercased() }
                 id = try await APIClient.shared.createGroup(token: token, name: cleanName, description: about, isPublic: isPublic,
-                                                            memberIDs: Array(picked))
-                if !h.isEmpty { try? await APIClient.shared.grpSetHandle(token: token, id: id, handle: h) }
+                                                            memberIDs: Array(picked), handle: h, key: createKey)
             }
             if let logo, let jpeg = GrpImage.squareJPEG(logo) {
                 try? await APIClient.shared.grpUploadAvatar(token: token, id: id, jpeg: jpeg)
@@ -334,7 +340,7 @@ struct JoinGroupView: View {
     }
 
     private func join() async {
-        guard let token = store.session?.token else { return }
+        guard let token = store.session?.token, !busy else { return }
         busy = true
         defer { busy = false }
         do {
@@ -348,7 +354,12 @@ struct JoinGroupView: View {
                 onJoined(id)
             }
         } catch APIError.refused(let why) {
-            info = why.isEmpty ? NSLocalizedString("group.join.bad", comment: "") : why
+            // a bad, expired or used-up link is the server's bare "not found" (404): the app's own words for it
+            let w = why.lowercased()
+            info = why.isEmpty || w == "not found" || w.contains("does not exist") || w.contains("not valid")
+                ? NSLocalizedString("group.join.bad", comment: "") : why
+        } catch APIError.rateLimited {
+            info = NSLocalizedString("login.error.rate", comment: "")
         } catch {
             info = NSLocalizedString("login.error.network", comment: "")
         }
@@ -366,6 +377,16 @@ struct GroupInfoView: View {
     @State private var tab = 0
     @State private var group: GrpInfo?
     @State private var members: [GrpMember] = []
+    /// Current and former members (names for Recent actions).
+    @State private var everyone: [GrpMember] = []
+    /// A change on its way to the server: shown at once, and the base for the next one (two quick switches used to send
+    /// the same old permissions, the second one undoing the first). Cleared once the group is read again.
+    @State private var pendingPerms: GrpPermissions?
+    @State private var pendingFlags: [String: Bool] = [:]
+    @State private var pendingSlow: Int?
+    @State private var creatingInvite = false
+    @State private var loadFailed = false
+    @State private var revoking: Set<String> = []
     @State private var bans: [GrpBan] = []
     @State private var invites: [GrpInvite] = []
     @State private var requests: [GrpJoinRequest] = []
@@ -431,6 +452,13 @@ struct GroupInfoView: View {
                     }
                     if let g = group {
                         if tab == 0 { infoTab(g) } else { membersTab(g) }
+                    } else if loadFailed {
+                        VStack(spacing: 12) {
+                            Text("chat.action.failed").font(.system(size: 14)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
+                            Button("chats.retry") { loadFailed = false; Task { await load() } }
+                                .font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.accent)
+                        }
+                        .frame(maxWidth: .infinity).padding(.top, 60).padding(.horizontal, 20)
                     } else {
                         ProgressView().tint(Theme.accent).frame(maxWidth: .infinity).padding(.top, 60)
                     }
@@ -451,8 +479,10 @@ struct GroupInfoView: View {
             .sheet(isPresented: $manage, onDismiss: { Task { await load() } }) {
                 if let g = group { CreateGroupView(onCreated: { _ in }, editing: g) }
             }
-            .confirmationDialog(Text("grp.leave.confirm"), isPresented: $confirmLeave, titleVisibility: .visible) {
-                Button("grp.leave", role: .destructive) { Task { await leave() } }
+            // the owner is told to hand the group over first (server 409), as in the chat's own menu
+            .confirmationDialog(Text(LocalizedStringKey(owner ? "grp.leave.owner" : "grp.leave.confirm")), isPresented: $confirmLeave,
+                                titleVisibility: .visible) {
+                if !owner { Button("grp.leave", role: .destructive) { Task { await leave() } } }
             }
             .confirmationDialog(Text("grp.delete.confirm"), isPresented: $confirmDelete, titleVisibility: .visible) {
                 Button("grp.delete", role: .destructive) {
@@ -1097,11 +1127,15 @@ struct GroupInfoView: View {
                                 }
                                 Spacer()
                                 Button("grp.revoke") {
+                                    guard !revoking.contains(inv.id) else { return } // a second tap: "not found"
+                                    revoking.insert(inv.id)
                                     Task {
                                         newLink = nil
                                         await run { try await APIClient.shared.grpRevokeInvite(token: token, id: groupID, inviteID: inv.id) }
+                                        revoking.remove(inv.id)
                                     }
                                 }
+                                .disabled(revoking.contains(inv.id))
                                 .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.danger)
                             }
                         }
@@ -1143,6 +1177,9 @@ struct GroupInfoView: View {
     }
 
     private func createInvite(resetAll: Bool) async {
+        guard !creatingInvite else { return } // a second tap made a second link
+        creatingInvite = true
+        defer { creatingInvite = false }
         do {
             if resetAll { for i in invites { try? await APIClient.shared.grpRevokeInvite(token: token, id: groupID, inviteID: i.id) } }
             newLink = try await APIClient.shared.grpCreateInvite(token: token, id: groupID, hours: inviteHours, maxUses: inviteUses)
@@ -1156,33 +1193,36 @@ struct GroupInfoView: View {
 
     /// Group Management: the same switches and choices as the website; every drop-down one width (142), on the right.
     @ViewBuilder private func management(_ g: GrpInfo) -> some View {
-        let perms = g.permissions ?? GrpPermissions(allow_chat: true, allow_media: true, allow_reactions: true, members_can_invite: false,
-                                                    signal_permission: "owner_admins", chat_permission: "everyone")
+        let perms = pendingPerms ?? g.permissions ?? GrpPermissions(allow_chat: true, allow_media: true, allow_reactions: true, members_can_invite: false,
+                                                                    signal_permission: "owner_admins", chat_permission: "everyone")
         block {
             upperLabel("grp.management").padding(.top, 12).padding(.bottom, 2)
-            toggleRow("grp.allow.chat", perms.allow_chat) { v in var p = perms; p.allow_chat = v; await setPerms(p) }
-            toggleRow("grp.allow.media", perms.allow_media) { v in var p = perms; p.allow_media = v; await setPerms(p) }
-            toggleRow("grp.allow.reactions", perms.allow_reactions) { v in var p = perms; p.allow_reactions = v; await setPerms(p) }
-            toggleRow("grp.history", g.history_visible_to_new_members ?? false) { v in
-                await run { try await APIClient.shared.grpUpdate(token: token, id: groupID, historyVisible: v) }
+            // each change starts from the newest choice (pendingPerms), not from the group as last read
+            toggleRow("grp.allow.chat", perms.allow_chat) { v in var p = pendingPerms ?? perms; p.allow_chat = v; await setPerms(p) }
+            toggleRow("grp.allow.media", perms.allow_media) { v in var p = pendingPerms ?? perms; p.allow_media = v; await setPerms(p) }
+            toggleRow("grp.allow.reactions", perms.allow_reactions) { v in var p = pendingPerms ?? perms; p.allow_reactions = v; await setPerms(p) }
+            toggleRow("grp.history", pendingFlags["history"] ?? g.history_visible_to_new_members ?? false) { v in
+                await setFlag("history", v) { try await APIClient.shared.grpUpdate(token: token, id: groupID, historyVisible: v) }
             }
-            toggleRow("grp.approve.new", g.join_approval ?? false) { v in
-                await run { try await APIClient.shared.grpUpdate(token: token, id: groupID, joinApproval: v) }
+            toggleRow("grp.approve.new", pendingFlags["approval"] ?? g.join_approval ?? false) { v in
+                await setFlag("approval", v) { try await APIClient.shared.grpUpdate(token: token, id: groupID, joinApproval: v) }
             }
-            toggleRow("grp.comments", g.comments ?? false, sub: "grp.comments.sub") { v in
-                await run { try await APIClient.shared.grpUpdate(token: token, id: groupID, comments: v) }
+            toggleRow("grp.comments", pendingFlags["comments"] ?? g.comments ?? false, sub: "grp.comments.sub") { v in
+                await setFlag("comments", v) { try await APIClient.shared.grpUpdate(token: token, id: groupID, comments: v) }
             }
-            pickerRow("grp.slow", selection: g.slow_mode ?? 0, options: [(0, "grp.off"), (10, "grp.10s"), (30, "grp.30s"), (60, "grp.1m"),
+            pickerRow("grp.slow", selection: pendingSlow ?? g.slow_mode ?? 0, options: [(0, "grp.off"), (10, "grp.10s"), (30, "grp.30s"), (60, "grp.1m"),
                                                                           (300, "grp.5m"), (900, "grp.15m"), (3600, "grp.1h")]) { v in
+                pendingSlow = v
                 await run { try await APIClient.shared.grpUpdate(token: token, id: groupID, slowMode: v) }
+                if pendingSlow == v { pendingSlow = nil }
             }
             stringPickerRow("grp.signals.who", selection: perms.signal_permission,
                             options: [("owner_only", "grp.owner.only"), ("owner_admins", "grp.owner.admins"), ("all_members", "grp.all.members")]) { v in
-                var p = perms; p.signal_permission = v; await setPerms(p)
+                var p = pendingPerms ?? perms; p.signal_permission = v; await setPerms(p)
             }
             stringPickerRow("grp.chat.permission", selection: perms.chat_permission,
                             options: [("everyone", "grp.everyone"), ("admins_only", "grp.admins.only"), ("restricted", "grp.restricted")]) { v in
-                var p = perms; p.chat_permission = v; await setPerms(p)
+                var p = pendingPerms ?? perms; p.chat_permission = v; await setPerms(p)
             }
             hair()
             Button { tab = 1 } label: { gipRow("person.2", NSLocalizedString("grp.manage.members", comment: ""), chevron: true) }
@@ -1439,8 +1479,8 @@ struct GroupInfoView: View {
     }
 
     private func auditLine(_ a: GrpAudit) -> String {
-        let who = members.first { $0.user_id == a.actor_id }?.title ?? NSLocalizedString("grp.someone", comment: "")
-        let target = a.target_user_id.flatMap { t in members.first { $0.user_id == t }?.title }
+        let who = everyone.first { $0.user_id == a.actor_id }?.title ?? NSLocalizedString("grp.someone", comment: "")
+        let target = a.target_user_id.flatMap { t in everyone.first { $0.user_id == t }?.title }
         var line = "\(who) · \(a.action.replacingOccurrences(of: "_", with: " "))"
         if let target { line += " · \(target)" }
         if let d = a.detail, !d.isEmpty { line += " · \(d)" }
@@ -1467,8 +1507,17 @@ struct GroupInfoView: View {
         Task { await run { try await APIClient.shared.grpAddMember(token: token, id: groupID, username: n) } }
     }
 
+    /// Shown at once; `run` reads the group again afterwards, so a refusal puts the switch back (with the reason).
     private func setPerms(_ p: GrpPermissions) async {
+        pendingPerms = p
         await run { try await APIClient.shared.grpUpdate(token: token, id: groupID, permissions: p) }
+        if pendingPerms == p { pendingPerms = nil } // a newer change keeps its own until it is answered
+    }
+
+    private func setFlag(_ key: String, _ v: Bool, _ work: () async throws -> Void) async {
+        pendingFlags[key] = v
+        await run(work)
+        if pendingFlags[key] == v { pendingFlags[key] = nil }
     }
 
     private func run(_ work: () async throws -> Void) async {
@@ -1493,10 +1542,22 @@ struct GroupInfoView: View {
     }
 
     private func load() async {
-        guard let g = try? await APIClient.shared.grpInfo(token: token, id: groupID) else { return }
+        let g: GrpInfo
+        do {
+            g = try await APIClient.shared.grpInfo(token: token, id: groupID)
+        } catch {
+            // no endless spinner: no longer a member (403), the group gone, or no connection -- said, with Try again
+            if group == nil { loadFailed = true }
+            return
+        }
+        loadFailed = false
         group = g
         if g.isAdmin, let all = try? await APIClient.shared.grpMembers(token: token, id: groupID) {
-            members = all
+            // /members also returns people who left or were removed (active: false, kept to name old messages): they are not
+            // members any more (website GroupInfoPanel: members.filter(m => m.active)); Remove/Ban on them failed with
+            // "not found" and Add members could not re-add them. Their names still serve Recent actions.
+            members = all.filter { $0.active != false }
+            everyone = all
         } else {
             // an ordinary member: the people who posted, plus the owner and admins (GET /groups/{id}/admins, server d772cba)
             var out = (try? await APIClient.shared.list(GrpMember.self, "groups/\(groupID)/senders", token: token)) ?? []
@@ -1504,6 +1565,7 @@ struct GroupInfoView: View {
                 if let i = out.firstIndex(where: { $0.user_id == a.user_id }) { out[i] = a } else { out.append(a) }
             }
             members = out
+            everyone = out
         }
         stats = await APIClient.shared.grpMediaStats(token: token, conversationID: groupID)
         if g.isAdmin || g.can_invite == true { invites = await APIClient.shared.grpInvites(token: token, id: groupID) }

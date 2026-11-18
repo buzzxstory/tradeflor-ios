@@ -1114,8 +1114,8 @@ struct CallsPage: View {
                     .overlay(Circle().stroke(Theme.dyn(0x288CAA, 0x0A8FA0, 0.45, 0.4), lineWidth: 1))
             }
             .buttonStyle(.plain)
-            .disabled(chat == nil || calls.phase != .idle)
-            .opacity(chat == nil || calls.phase != .idle ? 0.45 : 1)
+            .disabled(chat == nil || calls.lineInUse)
+            .opacity(chat == nil || calls.lineInUse ? 0.45 : 1)
             .accessibilityLabel(Text("call.voice"))
         }
         .padding(.leading, 14).padding(.trailing, 12).padding(.vertical, 8)
@@ -1204,6 +1204,8 @@ struct CallsPage: View {
             if let p = sw.problem { Text(p).font(.system(size: 12)).foregroundStyle(Theme.danger) }
         }
         .task { await load() }
+        // a call placed from this list (call back) is in it once it ended: the page stays open under the call screen
+        .onChange(of: calls.phase) { p in if p == .idle && loaded { Task { await load() } } }
         .confirmationDialog(Text("set.c.clear.confirm"), isPresented: $confirmClear, titleVisibility: .visible) {
             Button("set.c.clear", role: .destructive) {
                 guard !clearing else { return }

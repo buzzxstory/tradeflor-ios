@@ -39,6 +39,8 @@ final class LiveConnection: ObservableObject {
     let messages = PassthroughSubject<Message, Never>()
     /// Something changed in a conversation (receipt, reaction, deletion, edit...): the id, so a screen can reload it.
     let changes = PassthroughSubject<String, Never>()
+    /// A group's settings, pins or members changed ("group" / "member" events): its conversation id.
+    let groupChanged = PassthroughSubject<String, Never>()
     /// Call events (type starts with "call."): the type and the raw `data` object.
     let calls = PassthroughSubject<(type: String, data: [String: Any]), Never>()
     /// Someone is typing: (conversation id, user id).
@@ -324,6 +326,13 @@ final class LiveConnection: ObservableObject {
             }
         case "reaction", "deleted", "receipt", "edited", "conversation", "vanished", "notice", "scheduled", "hidden":
             if let id = env.conversation_id { changes.send(id) }
+        case "group", "member":
+            // a group's name, rights, pins or members changed (server group/member events): the chat and list re-read it
+            var id = env.conversation_id
+            if id == nil, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                id = (obj["data"] as? [String: Any])?["conversation_id"] as? String
+            }
+            if let id { groupChanged.send(id); changes.send(id) }
         default:
             break
         }

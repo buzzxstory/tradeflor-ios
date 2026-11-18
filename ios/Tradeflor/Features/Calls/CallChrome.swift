@@ -14,7 +14,7 @@ final class CallDeviceGuard {
     func watch(_ calls: CallManager) {
         subs.removeAll()
         calls.$phase.combineLatest(calls.$speaker)
-            .receive(on: RunLoop.main)
+            .receive(on: DispatchQueue.main) // not RunLoop.main: held back while a list scrolls
             .sink { [weak self] phase, speaker in self?.apply(phase: phase, speaker: speaker) }
             .store(in: &subs)
     }

@@ -40,6 +40,11 @@ struct RootView: View {
     @ObservedObject private var chrome = TabChrome.shared
     @ObservedObject private var flash = FlashHub.shared
     @State private var needsSetup = false
+    /// The call screen and the "Call X?" question, presented only once no sheet is up: SwiftUI cannot present them from the
+    /// root while a sheet (Contacts, Contact info, a member's profile over Group info...) is on screen, so an incoming
+    /// call or a call started there had no screen at all (and no return bar either, showScreen being true).
+    @State private var callCover = false
+    @State private var askCall = false
     @State private var tab: String = {
         #if DEBUG
         // CI only: TF_CI_TAB=status opens on the Status tab for a screenshot.
@@ -112,7 +117,7 @@ struct RootView: View {
             if let id { tab = id.hasPrefix("grp_") ? "groups" : "chats" }
         }
         .confirmationDialog(Text(String(format: NSLocalizedString("call.confirm.title", comment: ""), calls.confirming?.peerName ?? "")),
-                            isPresented: Binding(get: { calls.confirming != nil }, set: { if !$0 { calls.confirming = nil } }),
+                            isPresented: $askCall,
                             titleVisibility: .visible) {
             Button("call.confirm.go") {
                 if let c = calls.confirming { calls.start(conversationID: c.conversationID, peerName: c.peerName, peerID: c.peerID, confirmed: true) }
@@ -120,7 +125,13 @@ struct RootView: View {
             }
             Button("grp.cancel", role: .cancel) { calls.confirming = nil }
         }
-        .fullScreenCover(isPresented: $calls.showScreen) { CallScreen(calls: calls).environmentObject(store).preferredColorScheme(.dark) }
+        .fullScreenCover(isPresented: $callCover) { CallScreen(calls: calls).environmentObject(store).preferredColorScheme(.dark) }
+        .onChange(of: calls.showScreen) { showCall($0) }
+        .onChange(of: callCover) { shown in if !shown && calls.showScreen { calls.showScreen = false } }
+        .onChange(of: calls.confirming?.id) { id in
+            if id == nil { askCall = false } else { afterSheets { askCall = calls.confirming != nil } }
+        }
+        .onChange(of: askCall) { shown in if !shown && calls.confirming != nil { calls.confirming = nil } }
         .safeAreaInset(edge: .top, spacing: 0) {
             if !calls.showScreen && calls.lineInUse {
                 CallReturnBar(calls: calls)
@@ -160,6 +171,7 @@ struct RootView: View {
         .onAppear {
             if let id = notifier.tappedConversation { tab = id.hasPrefix("grp_") ? "groups" : "chats" }
             syncLive()
+            if calls.showScreen { showCall(true) }
             #if DEBUG
             // CI only: TF_CI_SIGNOUT=1 ends the test account's session on the server after the screenshots,
             // so CI runs do not pile up sessions under Linked devices.
@@ -178,6 +190,24 @@ struct RootView: View {
                 Task { await APIClient.shared.relockChats(token: token) }
             }
         }
+    }
+
+    private func showCall(_ want: Bool) {
+        guard want else { callCover = false; return }
+        guard !callCover else { return }
+        afterSheets { if calls.showScreen { callCover = true } }
+    }
+
+    /// Runs `then` once whatever the app presents (sheets, a dialog) is gone: dismissed here first.
+    private func afterSheets(_ then: @escaping () -> Void) {
+        let root = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.rootViewController
+        // the account setup cover is never closed under the person (a call then waits for it, as before)
+        guard let root, let presented = root.presentedViewController, !needsSetup else { then(); return }
+        if presented.isBeingDismissed {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { afterSheets(then) }
+            return
+        }
+        root.dismiss(animated: true, completion: then)
     }
 
     private func syncLive() {

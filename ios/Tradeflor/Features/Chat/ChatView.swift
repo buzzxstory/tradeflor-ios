@@ -69,6 +69,11 @@ struct ChatView: View {
     @State private var myRole = "member"
     @State private var groupCanSendMedia = true
     @State private var groupCanSignals = false
+    @State private var groupCanReact = true
+    /// Former members (left / removed), from the admins' member list.
+    @State private var formerIDs: Set<String> = []
+    /// The server's latest answer about writing here (nil until read): wins over `canSend` from the list.
+    @State private var liveCanSend: Bool?
     @State private var groupComments = false
     @State private var memberCount = 0
     @State private var pins: [GroupPinRef] = []
@@ -162,6 +167,8 @@ struct ChatView: View {
         return byID.values.sorted { $0.seq < $1.seq }
     }
     private var isAdmin: Bool { myRole == "owner" || myRole == "admin" }
+    /// Whether the message bar shows: the group's current answer once read, else what the list said.
+    private var canPost: Bool { liveCanSend ?? canSend }
     private var searchHits: [Message] {
         let q = searchText.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return [] }
@@ -547,7 +554,7 @@ struct ChatView: View {
             .padding()
         } else if let problem, messages.isEmpty {
             Text(problem).foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
-        } else if !loading && messages.isEmpty && pending.isEmpty && canSend {
+        } else if !loading && messages.isEmpty && pending.isEmpty && canPost {
             VStack(spacing: 10) {
                 Text("chat.empty.title").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
                 Text("chat.empty.sub").font(.system(size: 13)).foregroundStyle(Theme.faint).multilineTextAlignment(.center)
@@ -611,7 +618,7 @@ struct ChatView: View {
     @ViewBuilder private var chatFooter: some View {
         if selecting {
             selectBar
-        } else if canSend {
+        } else if canPost {
             composer
                 .background(GeometryReader { g in
                     Color.clear
@@ -696,12 +703,26 @@ struct ChatView: View {
         .task { if isGroup { await loadGroupStatus() } }
         // join requests waiting: on open, when someone asks (live), and every minute
         .task {
+            var first = true
             while isGroup && !Task.isCancelled {
+                // the app's live connection does not pass on group changes (rights, pins): read them again every minute,
+                // so a chat closed or opened by an admin, a mute or a new pin shows without leaving the chat
+                if !first, await refreshRights() {
+                    pins = await APIClient.shared.chGroupPins(token: token, groupID: chat.conversation_id)
+                }
+                first = false
                 if isAdmin { await loadJoinWaiting() }
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
             }
         }
         .onReceive(live.joinRequests) { d in if d["conversation_id"] == chat.conversation_id { Task { await loadJoinWaiting() } } }
+        // the server says this group changed (rights, pins, members): re-read at once instead of waiting for the minute
+        .onReceive(live.groupChanged) { id in
+            guard isGroup, id == chat.conversation_id else { return }
+            Task {
+                if await refreshRights() { pins = await APIClient.shared.chGroupPins(token: token, groupID: chat.conversation_id) }
+            }
+        }
         .onChange(of: showInfo) { open in if !open { Task { await loadJoinWaiting() } } }
         #if DEBUG
         // CI only: TF_CI_GROUP_INFO=1 opens Group Info over the group chat, for a screenshot
@@ -784,6 +805,11 @@ struct ChatView: View {
                             isPresented: $showDelete, titleVisibility: .visible) {
             if deleteTargets.contains(where: { $0.sender_id == me && !$0.isDeleted && $0.kind != "call" }) {
                 Button("chat.unsend", role: .destructive) { Task { await deleteSelected(everyone: true) } }
+            }
+            // the group's owner and admins may delete other people's messages for everyone (server deleteOne, audited;
+            // website confirmDelete othersForAll)
+            if isGroup && isAdmin && deleteTargets.contains(where: { $0.sender_id != me && !$0.isDeleted && $0.kind != "call" }) {
+                Button("grp.delete.others", role: .destructive) { Task { await deleteSelected(everyone: true, others: true) } }
             }
             Button("chat.delete.me", role: .destructive) { Task { await deleteSelected(everyone: false) } }
         }
@@ -1023,7 +1049,7 @@ struct ChatView: View {
                 Button { calls.start(conversationID: chat.conversation_id, peerName: chat.title, peerID: chat.peer_id) } label: {
                     Image(systemName: "phone").font(.system(size: 18)).foregroundStyle(Theme.muted).frame(width: 36, height: 44)
                 }
-                .disabled(calls.phase != .idle)
+                .disabled(calls.lineInUse)
                 .accessibilityLabel(Text("call.voice"))
             }
             Button { searchOpen.toggle(); searchText = "" } label: {
@@ -1092,7 +1118,8 @@ struct ChatView: View {
             items.append(ChatMenuItem("note.record", systemImage: "video.fill", tint: .note) { showNoteRecorder = true })
         }
         if isGroup {
-            if isAdmin { items.append(ChatMenuItem("poll.new", systemImage: "chart.bar", tint: .poll) { showPoll = true }) }
+            // anyone who may write may start a poll (server POST /groups/{id}/polls: the send gate; website: can_send)
+            items.append(ChatMenuItem("poll.new", systemImage: "chart.bar", tint: .poll) { showPoll = true })
             if groupCanSignals { items.append(ChatMenuItem("signal.new", systemImage: "chart.line.uptrend.xyaxis", tint: .signal) { showSignal = true }) }
         }
         items.append(ChatMenuItem("schedule.title", systemImage: "clock", tint: .schedule) { showSchedule = true })
@@ -1129,7 +1156,7 @@ struct ChatView: View {
 
     private var mentionMatches: [GroupMember] {
         guard let q = mentionQuery else { return [] }
-        return Array(members.filter { $0.user_id != me && (q.isEmpty || $0.username.lowercased().hasPrefix(q) || $0.title.lowercased().hasPrefix(q)) }.prefix(6))
+        return Array(members.filter { $0.user_id != me && !formerIDs.contains($0.user_id) && (q.isEmpty || $0.username.lowercased().hasPrefix(q) || $0.title.lowercased().hasPrefix(q)) }.prefix(6))
     }
 
     private var typingBar: some View {
@@ -1418,11 +1445,14 @@ struct ChatView: View {
     }
 
     private var pinnedBar: some View {
-        let p = pins[min(pinIndex, pins.count - 1)]
+        // a pin removed meanwhile (the list got shorter): never "3/2"
+        let at = min(pinIndex, pins.count - 1)
+        let p = pins[at]
         return HStack(spacing: 4) {
             Button {
-                pinIndex = (pinIndex + 1) % max(pins.count, 1)
+                pinIndex = (at + 1) % max(pins.count, 1)
                 if let m = messages.first(where: { $0.id == p.message_id }) { searchText = ""; jumpTarget = m.id }
+                else { flash("chat.reply.notloaded") } // older than what is loaded: said, not a tap that does nothing
             } label: {
                 HStack(spacing: 10) {
                     Rectangle().fill(Theme.accent).frame(width: 3, height: 32)
@@ -1436,7 +1466,7 @@ struct ChatView: View {
                             .frame(width: 34, height: 34).background(Theme.surface, in: RoundedRectangle(cornerRadius: 6))
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(pins.count > 1 ? String(format: NSLocalizedString("pin.n.of", comment: ""), pinIndex + 1, pins.count)
+                        Text(pins.count > 1 ? String(format: NSLocalizedString("pin.n.of", comment: ""), at + 1, pins.count)
                                             : NSLocalizedString("pin.one", comment: ""))
                             .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.accent)
                         // the thumbnail already says it is a photo: no leading picture sign
@@ -1477,12 +1507,7 @@ struct ChatView: View {
 
     private func loadMeta() async {
         if isGroup {
-            let g = await APIClient.shared.chGroupRole(token: token, groupID: chat.conversation_id)
-            myRole = g.role
-            groupCanSendMedia = g.canSendMedia
-            groupCanSignals = g.canPostSignals
-            groupComments = g.comments
-            memberCount = g.memberCount
+            await refreshRights()
             pins = await APIClient.shared.chGroupPins(token: token, groupID: chat.conversation_id)
             if let doc = try? await APIClient.shared.getFocus(token: token, groupID: chat.conversation_id) {
                 focusDoc = doc
@@ -1496,6 +1521,23 @@ struct ChatView: View {
         }
     }
 
+    /// What I may do in this group now (GET /groups/{id}): the role, writing, media, signals, reactions. The list's `can_send`
+    /// was only true when the list was read: an admin closing the chat (or muting me, or opening it again) changes it.
+    /// A read that fails keeps what is known.
+    @discardableResult
+    private func refreshRights() async -> Bool {
+        let g = await APIClient.shared.chGroupRole(token: token, groupID: chat.conversation_id)
+        guard g.ok else { return false }
+        myRole = g.role
+        liveCanSend = g.canSend
+        groupCanSendMedia = g.canSendMedia
+        groupCanSignals = g.canPostSignals
+        groupCanReact = g.canReact
+        groupComments = g.comments
+        memberCount = g.memberCount
+        return true
+    }
+
     /// Who is who in the group. Everyone may read the people who posted (GET /groups/{id}/senders, website listGroupSenders);
     /// only the owner and admins may read the whole member directory (/members), which adds those who never posted.
     private func loadPeople() async {
@@ -1504,6 +1546,8 @@ struct ChatView: View {
         for p in (try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/admins", token: token)) ?? [] { all[p.user_id] = p }
         for p in (try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(chat.conversation_id)/members", token: token)) ?? [] { all[p.user_id] = p }
         let list = Array(all.values)
+        // people who left or were removed keep their names on old messages, but are not offered for "@"
+        formerIDs = Set(list.filter { $0.active == false }.map(\.user_id))
         members = list.map { GroupMember(user_id: $0.user_id, username: $0.username, display_name: $0.display_name) }
         lookAlike = NameSkeleton.lookAlikeIDs(members)
         memberNames = Dictionary(list.map { ($0.user_id, $0.title) }, uniquingKeysWith: { a, _ in a })
@@ -1619,7 +1663,7 @@ struct ChatView: View {
         return failed
     }
 
-    private func deleteSelected(everyone: Bool) async {
+    private func deleteSelected(everyone: Bool, others: Bool = false) async {
         let targets = deleteTargets
         let asked = Set(targets.map(\.id))
         var ids = targets.map(\.id)
@@ -1632,7 +1676,8 @@ struct ChatView: View {
         var failed: [String] = []
         if everyone {
             // unsend only my own messages that are still there; then everything chosen leaves my view too (web b9833d1)
-            let mine = targets.filter { $0.sender_id == me && !$0.isDeleted && $0.kind != "call" }.map(\.id)
+            // (an admin's "for everyone" takes the others' messages too; one the server refuses still leaves my view below)
+            let mine = targets.filter { ($0.sender_id == me || (others && isGroup && isAdmin)) && !$0.isDeleted && $0.kind != "call" }.map(\.id)
             failed += await inBatches(mine) { try await APIClient.shared.chDeleteBatch(token: token, ids: $0) }
         }
         let hideFailed = await inBatches(ids.filter { !failed.contains($0) }) { chunk in
@@ -1779,7 +1824,7 @@ struct ChatView: View {
 
     // MARK: sending
 
-    private func canEdit(_ m: Message) -> Bool { ChatEdit.canEdit(m, me: me) && canSend && !restricted }
+    private func canEdit(_ m: Message) -> Bool { ChatEdit.canEdit(m, me: me) && canPost && !restricted }
 
     private func startEdit(_ m: Message) {
         replyingTo = nil
@@ -1834,7 +1879,7 @@ struct ChatView: View {
 
     @ViewBuilder private func messageContent(_ m: Message) -> some View {
         if m.kind == "poll" && !m.isDeleted {
-            PollCard(message: m, me: me, canVote: canSend) { opts in
+            PollCard(message: m, me: me, canVote: canPost || (isGroup && groupCanReact)) { opts in
                 Task {
                     if let updated = try? await APIClient.shared.chVote(token: token, messageID: m.id, options: opts) { merge([updated]) }
                 }
@@ -1916,7 +1961,7 @@ struct ChatView: View {
             token: token, items: items, startID: v.messageID ?? v.id, me: me,
             actions: MediaViewerActions(
                 forward: !restricted,
-                reply: canSend ? { m in replyingTo = m; composerFocused = true } : nil,
+                reply: canPost ? { m in replyingTo = m; composerFocused = true } : nil,
                 showInChat: { m in searchText = ""; jumpTarget = m.id },
                 delete: { m in deleteTargets = [m]; showDelete = true },
                 react: { m, e in Task { await react(m, e) } }))
@@ -1954,7 +1999,14 @@ struct ChatView: View {
     }
 
     private func react(_ m: Message, _ emoji: String) async {
-        if let updated = try? await APIClient.shared.react(token: token, messageID: m.id, emoji: emoji) { merge([updated]) }
+        do {
+            merge([try await APIClient.shared.react(token: token, messageID: m.id, emoji: emoji)])
+        } catch APIError.refused(let why) {
+            // e.g. reactions turned off in this group: said, instead of a tap that does nothing
+            flashText(why.isEmpty || why == "forbidden" ? NSLocalizedString("chat.action.failed", comment: "") : why)
+        } catch {
+            flash("chat.action.failed")
+        }
     }
 
     private func delete(_ m: Message, everyone: Bool) async {

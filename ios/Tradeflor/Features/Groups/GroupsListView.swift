@@ -28,24 +28,35 @@ struct GroupsListView: View {
     /// each folder's icon and colour, for the chips (website FolderTabs)
     @State private var folderIcons: [String: String] = [:]
     @State private var folderColors: [String: String] = [:]
+    /// Lock group / Unlock group from a row's menu (website GroupsView "lock", as Chats' LockChatSheet).
+    @State private var lockSheetFor: GroupSummary?
 
     private var token: String { store.session?.token ?? "" }
     private var me: String { store.session?.userID ?? "" }
 
     private func isUnread(_ g: GroupSummary) -> Bool { g.unread_count > 0 || (prefs[g.conversation_id]?.marked_unread ?? false) }
-    private var archivedCount: Int { groups.filter { prefs[$0.conversation_id]?.archived ?? false }.count }
+    /// Groups I locked (Chat Lock; GET /groups says so per group): kept out of the list and its circles, under the Locked chip
+    /// (website: groups.filter(!locks.has), groupTab "locked").
+    private var lockedIDs: Set<String> { Set(extras.values.filter { $0.locked == true }.map(\.conversation_id)) }
+    private func isLocked(_ g: GroupSummary) -> Bool { lockedIDs.contains(g.conversation_id) }
+    private var archivedCount: Int { groups.filter { !isLocked($0) && (prefs[$0.conversation_id]?.archived ?? false) }.count }
 
     private var shown: [GroupSummary] {
-        var g = groups.filter { showArchived == (prefs[$0.conversation_id]?.archived ?? false) }
+        let locked = lockedIDs
+        var g = filter == "locked"
+            ? groups.filter { locked.contains($0.conversation_id) }
+            : groups.filter { !locked.contains($0.conversation_id) && showArchived == (prefs[$0.conversation_id]?.archived ?? false) }
         switch filter {
-        case "all": break
+        case "all", "locked": break
         case "unread": g = g.filter { isUnread($0) }
         default:
             if let f = folders.first(where: { $0.id == filter }) {
                 g = g.filter { f.contains(id: $0.conversation_id, title: $0.name, unread: isUnread($0)) }
             }
         }
-        let q = query.trimmingCharacters(in: .whitespaces)
+        // "Search groups or @link": a leading "@" is part of how a link is typed, not of a name
+        var q = query.trimmingCharacters(in: .whitespaces)
+        if q.hasPrefix("@") { q.removeFirst() }
         if !q.isEmpty { g = g.filter { $0.name.localizedCaseInsensitiveContains(q) } }
         g.sort { a, b in
             let pa = prefs[a.conversation_id]?.pinned_at ?? 0, pb = prefs[b.conversation_id]?.pinned_at ?? 0
@@ -119,10 +130,21 @@ struct GroupsListView: View {
             .sheet(item: $joining) { d in
                 InviteJoinView(handle: d.handle) { id in Task { await open(id) } }
             }
-            .confirmationDialog(Text("grp.leave.confirm"), isPresented: Binding(get: { leaving != nil }, set: { if !$0 { leaving = nil } }),
+            .sheet(item: $lockSheetFor) { g in
+                LockChatSheet(conversationID: g.conversation_id, name: g.name, locked: isLocked(g), isGroup: true) {
+                    Task { await load() }
+                }
+                .environmentObject(store)
+            }
+            // the owner cannot just leave (server: transfer ownership first, 409): told so, with no Leave button (website
+            // GroupsView confirm: myRole !== "owner")
+            .confirmationDialog(Text(LocalizedStringKey(leaving?.my_role == "owner" ? "grp.leave.owner" : "grp.leave.confirm")),
+                                isPresented: Binding(get: { leaving != nil }, set: { if !$0 { leaving = nil } }),
                                 titleVisibility: .visible) {
-                Button("grp.leave", role: .destructive) {
-                    if let g = leaving { Task { await leave(g) } }
+                if leaving?.my_role != "owner" {
+                    Button("grp.leave", role: .destructive) {
+                        if let g = leaving { Task { await leave(g) } }
+                    }
                 }
             }
             .alert(Text(problem ?? ""), isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
@@ -136,9 +158,14 @@ struct GroupsListView: View {
             try? await Task.sleep(nanoseconds: 350_000_000)
             if Task.isCancelled { return }
             let found = await APIClient.shared.grpDiscover(token: token, query: q)
-            discovered = found.filter { !($0.already_member ?? false) }
+            if Task.isCancelled { return } // a newer search is on its way: an older answer never replaces it
+            // a group I am already in shows in my own rows; one found only by its @link (its name does not match) stays here,
+            // where its sheet offers "Open" (group names are unique on the server)
+            let onScreen = Set(shown.map { $0.name.lowercased() })
+            discovered = found.filter { !($0.already_member ?? false) || !onScreen.contains($0.name.lowercased()) }
         }
         .onReceive(live.messages) { m in if m.conversation_id.hasPrefix("grp_") { reloadSoon() } }
+        .onReceive(live.groupChanged) { _ in reloadSoon() }
     }
 
     /// Website phone header (GroupsView.tsx .sidebar-head): the big "Groups" and the 43 pt square new-group button
@@ -183,7 +210,7 @@ struct GroupsListView: View {
     /// unread messages, then the most recent; a lit ring when a group has unread messages; a tap opens it.
     @ViewBuilder private var circles: some View {
         if query.isEmpty {
-            let open = groups.filter { !(prefs[$0.conversation_id]?.archived ?? false) }
+            let open = groups.filter { !(prefs[$0.conversation_id]?.archived ?? false) && !isLocked($0) }
             let pinned = open.filter { prefs[$0.conversation_id]?.pinned ?? false }
                 .sorted { (prefs[$0.conversation_id]?.pinned_at ?? 0) > (prefs[$1.conversation_id]?.pinned_at ?? 0) }
             let rest = open.filter { !(prefs[$0.conversation_id]?.pinned ?? false) }
@@ -237,13 +264,17 @@ struct GroupsListView: View {
                          iconColor: ListLook.folderColor(folderColors[f.id] ?? ""), count: unreadIn(f),
                          selected: filter == f.id) { filter = f.id }
             }
+            if !lockedIDs.isEmpty || filter == "locked" {
+                ListChip(title: NSLocalizedString("ux1.chips.locked", comment: ""), icon: "lock", count: lockedIDs.count, plainCount: true,
+                         selected: filter == "locked") { filter = "locked"; showArchived = false }
+            }
         }
     }
 
     /// "Archived (n)" / "Back to Groups" under the chips (04-app-shell.css .conv-archived-toggle).
     @ViewBuilder private var archivedToggle: some View {
         if archivedCount > 0 || showArchived {
-            Button { showArchived.toggle() } label: {
+            Button { showArchived.toggle(); if filter == "locked" { filter = "all" } } label: {
                 HStack(spacing: 9) {
                     Image(systemName: "archivebox").font(.system(size: 14))
                     Text(showArchived ? NSLocalizedString("grp.back", comment: "")
@@ -262,17 +293,19 @@ struct GroupsListView: View {
         }
     }
 
-    private var unreadTotal: Int { groups.filter { isUnread($0) }.count }
+    /// Locked groups never count (website unreadCount: !locks.has(g.id) && isUnreadGroup(g)).
+    private var unreadTotal: Int { groups.filter { isUnread($0) && !isLocked($0) }.count }
 
     private func unreadIn(_ f: ChatFolder) -> Int {
-        groups.filter { isUnread($0) && f.contains(id: $0.conversation_id, title: $0.name, unread: true) }.count
+        groups.filter { isUnread($0) && !isLocked($0) && f.contains(id: $0.conversation_id, title: $0.name, unread: true) }.count
     }
 
     @ViewBuilder private var content: some View {
         if loading && groups.isEmpty {
             ProgressView().tint(Theme.accent).padding(.top, 60)
         } else if shown.isEmpty {
-            ListEmptyNote(text: NSLocalizedString(showArchived ? "grp.archived.none" : (filter == "unread" ? "grp.unread.none" : "groups.empty"), comment: ""))
+            ListEmptyNote(text: NSLocalizedString(filter == "locked" ? "grp.locked.none"
+                                                  : (showArchived ? "grp.archived.none" : (filter == "unread" ? "grp.unread.none" : "groups.empty")), comment: ""))
         } else {
             let rows = shown
             LazyVStack(spacing: 0) {
@@ -371,6 +404,9 @@ struct GroupsListView: View {
     @ViewBuilder private func rowMenu(_ g: GroupSummary) -> some View {
         let p = prefs[g.conversation_id]
         let id = g.conversation_id
+        Button { lockSheetFor = g } label: {
+            Label(LocalizedStringKey(isLocked(g) ? "grp.unlock" : "grp.lock"), systemImage: isLocked(g) ? "lock.open" : "lock")
+        }
         Button { change { try await APIClient.shared.setPrefs(token: token, conversationID: id, pinned: !(p?.pinned ?? false)) } } label: {
             Label(LocalizedStringKey((p?.pinned ?? false) ? "grp.unpin" : "grp.pin"), systemImage: (p?.pinned ?? false) ? "pin.slash" : "pin")
         }
@@ -444,7 +480,8 @@ struct GroupsListView: View {
         do {
             try await APIClient.shared.grpRemove(token: token, id: g.conversation_id, userID: "")
         } catch APIError.refused(let why) {
-            problem = why.isEmpty ? NSLocalizedString("grp.leave.owner", comment: "") : why
+            // 409 "transfer ownership before leaving the group" is the server's English: the app's own words instead
+            problem = (why.isEmpty || why.contains("transfer ownership")) ? NSLocalizedString("grp.leave.owner", comment: "") : why
         } catch {
             problem = NSLocalizedString("chat.action.failed", comment: "")
         }
@@ -490,6 +527,8 @@ struct GroupsListView: View {
             prefs = Dictionary(list.map { ($0.conversation_id, $0) }, uniquingKeysWith: { a, _ in a })
         }
         extras = await APIClient.shared.grpListExtras(token: token)
+        // a locked group never shows in the tab's badge either (Chats does the same for locked chats)
+        BadgeStore.shared.groups = groups.filter { $0.unread_count > 0 && !isLocked($0) }.count
         if folders.isEmpty { await reloadFolders() }
     }
 
@@ -614,6 +653,7 @@ struct InviteJoinView: View {
     }
 
     private func join() async {
+        guard !busy else { return }
         busy = true
         defer { busy = false }
         do {

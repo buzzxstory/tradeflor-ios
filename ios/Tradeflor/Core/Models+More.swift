@@ -21,6 +21,8 @@ struct GroupMemberFull: Decodable, Identifiable {
     let display_name: String?
     let avatar_id: String?
     let role: String
+    /// false: left or removed (GET /groups/{id}/members keeps them to name old messages); absent elsewhere
+    var active: Bool? = nil
     var id: String { user_id }
     var title: String { (display_name?.isEmpty == false ? display_name : nil) ?? username }
 }

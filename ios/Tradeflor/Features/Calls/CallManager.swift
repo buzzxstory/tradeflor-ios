@@ -63,6 +63,14 @@ final class CallManager: NSObject, ObservableObject {
     private var role: Role = .caller
     private var acknowledged = false
     private var uuid = UUID()
+    /// This phone started the call through CallKit (CXStartCallAction): CallKit is told when it connects, also after a
+    /// glare merge turned us into the callee.
+    private var startedHere = false
+    /// Accept was tapped in the app: a second tap (or CallKit's answer racing it) must not answer twice.
+    private var answering = false
+    /// The 1.8 s "Call ended" linger; a new call that starts meanwhile cancels it (or it would reset the new call).
+    private var linger: Task<Void, Never>?
+    private var observers: [NSObjectProtocol] = []
 
     private static let factory: RTCPeerConnectionFactory = {
         _ = RTCInitializeSSL()
@@ -108,6 +116,54 @@ final class CallManager: NSObject, ObservableObject {
         CallDeviceGuard.shared.watch(self) // proximity sensor and no auto-lock during a call
         RTCAudioSession.sharedInstance().useManualAudio = true
         RTCAudioSession.sharedInstance().isAudioEnabled = false
+        let nc = NotificationCenter.default
+        // AirPods connected, the speaker override dropped by iOS...: the Speaker button follows the real route
+        observers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.routeChanged() }
+        })
+        // only matters when CallKit is not managing the audio (it refused the call, or reset): an interruption (a phone
+        // call, Siri) leaves the session off, and nothing would switch it back on
+        observers.append(nc.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] n in
+            let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let began = raw.flatMap { AVAudioSession.InterruptionType(rawValue: $0) } == .began
+            Task { @MainActor in self?.interrupted(began: began) }
+        })
+    }
+
+    private func routeChanged() {
+        guard lineInUse, AVAudioSession.sharedInstance().category == .playAndRecord else { return }
+        let onSpeaker = AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
+        if speaker != onSpeaker { speaker = onSpeaker }
+    }
+
+    private func interrupted(began: Bool) {
+        guard ownAudio, lineInUse else { return }
+        let s = RTCAudioSession.sharedInstance()
+        if began { s.isAudioEnabled = false; return }
+        s.lockForConfiguration()
+        try? s.setActive(true)
+        s.unlockForConfiguration()
+        s.isAudioEnabled = true
+    }
+
+    /// Clears what the previous call left (its "Call ended" linger may still be on) before a new call starts.
+    private func beginCall() {
+        linger?.cancel(); linger = nil
+        if phase == .ended { phase = .idle }
+        connectedAt = nil
+        muted = false
+        speaker = false
+        peerMuted = false
+        ringing = false
+        reconnecting = false
+        endReason = nil
+        lastDuration = nil
+        userEnding = false
+        localReason = nil
+        acknowledged = false
+        startedHere = false
+        answering = false
+        held = false
     }
 
     // MARK: wiring
@@ -119,8 +175,10 @@ final class CallManager: NSObject, ObservableObject {
         self.me = userID
         live.callInProgress = phase != .idle && phase != .ended
         subs.removeAll()
-        live.calls.receive(on: RunLoop.main).sink { [weak self] ev in self?.handle(ev.type, ev.data) }.store(in: &subs)
-        live.opened.receive(on: RunLoop.main).sink { [weak self] in self?.send("call.sync", [:]) }.store(in: &subs)
+        // DispatchQueue.main, not RunLoop.main: RunLoop.main only delivers in the default run-loop mode, so while a finger
+        // scrolls a list an incoming call (and every ICE candidate of a running call) waited until the scroll stopped
+        live.calls.receive(on: DispatchQueue.main).sink { [weak self] ev in self?.handle(ev.type, ev.data) }.store(in: &subs)
+        live.opened.receive(on: DispatchQueue.main).sink { [weak self] in self?.send("call.sync", [:]) }.store(in: &subs)
         Task { enabled = (try? await APIClient.shared.callsEnabled(token: token)) ?? false }
         applyRingSetting()
     }
@@ -134,7 +192,9 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     func detach() {
-        if phase != .idle { hangUp() }
+        confirming = nil
+        // signing out: the socket closes right after this, so call.ended would never come (the call screen stayed 5 s)
+        if lineInUse { hangUp(); finish() }
         subs.removeAll()
         token = ""
         enabled = false
@@ -155,13 +215,15 @@ final class CallManager: NSObject, ObservableObject {
     private var starting = false
 
     func start(conversationID: String, peerName: String, peerID: String? = nil, confirmed: Bool = false) {
-        guard phase == .idle, enabled, !starting else { return }
+        // .ended is the 1.8 s "Call ended" linger: calling back at once is allowed (web: busy() is false once ended)
+        guard !lineInUse, enabled, !starting else { return }
         starting = true
         if !confirmed {
             Task {
                 // unread (offline, slow): asks, as the server's default (calls.confirm is on unless turned off)
                 let ask = ((try? await APIClient.shared.stSettings(token: token)) ?? [:])["calls.confirm"] ?? true
                 starting = false
+                guard !lineInUse else { return } // a call rang in while the setting was read
                 if ask { confirming = PendingCall(conversationID: conversationID, peerName: peerName, peerID: peerID) }
                 else { start(conversationID: conversationID, peerName: peerName, peerID: peerID, confirmed: true) }
             }
@@ -169,17 +231,26 @@ final class CallManager: NSObject, ObservableObject {
         }
         Task {
             defer { starting = false }
-            guard await micAllowed() else { endReason = "mic_denied"; finish(); return }
-            let id = UUID()
-            uuid = id
-            callID = id.uuidString.lowercased()
+            let allowed = await micAllowed()
+            // a call rang in while the permission prompt was up: that one goes on (this one would have overwritten it and
+            // left its CallKit call ringing forever)
+            guard !lineInUse else { return }
+            beginCall()
             self.conversationID = conversationID
             self.peerName = peerName
             self.peerID = peerID
+            guard allowed else {
+                // the end card says why, with the person's name (it showed nothing, or the previous call's name)
+                callID = nil
+                endReason = "mic_denied"
+                finish()
+                return
+            }
+            let id = UUID()
+            uuid = id
+            callID = id.uuidString.lowercased()
             role = .caller
-            acknowledged = false
-            userEnding = false
-            localReason = nil
+            startedHere = true
             phase = .outgoing
             showScreen = true
             let handle = CXHandle(type: .generic, value: peerName)
@@ -193,15 +264,41 @@ final class CallManager: NSObject, ObservableObject {
                     else { self.provider.reportCall(with: id, updated: self.callCapabilities()) }
                 }
             }
-            send("call.invite", ["call_id": callID ?? "", "conversation_id": conversationID])
-            arm(seconds: 70) { [weak self] in self?.hangUp() }
+            arm(seconds: 70) { [weak self] in self?.localReason = "no_answer"; self?.hangUp() }
+            let cid = callID ?? ""
+            if !sendInvite() {
+                // socket down (backoff after a blip): the invite was silently lost and the phone said "Calling..." for
+                // 70 s. Reconnect now; call.sync on the new socket sends it (see "call.sync"); no socket in 10 s: offline.
+                live?.reconnectNow()
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    guard let self, self.callID == cid, self.phase == .outgoing, !self.acknowledged,
+                          !(self.live?.connected ?? false) else { return }
+                    self.endReason = "offline"
+                    self.finish()
+                }
+            }
         }
     }
 
+    @discardableResult
+    private func sendInvite() -> Bool {
+        guard let id = callID, let conv = conversationID else { return false }
+        return send("call.invite", ["call_id": id, "conversation_id": conv])
+    }
+
     func accept() {
-        guard phase == .incoming else { return }
+        guard phase == .incoming, !answering else { return }
+        answering = true
         callController.request(CXTransaction(action: CXAnswerCallAction(call: uuid))) { [weak self] err in
-            if err != nil { Task { @MainActor in self?.audioWithoutCallKit(); self?.doAccept() } }
+            guard err != nil else { return }
+            // CallKit no longer knows the call (reset, or refused it): answer without it. Only while it still rings here:
+            // a failed second request after CallKit's own answer turned on a second, app-owned audio session
+            Task { @MainActor in
+                guard let self, self.phase == .incoming else { return }
+                self.audioWithoutCallKit()
+                self.doAccept()
+            }
         }
     }
 
@@ -216,24 +313,29 @@ final class CallManager: NSObject, ObservableObject {
                 finish()
                 return
             }
+            // the call may have ended while the permission prompt was up
+            guard phase == .connecting, callID == id else { return }
             send("call.accept", ["call_id": id])
-            arm(seconds: 45) { [weak self] in self?.hangUp() }
+            arm(seconds: 45) { [weak self] in self?.localReason = "ice_timeout"; self?.hangUp() }
         }
     }
 
     func decline() {
         guard phase == .incoming, let id = callID else { return }
+        userEnding = true
         send("call.decline", ["call_id": id])
         endReason = "declined"
         finish()
     }
 
     func hangUp() {
+        // still ringing here: a decline (offline it ended with no reason and posted "Missed voice call" for a call the
+        // person turned down)
+        if phase == .incoming { decline(); return }
         userEnding = true
         guard let id = callID else { finish(); return }
         switch phase {
         case .outgoing: send("call.cancel", ["call_id": id])
-        case .incoming: send("call.decline", ["call_id": id])
         case .connecting, .active: send("call.hangup", ["call_id": id])
         default: break
         }
@@ -250,7 +352,7 @@ final class CallManager: NSObject, ObservableObject {
 
     /// CallKit normally activates the call's audio session (provider didActivate). When it refused the call, the app does
     /// it itself, or WebRTC never starts the microphone and speaker (and iOS suspends the app in the background).
-    private var ownAudio = false
+    private var ownAudio = false { didSet { callAudioOwned.value = ownAudio } }
     private func audioWithoutCallKit() {
         guard !ownAudio else { return }
         ownAudio = true
@@ -317,11 +419,13 @@ final class CallManager: NSObject, ObservableObject {
         let cid = d["call_id"] as? String
         switch type {
         case "call.incoming":
-            guard phase == .idle, (d["callee_id"] as? String) == me, let id = cid else { return }
+            // .ended (the "Call ended" linger) is free: a call back within 1.8 s was never shown (web busy() is false then)
+            guard !lineInUse, (d["callee_id"] as? String) == me, let id = cid else { return }
             ringIncoming(d, id: id)
         case "call.outgoing":
             let summary = (d["call"] as? [String: Any]) ?? d
-            guard summary["call_id"] as? String == callID else { return }
+            // only while it rings (web): a late or retried answer must not start the ringback over a connecting call
+            guard summary["call_id"] as? String == callID, phase == .outgoing else { return }
             acknowledged = true
             ringing = (d["ringing"] as? Bool) ?? ringing
             CallTones.shared.ringback(true)
@@ -330,14 +434,18 @@ final class CallManager: NSObject, ObservableObject {
             guard cid == callID, let into = d["into"] as? String else { return }
             callID = into
             role = .callee
+            acknowledged = true
             phase = .connecting
+            CallTones.shared.ringback(false)
+            provider.reportOutgoingCall(with: uuid, startedConnectingAt: nil)
         case "call.accepted":
-            guard cid == callID, pc == nil else { return }
+            // hung up meanwhile: the server ends it (call.ended), nothing more to set up
+            guard cid == callID, pc == nil, !userEnding else { return }
             CallTones.shared.ringback(false)
             if let r = d["role"] as? String { role = r == "caller" ? .caller : .callee }
             peerID = (role == .caller ? d["callee_id"] : d["caller_id"]) as? String ?? peerID
             phase = .connecting
-            arm(seconds: 45) { [weak self] in self?.hangUp() }
+            arm(seconds: 45) { [weak self] in self?.localReason = "ice_timeout"; self?.hangUp() }
             serially { [weak self] in await self?.setUpPeerConnection() }
         case "call.active":
             guard cid == callID else { return }
@@ -358,18 +466,43 @@ final class CallManager: NSObject, ObservableObject {
             if call == nil {
                 // the server knows no call for this device: end ours, unless our invite was not acknowledged yet
                 if phase != .idle && !(phase == .outgoing && !acknowledged) { endReason = "connection_lost"; finish() }
-            } else if let c = call, phase == .idle, (c["state"] as? String) == "ringing", (c["role"] as? String) == "callee",
+                // our invite never reached the server (sent while the socket was down): send it now. The same call id, so
+                // a server that did get it answers with its state (call.outgoing / call.ended) instead of a second call.
+                if phase == .outgoing && !acknowledged { sendInvite() }
+            } else if let c = call, !lineInUse, (c["state"] as? String) == "ringing", (c["role"] as? String) == "callee",
                       let id = c["call_id"] as? String {
                 ringIncoming(c, id: id)
-            } else if let c = call, (c["call_id"] as? String) == callID, phase == .connecting || phase == .active {
-                // the socket came back and the server still has our call: what was sent while it was down is lost
-                resumeAfterSocketGap()
+            } else if let c = call, (c["call_id"] as? String) == callID {
+                // the socket came back and the server still has our call: what was sent or received while it was down is lost
+                let state = c["state"] as? String
+                if phase == .outgoing && state == "ringing" {
+                    if !acknowledged { acknowledged = true; CallTones.shared.ringback(true) }
+                } else if phase == .connecting && state == "ringing" && role == .callee {
+                    send("call.accept", ["call_id": callID ?? ""]) // our accept was lost: the server still rings us
+                } else if (phase == .outgoing || phase == .connecting || phase == .active)
+                            && (state == "connecting" || state == "active") {
+                    if pc == nil {
+                        // call.accepted was lost in the gap: it rang ("Ringing...") or connected with no peer connection
+                        // until the server's 30 s connect timeout
+                        handle("call.accepted", c)
+                    } else {
+                        resumeAfterSocketGap()
+                    }
+                }
             }
         case "call.error":
             // only a refused invite ends the call (web callEngine.ts); a refused signal or media frame is only logged there
             guard cid == nil || cid == "" || cid == callID else { return }
-            if (d["op"] as? String) == "call.invite" && phase == .outgoing {
+            let op = d["op"] as? String
+            if op == "call.invite" && phase == .outgoing {
                 endReason = d["code"] as? String
+                finish()
+            } else if op == "call.accept" && phase == .connecting && pc == nil && cid == callID && callID != nil {
+                // the server does not know the call (it restarted): "Connecting..." would wait 45 s for nothing
+                endReason = d["code"] as? String
+                finish()
+            } else if (op == "call.hangup" || op == "call.cancel") && userEnding && cid == callID && callID != nil {
+                // nothing left to hang up on the server: no call.ended will come, end now instead of after 5 s
                 finish()
             }
         default:
@@ -378,11 +511,10 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     private func ringIncoming(_ d: [String: Any], id: String) {
+        beginCall()
         callID = id
         conversationID = d["conversation_id"] as? String
         role = .callee
-        userEnding = false
-        localReason = nil
         peerID = d["caller_id"] as? String
         uuid = UUID(uuidString: id) ?? UUID()
         phase = .incoming
@@ -411,8 +543,10 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     private func lookUpName(_ userID: String) async {
+        let call = uuid
         if let list = try? await APIClient.shared.conversations(token: token),
-           let c = list.first(where: { $0.peer_id == userID }) {
+           let c = list.first(where: { $0.peer_id == userID }),
+           uuid == call, lineInUse { // not a name arriving after the call ended (or into the next call)
             peerName = c.title
             let update = callCapabilities()
             update.localizedCallerName = c.title
@@ -582,8 +716,7 @@ final class CallManager: NSObject, ObservableObject {
                         guard let self, !Task.isCancelled else { return }
                         self.labelTimer = nil
                         let now = self.pc?.iceConnectionState
-                        if self.phase == .active && (now == .disconnected || now == .failed) { self.reconnecting = true }
-                    }
+                        if self.phase == .active && (now == .disconnected || now == .failed) { self.reconnecting = true }                    }
                 }
             }
             if state == .failed {
@@ -638,6 +771,13 @@ final class CallManager: NSObject, ObservableObject {
                 self.sendDescription(offer)
                 return
             }
+            // first connection, our answer may be the frame that got lost: the caller then waited in have-local-offer
+            // (no ICE checks, so no ICE restart either) until the server's connect timeout. An answer it already has
+            // is ignored there (only applied in have-local-offer).
+            if self.phase == .connecting, !self.sentConnected, conn.signalingState == .stable,
+               let answer = conn.localDescription, answer.type == .answer {
+                self.sendDescription(answer)
+            }
             let ice = conn.iceConnectionState
             if (ice == .disconnected || ice == .failed) && self.restarts == 0 { self.scheduleRestart(after: 0) }
         }
@@ -657,17 +797,19 @@ final class CallManager: NSObject, ObservableObject {
 
     private func fail(_ cls: String) {
         if let id = callID { send("call.failed", ["call_id": id, "class": cls]) }
-        endReason = "failed"
+        endReason = cls // "ice_failed" says "Couldn't connect", not a bare "failed"
         finish()
     }
 
     private func markActive() {
-        guard phase != .active else { return }
+        // End was pressed: the 5 s fallback that ends the call if call.ended never comes must not be cancelled here
+        guard phase != .active, !userEnding else { return }
         phase = .active
         safetyTimer?.cancel()
         if connectedAt == nil { connectedAt = Date() }
         CallTones.shared.connected()
-        if role == .caller { provider.reportOutgoingCall(with: uuid, connectedAt: connectedAt) }
+        // the CallKit call this phone started (also when a glare merge made us the callee): connected, the system clock runs
+        if startedHere { provider.reportOutgoingCall(with: uuid, connectedAt: connectedAt) }
     }
 
     private func arm(seconds: Double, _ action: @escaping @MainActor () -> Void) {
@@ -705,26 +847,50 @@ final class CallManager: NSObject, ObservableObject {
         sentConnected = false
         restarts = 0
         held = false
+        answering = false
+        let s = RTCAudioSession.sharedInstance()
+        if speaker {
+            // the loudspeaker override outlives the call otherwise (the next call or voice note on the speaker)
+            s.lockForConfiguration()
+            try? s.overrideOutputAudioPort(.none)
+            s.unlockForConfiguration()
+        }
+        // the microphone stops now even if CallKit never sends didDeactivate (the orange dot stayed on)
+        s.isAudioEnabled = false
         if ownAudio {
             ownAudio = false
-            let s = RTCAudioSession.sharedInstance()
-            s.isAudioEnabled = false
             s.lockForConfiguration()
             try? s.setActive(false)
             s.unlockForConfiguration()
         }
         if hadCall {
-            let reason: CXCallEndedReason = endReason == "no_answer" ? .unanswered
-                : (endReason == "answered_elsewhere" ? .answeredElsewhere : .remoteEnded)
-            provider.reportCall(with: uuid, endedAt: Date(), reason: reason)
-            callController.request(CXTransaction(action: CXEndCallAction(call: uuid))) { _ in }
+            // CallKit hears of the end exactly once: a transaction when this phone ended it, a report when the other side,
+            // the server or a timeout did (both were sent, the second always failing)
+            let ended = uuid
+            if userEnding {
+                callController.request(CXTransaction(action: CXEndCallAction(call: ended))) { [weak self] err in
+                    // refused (CallKit reset, or the call is already gone there): a report instead, a no-op if it is gone
+                    if err != nil { Task { @MainActor in self?.provider.reportCall(with: ended, endedAt: Date(), reason: .remoteEnded) } }
+                }
+            } else {
+                let reason: CXCallEndedReason
+                switch endReason {
+                case "no_answer": reason = .unanswered
+                case "answered_elsewhere": reason = .answeredElsewhere
+                case "declined" where role == .callee: reason = .declinedElsewhere
+                case "failed", "connection_lost", "ice_failed", "ice_timeout", "negotiation_failed", "offline": reason = .failed
+                default: reason = .remoteEnded
+                }
+                provider.reportCall(with: ended, endedAt: Date(), reason: reason)
+            }
         }
         callID = nil
         lastDuration = connectedAt.map { Date().timeIntervalSince($0) }
         phase = .ended
-        Task { @MainActor in
+        linger?.cancel()
+        linger = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_800_000_000)
-            if phase == .ended {
+            if !Task.isCancelled && phase == .ended {
                 phase = .idle
                 showScreen = false
                 connectedAt = nil
@@ -774,7 +940,14 @@ extension CallManager: CXProviderDelegate {
         // CallKit lost its calls (its daemon restarted): ours goes on, with the audio switched on by the app itself
         Task { @MainActor in
             if self.phase == .idle || self.phase == .ended { return }
-            if self.phase == .incoming { self.endReason = "system_end"; self.finish(); return }
+            if self.phase == .incoming {
+                // it ended here with no word to the server (the caller heard it ring 45 s more) and posted "Missed
+                // call". It goes on ringing in the app instead: Accept answers without CallKit (accept()'s fallback).
+                if let id = self.callID {
+                    LocalNotifier.shared.incomingCallFallback(name: self.peerName, callID: id, conversationID: self.conversationID)
+                }
+                return
+            }
             self.audioWithoutCallKit()
         }
     }
@@ -811,11 +984,34 @@ extension CallManager: CXProviderDelegate {
         let s = RTCAudioSession.sharedInstance()
         s.audioSessionDidActivate(audioSession)
         s.isAudioEnabled = true
+        Task { @MainActor in
+            // Speaker tapped before CallKit switched the audio on: the override failed then; it applies now
+            guard self.speaker, self.lineInUse else { return }
+            s.lockForConfiguration()
+            try? s.overrideOutputAudioPort(.speaker)
+            s.unlockForConfiguration()
+        }
     }
     nonisolated func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
         let s = RTCAudioSession.sharedInstance()
         s.audioSessionDidDeactivate(audioSession)
-        s.isAudioEnabled = false
+        // after a CallKit reset the app runs the audio itself (audioWithoutCallKit): CallKit's late deactivation of the
+        // call it forgot must not silence the call that goes on
+        if !callAudioOwned.value { s.isAudioEnabled = false }
+    }
+}
+
+/// CallManager.ownAudio for CallKit's audio callbacks, which must decide at once (not after a hop to the main actor:
+/// a deactivate and an activate in a row, as on hold and resume, would run in the wrong order).
+private let callAudioOwned = LockedFlag()
+
+/// A Bool readable from any thread (CallKit's delegate callbacks are nonisolated).
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v = false
+    var value: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return v }
+        set { lock.lock(); v = newValue; lock.unlock() }
     }
 }
 
