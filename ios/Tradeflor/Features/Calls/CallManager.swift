@@ -159,7 +159,8 @@ final class CallManager: NSObject, ObservableObject {
         starting = true
         if !confirmed {
             Task {
-                let ask = ((try? await APIClient.shared.stSettings(token: token)) ?? [:])["calls.confirm"] ?? false
+                // unread (offline, slow): asks, as the server's default (calls.confirm is on unless turned off)
+                let ask = ((try? await APIClient.shared.stSettings(token: token)) ?? [:])["calls.confirm"] ?? true
                 starting = false
                 if ask { confirming = PendingCall(conversationID: conversationID, peerName: peerName, peerID: peerID) }
                 else { start(conversationID: conversationID, peerName: peerName, peerID: peerID, confirmed: true) }

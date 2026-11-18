@@ -17,10 +17,12 @@ extension APIClient {
 
     // MARK: identity
 
-    func stUsernameAvailable(token: String, _ u: String) async -> (available: Bool, reason: String?) {
+    /// nil when there was no answer (offline, 429): "available" was assumed before, and Change was offered for a name
+    /// nobody had checked.
+    func stUsernameAvailable(token: String, _ u: String) async -> (available: Bool, reason: String?)? {
         struct Out: Decodable { let available: Bool; let reason: String? }
         guard let d = try? await getJSON("identity/username-available?u=\(APIClient.q(u))", token: token),
-              let o = try? JSONDecoder().decode(Out.self, from: d) else { return (true, nil) }
+              let o = try? JSONDecoder().decode(Out.self, from: d) else { return nil }
         return (o.available, o.reason)
     }
 

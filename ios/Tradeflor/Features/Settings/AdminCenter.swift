@@ -229,30 +229,34 @@ private struct AdminUserSheet: View {
     @State private var hours = 0
     @State private var note: String?
     @State private var busy = false
+    @State private var confirmSuspend = false
+    @State private var fresh: AdminUser?
     private var token: String { store.session?.token ?? "" }
+    /// The account as the server has it now (details), the list's row until then.
+    private var shown: AdminUser { fresh ?? user }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    LabeledContent("signup.username", value: "@" + user.username)
-                    LabeledContent("PIN", value: user.pin)
-                    LabeledContent("signup.email", value: user.email)
-                    if !user.phone.isEmpty { LabeledContent("set.phone", value: user.phone) }
-                    LabeledContent("set.country", value: user.country)
-                    LabeledContent("set.joined", value: Date(timeIntervalSince1970: Double(user.created_at)).formatted(date: .abbreviated, time: .omitted))
-                    LabeledContent("adm.status", value: NSLocalizedString("adm.status." + user.status, comment: ""))
-                    if let r = user.suspend_reason, !r.isEmpty { LabeledContent("adm.reason", value: r) }
+                    LabeledContent("signup.username", value: "@" + shown.username)
+                    LabeledContent("PIN", value: shown.pin)
+                    LabeledContent("signup.email", value: shown.email)
+                    if !shown.phone.isEmpty { LabeledContent("set.phone", value: shown.phone) }
+                    LabeledContent("set.country", value: shown.country)
+                    LabeledContent("set.joined", value: Date(timeIntervalSince1970: Double(shown.created_at)).formatted(date: .abbreviated, time: .omitted))
+                    LabeledContent("adm.status", value: NSLocalizedString("adm.status." + shown.status, comment: ""))
+                    if let r = shown.suspend_reason, !r.isEmpty { LabeledContent("adm.reason", value: r) }
                 }
                 .listRowBackground(Theme.surface)
-                if user.status == "suspended" {
+                if shown.status == "suspended" {
                     Section {
                         Button("adm.restore") {
                             guard !busy else { return }
                             busy = true
                             Task {
                                 defer { busy = false }
-                                do { try await APIClient.shared.stAdminRestore(token: token, userID: user.id); onChange(); dismiss() } catch {
+                                do { try await APIClient.shared.stAdminRestore(token: token, userID: shown.id); onChange(); dismiss() } catch {
                                     note = NSLocalizedString("settings.failed", comment: "")
                                 }
                             }
@@ -261,38 +265,26 @@ private struct AdminUserSheet: View {
                         .foregroundStyle(Theme.accent)
                     }
                     .listRowBackground(Theme.surface)
-                } else if user.type != "administrator" {
+                } else if shown.type != "administrator" && shown.id != store.session?.userID {
+                    // never my own account (the web says "You cannot suspend yourself")
                     Section(header: Text("adm.suspend")) {
                         TextField("adm.reason", text: $reason)
+                            .onChange(of: reason) { v in if v.count > 300 { reason = String(v.prefix(300)) } } // web maxLength
                         Picker("adm.duration", selection: $hours) {
                             Text("adm.d.24h").tag(24)
                             Text("adm.d.7d").tag(168)
                             Text("adm.d.30d").tag(720)
                             Text("adm.d.forever").tag(0)
                         }
-                        Button("adm.suspend", role: .destructive) {
-                            guard !busy else { return }
-                            busy = true
-                            Task {
-                                defer { busy = false }
-                                do {
-                                    try await APIClient.shared.stAdminSuspend(token: token, userID: user.id, reason: reason, hours: hours)
-                                    onChange()
-                                    dismiss()
-                                } catch APIError.refused(let why) {
-                                    note = why
-                                } catch {
-                                    note = NSLocalizedString("settings.failed", comment: "")
-                                }
-                            }
-                        }
-                        .disabled(reason.trimmingCharacters(in: .whitespaces).isEmpty || busy)
+                        // signs the account out everywhere at once: asked first (it ran on the first tap)
+                        Button("adm.suspend", role: .destructive) { confirmSuspend = true }
+                            .disabled(reason.trimmingCharacters(in: .whitespaces).isEmpty || busy)
                     }
                     .listRowBackground(Theme.surface)
                 }
-                if me.roles == true && user.status == "active" && user.id != store.session?.userID {
+                if me.roles == true && shown.status == "active" && shown.id != store.session?.userID {
                     Section(header: Text("adm.role.title")) {
-                        Picker("adm.role.title", selection: Binding(get: { user.role ?? "" }, set: { r in
+                        Picker("adm.role.title", selection: Binding(get: { shown.role ?? "" }, set: { r in
                             if r == "owner" { confirmOwner = true } else { setRole(r) }
                         })) {
                             Text("adm.role.none").tag("")
@@ -306,19 +298,25 @@ private struct AdminUserSheet: View {
                 }
                 if me.audit == true {
                     Section(header: Text("adm.history")) {
-                        AdminAuditView(user: user.id).listRowInsets(EdgeInsets())
+                        AdminAuditView(user: shown.id).listRowInsets(EdgeInsets())
                     }
                     .listRowBackground(Color.clear)
                 }
                 if let note { Section { Text(note).foregroundStyle(Theme.danger) }.listRowBackground(Theme.surface) }
             }
-            .confirmationDialog(Text(String(format: NSLocalizedString("adm.owner.confirm", comment: ""), user.username)),
+            .confirmationDialog(Text(String(format: NSLocalizedString("adm.owner.confirm", comment: ""), shown.username)),
                                 isPresented: $confirmOwner, titleVisibility: .visible) {
                 Button("adm.role.owner", role: .destructive) { setRole("owner") }
             }
+            .confirmationDialog(Text(String(format: NSLocalizedString("adm.suspend.confirm", comment: ""), shown.username)),
+                                isPresented: $confirmSuspend, titleVisibility: .visible) {
+                Button("adm.suspend", role: .destructive) { suspend() }
+            }
+            // the list row has no suspension details (reason, …): the account's own record is read
+            .task { if let d = await APIClient.shared.admUser(token: token, id: user.id) { fresh = d } }
             .scrollContentBackground(.hidden)
             .background(Theme.ground.ignoresSafeArea())
-            .navigationTitle(user.display_name.isEmpty ? user.username : user.display_name)
+            .navigationTitle(shown.display_name.isEmpty ? shown.username : shown.display_name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } }
@@ -328,13 +326,31 @@ private struct AdminUserSheet: View {
         }
     }
 
+    private func suspend() {
+        let why = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !busy, !why.isEmpty else { return }
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                try await APIClient.shared.stAdminSuspend(token: token, userID: shown.id, reason: why, hours: hours)
+                onChange()
+                dismiss()
+            } catch APIError.refused(let why) {
+                note = why
+            } catch {
+                note = NSLocalizedString("settings.failed", comment: "")
+            }
+        }
+    }
+
     private func setRole(_ r: String) {
         guard !busy else { return }
         busy = true
         Task {
             defer { busy = false }
             do {
-                try await APIClient.shared.admSetRole(token: token, userID: user.id, role: r)
+                try await APIClient.shared.admSetRole(token: token, userID: shown.id, role: r)
                 note = nil
                 onChange()
                 dismiss()
@@ -360,6 +376,7 @@ private struct AdminOfficialView: View {
     @State private var note: String?
     @State private var acting = false
     @State private var confirmDelete: AdminOfficialPost?
+    @State private var confirmRemove: AdminOfficialPost?
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
@@ -402,7 +419,8 @@ private struct AdminOfficialView: View {
                                 Button("adm.publish") { act(p, "publish") }
                             }
                             if !library && (p.state == "active" || p.state == "scheduled") {
-                                Button("adm.remove") { act(p, "remove") }
+                                // takes it off everyone's screen at once: asked first, as on the website
+                                Button("adm.remove", role: .destructive) { confirmRemove = p }
                             }
                             if me.users == true && (p.state == "draft" || p.state == "removed" || p.state == "expired") {
                                 Button("adm.delete", role: .destructive) { confirmDelete = p }
@@ -425,6 +443,10 @@ private struct AdminOfficialView: View {
         .confirmationDialog(Text("adm.delete.confirm"), isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
                             titleVisibility: .visible) {
             if let p = confirmDelete { Button("adm.delete", role: .destructive) { act(p, "delete") } }
+        }
+        .confirmationDialog(Text("adm.remove.confirm"), isPresented: Binding(get: { confirmRemove != nil }, set: { if !$0 { confirmRemove = nil } }),
+                            titleVisibility: .visible) {
+            if let p = confirmRemove { Button("adm.remove", role: .destructive) { act(p, "remove") } }
         }
     }
 

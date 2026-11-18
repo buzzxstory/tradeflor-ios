@@ -46,7 +46,11 @@ enum LinkedDeviceText {
     static func name(_ d: LinkedDevice) -> String {
         if d.app == "desktop" { return ldT("ld.name.desktop") }
         if d.app == "ios" { return ldT("ld.name.ios") }
-        guard let p = d.platform, !p.isEmpty else { return ldT("ld.name.unknown") }
+        guard let p = d.platform, !p.isEmpty else {
+            // a server without the V2 fields still names the session ("Chrome on Windows"): that, not "Unknown device"
+            let named = d.device.trimmingCharacters(in: .whitespaces)
+            return named.isEmpty || named == "Unnamed device" ? ldT("ld.name.unknown") : named
+        }
         return machine[p].map(ldT) ?? p
     }
 
@@ -205,6 +209,7 @@ struct LinkedDevicesView: View {
                 .padding(.bottom, 24)
             }
             .scrollDismissesKeyboard(.interactively)
+            .refreshable { await load() }
             .onChange(of: problem) { p in
                 if !p.isEmpty { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("ld.error", anchor: .center) } }
             }
@@ -274,6 +279,13 @@ struct LinkedDevicesView: View {
             close()
             problem = ldT("ld.err.signout.all")
         }
+    }
+
+    /// Return key or Save: one rename at a time (both could start one).
+    private func startRename(_ d: LinkedDevice) {
+        guard !busy else { return }
+        busy = true
+        Task { await rename(d) }
     }
 
     private func rename(_ d: LinkedDevice) async {
@@ -639,10 +651,17 @@ struct LinkedDevicesView: View {
             switch dlg {
             case .details(let d): details(d)
             case .rename(let d): renameForm(d)
+            // busy is set before the task starts: a quick second tap sent the same sign-out twice
             case .out(let d): confirm(title: String(format: ldT("ld.out.title"), LinkedDeviceText.title(d)), message: "ld.out.body") {
+                guard !busy else { return }
+                busy = true
                 Task { await signOut(d) }
             }
-            case .all: confirm(title: ldT("ld.all.title"), message: "ld.all.body") { Task { await signOutOthers() } }
+            case .all: confirm(title: ldT("ld.all.title"), message: "ld.all.body") {
+                guard !busy else { return }
+                busy = true
+                Task { await signOutOthers() }
+            }
             }
         }
         .padding(.top, 26).padding(.horizontal, 22).padding(.bottom, 20)
@@ -761,7 +780,7 @@ struct LinkedDevicesView: View {
                 .focused($renameFocused)
                 .submitLabel(.done)
                 .autocorrectionDisabled()
-                .onSubmit { if !busy { Task { await rename(d) } } }
+                .onSubmit { startRename(d) }
                 .onChange(of: renameText) { v in if v.count > 40 { renameText = String(v.prefix(40)) } }
                 .padding(.horizontal, 16)
                 .frame(height: 52)
@@ -773,7 +792,7 @@ struct LinkedDevicesView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.top, -6)
             if !renameError.isEmpty { errorBanner(renameError) }
-            pill(busy ? ldT("ld.saving") : ldT("ld.save"), .primary) { Task { await rename(d) } }
+            pill(busy ? ldT("ld.saving") : ldT("ld.save"), .primary) { startRename(d) }
             pill(ldT("ld.cancel"), .plain) { close() }
         }
     }

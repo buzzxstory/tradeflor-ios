@@ -72,6 +72,9 @@ struct AvatarEditor: View {
                 )
             )
         }
+        // the crop is worked out in left-to-right points (offset, drag): kept left-to-right in Arabic too, so the saved
+        // square is always the part inside the circle, whatever a mirrored layout does to the drag and the offset
+        .environment(\.layoutDirection, .leftToRight)
         .statusBarHidden()
     }
 

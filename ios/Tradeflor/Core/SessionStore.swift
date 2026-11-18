@@ -29,12 +29,27 @@ final class SessionStore: ObservableObject {
         signingOut = true
         defer { signingOut = false }
         if let token = session?.token {
+            // live location shares run from this phone end first (they kept showing in the chats until they expired, and
+            // the phone kept its location on for a session that no longer existed)
+            await LocationSharer.shared.stopAll(token: token)
             await APIClient.shared.relockChats(token: token)
             await APIClient.shared.logout(token: token)
         }
         Keychain.delete()
+        // the Lock PIN kept behind Face ID belongs to this account: the next one to sign in here must not be offered it
+        BiometricPIN.delete()
         forgetAccount()
         session = nil
+    }
+
+    /// The account's @username changed (Settings › My Identity or My Profile), or the name kept at sign-in was what was
+    /// typed there (an email, another capitalisation): every place that shows "@username" from the session follows.
+    func renamed(_ username: String) {
+        // "~new-…" is the server's placeholder before the identity setup: never shown as anyone's name
+        guard let s = session, !username.isEmpty, !username.hasPrefix("~"), s.username != username else { return }
+        let next = Session(token: s.token, userID: s.userID, username: username)
+        Keychain.save(next)
+        session = next
     }
 
     /// The token was revoked elsewhere (e.g. "log out all devices" on the website).

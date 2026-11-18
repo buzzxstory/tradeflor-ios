@@ -165,6 +165,8 @@ struct IdentityShowcase: View {
     @State private var note: String?
     @State private var qrOnly = false
     @State private var shareItem: CardImage?
+    @State private var saving = false
+    @State private var flashTask: Task<Void, Never>?
 
     struct CardImage: Identifiable { let id = UUID(); let image: UIImage }
 
@@ -188,12 +190,15 @@ struct IdentityShowcase: View {
                     if let img = render() { shareItem = CardImage(image: img) }
                 }
                 action("square.and.arrow.down", "id.download") { Task { await download() } }
+                    .disabled(saving)
                 action("qrcode", "id.qr.only") { qrOnly = true }
             }
             if let note { Text(note).font(.system(size: 12)).foregroundStyle(Theme.accent) }
         }
-        .task {
-            if let a = id.avatar_id, !a.isEmpty, let d = await APIClient.shared.avatar(token: token, userID: id.user_id, avatarID: a) {
+        // read again when the photo changes (the card is read again after a pull or a username change)
+        .task(id: id.avatar_id ?? "") {
+            guard let a = id.avatar_id, !a.isEmpty else { avatar = nil; return }
+            if let d = await APIClient.shared.avatar(token: token, userID: id.user_id, avatarID: a) {
                 avatar = UIImage(data: d)
             }
         }
@@ -238,7 +243,11 @@ struct IdentityShowcase: View {
     }
 
     private func download() async {
-        guard let img = render() else { return }
+        // one save at a time: a quick double tap put the card in Photos twice
+        guard !saving else { return }
+        saving = true
+        defer { saving = false }
+        guard let img = render() else { flash("media.failed"); return }
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else { flash("media.denied"); return }
         do {
@@ -251,7 +260,12 @@ struct IdentityShowcase: View {
 
     private func flash(_ key: String) {
         note = NSLocalizedString(key, comment: "")
-        Task { try? await Task.sleep(nanoseconds: 1_800_000_000); note = nil }
+        // the newest note stays its full time (an earlier one's timer cleared it early)
+        flashTask?.cancel()
+        flashTask = Task {
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            if !Task.isCancelled { note = nil }
+        }
     }
 }
 

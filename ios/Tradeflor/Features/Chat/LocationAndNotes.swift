@@ -45,6 +45,18 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
         if sharing.isEmpty && pendingStart == nil { manager.stopUpdatingLocation() }
     }
 
+    /// Sign-out: the shares this phone runs end on the server (shares started on another device are that device's), and
+    /// the phone stops reading its location.
+    func stopAll(token: String) async {
+        let convs = sharing
+        pendingStart = nil
+        sharing = []
+        until = [:]
+        lastSent = nil
+        manager.stopUpdatingLocation()
+        for c in convs { await APIClient.shared.stopLocation(token: token, conversationID: c) }
+    }
+
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor in
             switch manager.authorizationStatus {

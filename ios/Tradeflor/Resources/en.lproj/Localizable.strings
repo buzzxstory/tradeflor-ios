@@ -1861,3 +1861,8 @@
 "set.events.remove" = "Remove from Events";
 
 "stx.pick.failed" = "Could not open that photo or video. Try another one.";
+
+"set.n.os.denied" = "Notifications are turned off for Tradeflor in iOS Settings, so none can reach this iPhone.";
+"set.n.os.notyet" = "Tradeflor has not been allowed to send notifications on this iPhone yet.";
+"adm.remove.confirm" = "Remove this status from public view now? It stays in the library.";
+"adm.suspend.confirm" = "Suspend @%@? The account is signed out on every device at once and cannot sign in until it is restored.";

@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UserNotifications
 
 // The Settings sub-pages (desktop/src/features/settings/SettingsView.tsx, ActivityPages.tsx, identity/MyIdentity.tsx,
 // profile/PersonalProfilePanel.tsx, calls/CallSettings.tsx, calls/CallHistory.tsx).
@@ -51,7 +52,7 @@ struct MyProfilePage: View {
                         Button { viewing = true } label: { Label("set.photo.view", systemImage: "eye") }
                     }
                     Button { copy("@" + (profile?.username ?? ""), "set.copied.username") } label: { Label("set.copy.username", systemImage: "at") }
-                    if let pin = identity?.pin { Button { copy(pin, "set.copied.pin") } label: { Label("set.copy.pin", systemImage: "number") } }
+                    if let pin = identity?.pin, !pin.isEmpty { Button { copy(pin, "set.copied.pin") } label: { Label("set.copy.pin", systemImage: "number") } }
                     if !(profile?.avatar_id.isEmpty ?? true) {
                         Button(role: .destructive) { confirmRemove = true } label: { Label("set.photo.remove", systemImage: "trash") }
                     }
@@ -62,7 +63,7 @@ struct MyProfilePage: View {
                 .disabled(busy)
                 .accessibilityLabel(Text("chat.more"))
             }
-            if let pin = identity?.pin {
+            if let pin = identity?.pin, !pin.isEmpty {
                 SCard {
                     SKeyValue(key: "PIN", value: pin, action: NSLocalizedString("set.copy", comment: "")) { copy(pin, "set.copied.pin") }
                 }
@@ -75,11 +76,17 @@ struct MyProfilePage: View {
             if let profile {
                 EditProfileSheet(profile: profile) { n, u, b in
                     do {
-                        self.profile = try await APIClient.shared.stUpdateProfile(token: token, displayName: n, username: u, bio: b)
+                        let p = try await APIClient.shared.stUpdateProfile(token: token, displayName: n, username: u, bio: b)
+                        self.profile = p
+                        store.renamed(p.username) // a new @username shows everywhere the session's name is used
                         onChange()
                         return nil
                     } catch APIError.refused(let why) {
+                        // 409: the username is someone else's (the server's line is English)
+                        if why.localizedCaseInsensitiveContains("taken") { return NSLocalizedString("signup.username.taken", comment: "") }
                         return why.isEmpty ? NSLocalizedString("settings.failed", comment: "") : why
+                    } catch APIError.rateLimited {
+                        return NSLocalizedString("login.error.rate", comment: "")
                     } catch {
                         return NSLocalizedString("settings.failed", comment: "")
                     }
@@ -226,6 +233,7 @@ struct AccountPage: View {
     @State private var busy = false
     @State private var note: String?
     @State private var problem: String?
+    @State private var loadFailed = false
 
     private var token: String { store.session?.token ?? "" }
 
@@ -274,8 +282,10 @@ struct AccountPage: View {
                     SKeyValue(key: NSLocalizedString("set.realname", comment: ""), value: a.full_name.isEmpty ? "—" : a.full_name,
                                action: NSLocalizedString("set.edit", comment: "")) { startEdit() }
                     SDivider()
+                    // no email yet (needs_email): a dash, not " · Not verified" on its own
                     SKeyValue(key: NSLocalizedString("signup.email", comment: ""),
-                               value: a.email + " · " + NSLocalizedString(a.email_verified ? "set.verified" : "set.notverified", comment: ""))
+                               value: a.email.isEmpty ? "—"
+                                : a.email + " · " + NSLocalizedString(a.email_verified ? "set.verified" : "set.notverified", comment: ""))
                     SDivider()
                     SKeyValue(key: NSLocalizedString("set.phone", comment: ""),
                                value: a.phone.isEmpty ? NSLocalizedString("set.phone.none", comment: "") : a.phone,
@@ -287,6 +297,14 @@ struct AccountPage: View {
                     SKeyValue(key: NSLocalizedString("set.joined", comment: ""),
                                value: Date(timeIntervalSince1970: Double(a.created_at)).formatted(date: .numeric, time: .omitted))
                 }
+            } else if loadFailed {
+                // not read (offline, server busy): said, with a way to try again, instead of a skeleton that never ends
+                VStack(spacing: 8) {
+                    Text("adm.failed").font(.system(size: 13)).foregroundStyle(SetUI.sub)
+                    Button("chats.retry") { Task { await loadAccount() } }
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(SetUI.accent)
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 14)
             } else {
                 // the private details on their way: the rows' shape, quietly (no spinner)
                 SCard {
@@ -310,7 +328,7 @@ struct AccountPage: View {
                         Divider()
                         SecureField("set.password.confirm", text: $password).textContentType(.password)
                         HStack {
-                            Button("chat.close") { editing = false }.foregroundStyle(Theme.faint)
+                            Button("chat.close") { editing = false; password = ""; problem = nil }.foregroundStyle(Theme.faint)
                             Spacer()
                             Button { Task { await save() } } label: {
                                 if busy { ProgressView() } else { Text("settings.save").bold() }
@@ -327,7 +345,15 @@ struct AccountPage: View {
             if let note { Text(note).font(.system(size: 13)).foregroundStyle(Theme.accent) }
         }
         .modifier(KeyboardDoneBar())
-        .task { account = try? await APIClient.shared.stPrivateAccount(token: token) }
+        .task { await loadAccount() }
+        .refreshable { await loadAccount() }
+    }
+
+    private func loadAccount() async {
+        loadFailed = false
+        do { account = try await APIClient.shared.stPrivateAccount(token: token) } catch {
+            if account == nil { loadFailed = true }
+        }
     }
 
     /// Connection: the green "● Live" pill (13-settings.css .s-live), amber while reconnecting.
@@ -366,11 +392,15 @@ struct AccountPage: View {
             try await APIClient.shared.stUpdatePrivateAccount(token: token, password: password,
                                                               fullName: fullName != account?.full_name ? fullName : nil,
                                                               phone: phone != account?.phone ? phone : nil)
-            account = try? await APIClient.shared.stPrivateAccount(token: token)
+            account = (try? await APIClient.shared.stPrivateAccount(token: token)) ?? account
             editing = false
+            password = "" // the account password does not stay in memory once used
             note = NSLocalizedString("set.saved", comment: "")
         } catch APIError.refused(let why) {
             problem = why.isEmpty ? NSLocalizedString("settings.failed", comment: "") : why
+        } catch APIError.rateLimited {
+            // 10 changes per 10 minutes (account-private)
+            problem = NSLocalizedString("login.error.rate", comment: "")
         } catch {
             problem = NSLocalizedString("settings.failed", comment: "")
         }
@@ -389,6 +419,7 @@ struct MyIdentityPage: View {
     @State private var nameOK = false
     @State private var busy = false
     @State private var note: String?
+    @State private var loadFailed = false
 
     private var token: String { store.session?.token ?? "" }
     @State private var connectCode: String?
@@ -417,7 +448,13 @@ struct MyIdentityPage: View {
                                 Text("@").foregroundStyle(Theme.accent)
                                 TextField("signup.username", text: $newName).textInputAutocapitalization(.never).autocorrectionDisabled()
                                     .foregroundStyle(Theme.text)
-                                    .onChange(of: newName) { v in Task { await check(v) } }
+                                    .submitLabel(.done)
+                                    .onChange(of: newName) { v in
+                                        // the server's names are 3 to 24 characters
+                                        if v.count > 24 { newName = String(v.prefix(24)); return }
+                                        note = nil
+                                        Task { await check(v) }
+                                    }
                             }
                             .padding(.horizontal, 12).frame(height: 42).background(Theme.inputGradient, in: Capsule())
                             .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1))
@@ -431,17 +468,33 @@ struct MyIdentityPage: View {
                     }
                     .padding(14)
                 }
+                if let note { Text(note).font(.system(size: 13)).foregroundStyle(Theme.accent) }
+            } else if loadFailed {
+                VStack(spacing: 8) {
+                    Text("adm.failed").font(.system(size: 13)).foregroundStyle(SetUI.sub)
+                    Button("chats.retry") { Task { await load() } }
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(SetUI.accent)
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 20)
             } else {
                 QuietSkeleton(height: 250, radius: 18)
                 QuietSkeleton(height: 150, radius: 18)
             }
         }
+        .refreshable { await load() }
         .task { await load() }
         .task { connectCode = try? await APIClient.shared.ctMyCode(token: token) }
     }
 
     private func load() async {
-        if let d = try? await APIClient.shared.getJSON("identity/me", token: token) { id = try? JSONDecoder().decode(StIdentity.self, from: d) }
+        loadFailed = false
+        if let d = try? await APIClient.shared.getJSON("identity/me", token: token),
+           let card = try? JSONDecoder().decode(StIdentity.self, from: d) {
+            id = card
+            store.renamed(card.username)
+        } else if id == nil {
+            loadFailed = true // said, with Try again, instead of the card's skeleton for ever
+        }
     }
 
     private func check(_ v: String) async {
@@ -450,27 +503,41 @@ struct MyIdentityPage: View {
         // unchecked name in that window)
         nameOK = false
         guard u.count >= 3 else { nameNote = nil; return }
+        // my own name is "free" for me on the server: offering Change for it only spent the once-in-a-while change
+        if u == id?.username.lowercased() { nameNote = nil; return }
         try? await Task.sleep(nanoseconds: 350_000_000)
         guard u == newName.trimmingCharacters(in: .whitespaces).lowercased() else { return }
-        let r = await APIClient.shared.stUsernameAvailable(token: token, u)
+        let answer = await APIClient.shared.stUsernameAvailable(token: token, u)
         guard u == newName.trimmingCharacters(in: .whitespaces).lowercased() else { return } // typed on meanwhile
+        guard let r = answer else {
+            // no answer (offline, too many checks): not "available"
+            nameNote = NSLocalizedString("adm.failed", comment: "")
+            return
+        }
         nameOK = r.available
         nameNote = r.available ? NSLocalizedString("set.username.free", comment: "") : (r.reason ?? NSLocalizedString("signup.username.taken", comment: ""))
     }
 
     private func change() async {
-        guard !busy else { return }
+        guard !busy, nameOK else { return }
         busy = true
         defer { busy = false }
         do {
-            _ = try await APIClient.shared.stChangeUsername(token: token, newName.trimmingCharacters(in: .whitespaces).lowercased())
+            let card = try await APIClient.shared.stChangeUsername(token: token, newName.trimmingCharacters(in: .whitespaces).lowercased())
             newName = ""
-            nameNote = nil
             nameOK = false
+            store.renamed(card.username) // "@name" on Settings, Account, Flash Connect… follow at once
             await load()
+            nameNote = nil
+            note = NSLocalizedString("set.saved", comment: "")
         } catch APIError.refused(let why) {
             nameNote = why
             nameOK = false
+        } catch APIError.rateLimited {
+            // changed recently (the server's cooldown, 429) or too many tries: the card says until when once read again
+            nameOK = false
+            await load()
+            nameNote = NSLocalizedString("login.error.rate", comment: "")
         } catch {
             nameNote = NSLocalizedString("settings.failed", comment: "")
             nameOK = false
@@ -485,12 +552,16 @@ struct LiveLocationPage: View {
     @State private var mine: [LivePosition] = []
     @State private var names: [String: String] = [:]
     @State private var stopping = false
+    @State private var loaded = false
     private var token: String { store.session?.token ?? "" }
     private var active: [LivePosition] { mine.filter { $0.stopped != true && Double($0.until) > Date().timeIntervalSince1970 } }
 
     var body: some View {
         SettingsPage(title: NSLocalizedString("location.live", comment: ""), icon: "location") {
-            if active.isEmpty {
+            if !loaded {
+                // reading: "You're not sharing your location" flashed before the list of shares arrived
+                ProgressView().tint(Theme.accent).frame(maxWidth: .infinity).padding(.vertical, 30)
+            } else if active.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "location.slash").font(.system(size: 30)).foregroundStyle(Theme.faint)
                     Text("set.loc.none").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
@@ -516,21 +587,26 @@ struct LiveLocationPage: View {
                         if i < active.count - 1 { SDivider() }
                     }
                 }
-                Button {
-                    Task { await stopAll(active.map(\.conversation_id)) }
-                } label: {
-                    Text("set.loc.stopall").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.danger)
-                        .frame(maxWidth: .infinity, minHeight: 44).overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.danger.opacity(0.5), lineWidth: 1))
+                // "Stop sharing everywhere" only when there is more than one (web), the one row's Stop does the rest
+                if active.count > 1 {
+                    Button {
+                        Task { await stopAll(active.map(\.conversation_id)) }
+                    } label: {
+                        Text("set.loc.stopall").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.danger)
+                            .frame(maxWidth: .infinity, minHeight: 44).overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.danger.opacity(0.5), lineWidth: 1))
+                    }
+                    .disabled(stopping)
+                    .opacity(stopping ? 0.5 : 1)
                 }
-                .disabled(stopping)
-                .opacity(stopping ? 0.5 : 1)
             }
         }
         .task { await load() }
+        .refreshable { await load() }
     }
 
     private func load() async {
         mine = await APIClient.shared.stMyLocations(token: token)
+        loaded = true
         let chats = (try? await APIClient.shared.conversations(token: token)) ?? []
         let groups = (try? await APIClient.shared.groups(token: token)) ?? []
         var n: [String: String] = [:]
@@ -559,6 +635,7 @@ struct EventsPage: View {
     @EnvironmentObject private var store: SessionStore
     @State private var items: [SavedEventFull] = []
     @State private var loading = true
+    @State private var loadFailed = false
     @State private var working: Set<String> = []
     @State private var problem: String?
     private var token: String { store.session?.token ?? "" }
@@ -569,7 +646,17 @@ struct EventsPage: View {
 
     var body: some View {
         SettingsPage(title: NSLocalizedString("settings.events", comment: ""), subtitle: NSLocalizedString("settings.events.sub", comment: ""), icon: "calendar.badge.clock") {
-            if !loading && items.isEmpty {
+            if loading && items.isEmpty {
+                ProgressView().tint(Theme.accent).frame(maxWidth: .infinity).padding(.vertical, 30)
+            } else if loadFailed {
+                VStack(spacing: 8) {
+                    Text("adm.failed").font(.system(size: 13)).foregroundStyle(SetUI.sub)
+                    Button("chats.retry") { Task { loading = true; await load() } }
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(SetUI.accent)
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 30)
+            } else if !loading && upcoming.isEmpty && past.isEmpty {
+                // also when every saved event is older than a week (the page was blank then)
                 VStack(spacing: 8) {
                     Image(systemName: "calendar.badge.plus").font(.system(size: 30)).foregroundStyle(Theme.faint)
                     Text("set.events.none").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
@@ -582,6 +669,7 @@ struct EventsPage: View {
             if let problem { Text(problem).font(.system(size: 12)).foregroundStyle(Theme.danger) }
         }
         .task { await load() }
+        .refreshable { await load() }
     }
 
     private func section(_ key: String, _ list: [SavedEventFull]) -> some View {
@@ -598,12 +686,18 @@ struct EventsPage: View {
                                 .font(.system(size: 12)).foregroundStyle(Theme.faint)
                             if e.event_at >= now {
                                 Menu {
+                                    // the chosen one is ticked; choosing it again sends nothing
                                     ForEach(Self.reminders, id: \.self) { m in
-                                        Button(Self.label(m)) { Task { await remind(e, m) } }
+                                        Button {
+                                            if m != (e.remind_minutes ?? 15) { Task { await remind(e, m) } }
+                                        } label: {
+                                            if m == (e.remind_minutes ?? 15) { Label(Self.label(m), systemImage: "checkmark") } else { Text(Self.label(m)) }
+                                        }
                                     }
                                 } label: {
                                     Label(Self.label(e.remind_minutes ?? 15), systemImage: "bell").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
                                 }
+                                .disabled(working.contains(e.event_key))
                             }
                         }
                         Spacer()
@@ -628,7 +722,13 @@ struct EventsPage: View {
     }
 
     private func load() async {
-        items = (try? await APIClient.shared.stSavedEvents(token: token)) ?? items
+        do {
+            items = try await APIClient.shared.stSavedEvents(token: token)
+            loadFailed = false
+        } catch {
+            // not read: said (it showed "No saved events yet" as if the list were empty)
+            loadFailed = items.isEmpty
+        }
         loading = false
     }
 
@@ -663,10 +763,12 @@ struct EventsPage: View {
 final class AccountSwitches: ObservableObject {
     @Published var values: [String: Bool] = [:]
     @Published var problem: String?
+    /// The server's own defaults (messaging/prefs.go settingDefaults): "when_focused" and "calls.confirm" are on there,
+    /// and a page that could not read the account showed them off.
     static let defaults: [String: Bool] = [
-        "notifications.enabled": true, "notifications.sound": true, "notifications.previews": true, "notifications.when_focused": false,
+        "notifications.enabled": true, "notifications.sound": true, "notifications.previews": true, "notifications.when_focused": true,
         "notifications.groups": true, "notifications.mentions": true, "notifications.mentions_in_muted": true,
-        "privacy.read_receipts": true, "privacy.calls_enabled": true, "privacy.calls_contacts_only": false, "calls.confirm": false,
+        "privacy.read_receipts": true, "privacy.calls_enabled": true, "privacy.calls_contacts_only": false, "calls.confirm": true,
     ]
 
     func load(_ token: String) async {
@@ -685,7 +787,11 @@ final class AccountSwitches: ObservableObject {
             self.values[key] = v
             self.problem = nil
             Task {
-                do { try await APIClient.shared.stSetSetting(token: token, key: key, value: v) } catch {
+                do {
+                    try await APIClient.shared.stSetSetting(token: token, key: key, value: v)
+                    // this phone's own notifications follow at once (they read the switches at most every 2 minutes)
+                    LocalNotifier.shared.settingChanged(key, v)
+                } catch {
                     // back to what the server has, unless the switch was flipped again meanwhile
                     if self.values[key] == v { self.values[key] = !v }
                     self.problem = NSLocalizedString("settings.failed", comment: "")
@@ -698,12 +804,14 @@ final class AccountSwitches: ObservableObject {
 struct NotificationsPage: View {
     @EnvironmentObject private var store: SessionStore
     @StateObject private var sw = AccountSwitches()
+    @State private var system: UNAuthorizationStatus?
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
         SettingsPage(title: NSLocalizedString("settings.notifications", comment: ""), subtitle: NSLocalizedString("settings.notifications.sub", comment: ""), icon: "bell") {
             // .s-card-head "Alerts & Sounds", then ALERTS and GROUPS & MENTIONS: label + switch rows, no icons (as the web)
             SBanner(icon: "bell", title: NSLocalizedString("set.alerts", comment: ""), subtitle: NSLocalizedString("ux3.set.n.banner", comment: ""))
+            systemNote
             SSection(text: NSLocalizedString("ux3.set.alerts.sec", comment: ""))
             SCard {
                 SToggleRow(icon: "", title: NSLocalizedString("set.n.enabled", comment: ""), subtitle: NSLocalizedString("set.n.enabled.sub", comment: ""),
@@ -727,6 +835,46 @@ struct NotificationsPage: View {
             if let p = sw.problem { Text(p).font(.system(size: 12)).foregroundStyle(Theme.danger) }
         }
         .task { await sw.load(token) }
+        .task { await readSystem() }
+        // back from iOS Settings: the note goes once notifications are allowed there
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in
+            Task { await readSystem() }
+        }
+    }
+
+    /// The web's "Notifications are blocked for this site" note: the account's switches do nothing while iOS itself does
+    /// not let Tradeflor notify.
+    @ViewBuilder private var systemNote: some View {
+        if sw.values["notifications.enabled"] ?? true, let s = system, s == .denied || s == .notDetermined {
+            HStack(spacing: 12) {
+                Image(systemName: "bell.slash").font(.system(size: 18)).foregroundStyle(Theme.gold).accessibilityHidden(true)
+                Text(LocalizedStringKey(s == .denied ? "set.n.os.denied" : "set.n.os.notyet"))
+                    .font(.system(size: 13)).foregroundStyle(SetUI.text).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                Button {
+                    if s == .denied {
+                        if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+                    } else {
+                        Task {
+                            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+                            await readSystem()
+                        }
+                    }
+                } label: {
+                    Text(LocalizedStringKey(s == .denied ? "cam.settings" : "folder.allow")).font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(SetUI.accent).padding(.horizontal, 12).frame(minHeight: 36)
+                        .overlay(Capsule().stroke(SetUI.tileEdge, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(14)
+            .background(Theme.gold.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.gold.opacity(0.35), lineWidth: 1))
+        }
+    }
+
+    private func readSystem() async {
+        system = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 }
 
@@ -758,7 +906,9 @@ struct PrivacyPage: View {
                 }
                 .buttonStyle(.plain)
             }
-            .task { presence = try? await APIClient.shared.presencePrivacy(token: token) }
+            // read on every appearance: back from "Last seen & online" the line shows the choice just made (a .task ran
+            // once, and the old choice stayed)
+            .onAppear { Task { if let p = try? await APIClient.shared.presencePrivacy(token: token) { presence = p } } }
             SSection(text: NSLocalizedString("ux3.set.p.messages", comment: ""))
             SCard {
                 SToggleRow(icon: "", title: NSLocalizedString("set.p.receipts", comment: ""), subtitle: NSLocalizedString("set.p.receipts.sub", comment: ""),
@@ -783,7 +933,11 @@ struct PrivacyPage: View {
                     Text("lock.pin").font(.system(size: 16, weight: .semibold)).foregroundStyle(SetUI.text)
                     Spacer()
                     // .chip-btn: the Calls pill button
-                    Button { pinForm.toggle() } label: {
+                    Button {
+                        pinForm.toggle()
+                        // closed: nothing typed (the account password above all) stays behind
+                        if !pinForm { password = ""; pin1 = ""; pin2 = ""; problem = nil }
+                    } label: {
                         Text(LocalizedStringKey(hasPIN ? "set.change" : "set.set")).font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(Theme.dyn(0xE6F2F5, 0x0E2A3A))
                             .padding(.horizontal, 16).frame(minHeight: 40)
@@ -855,21 +1009,41 @@ struct PrivacyPage: View {
         savingPIN = true
         defer { savingPIN = false }
         problem = nil
-        guard pin1 == pin2 else { problem = NSLocalizedString("set.pin.mismatch", comment: ""); return }
-        guard pin1.count >= 6, pin1.count <= 10, pin1.allSatisfy(\.isNumber) else { problem = NSLocalizedString("set.pin.rule", comment: ""); return }
+        // the server takes 0-9 only: digits typed on an Arabic keypad (٠١٢…) are the same digits, sent as 0-9
+        let a = Self.asciiDigits(pin1), b = Self.asciiDigits(pin2)
+        guard a == b else { problem = NSLocalizedString("set.pin.mismatch", comment: ""); return }
+        guard let pin = a, pin.count >= 6, pin.count <= 10 else { problem = NSLocalizedString("set.pin.rule", comment: ""); return }
         do {
-            try await APIClient.shared.stSetLockPIN(token: token, password: password, pin: pin1)
+            try await APIClient.shared.stSetLockPIN(token: token, password: password, pin: pin)
             BiometricPIN.delete()
             pinSaved = false
             hasPIN = true
             pinForm = false
             password = ""; pin1 = ""; pin2 = ""
+            // a new PIN starts locked on the server (locks.Relock): the open grant this phone held no longer works
+            await APIClient.shared.relockChats(token: token)
+            unlocked = false
             note = NSLocalizedString("set.pin.saved", comment: "")
         } catch APIError.refused(let why) {
-            problem = why.isEmpty ? NSLocalizedString("settings.failed", comment: "") : why
+            // the server's lines are English: the wrong password (403) and the PIN rule (400) are said in the app's words
+            if why.localizedCaseInsensitiveContains("password") { problem = NSLocalizedString("lockc.badpassword", comment: "") }
+            else if why.localizedCaseInsensitiveContains("PIN") { problem = NSLocalizedString("set.pin.rule", comment: "") }
+            else { problem = why.isEmpty ? NSLocalizedString("settings.failed", comment: "") : why }
+        } catch APIError.rateLimited {
+            problem = NSLocalizedString("lock.slow", comment: "")
         } catch {
             problem = NSLocalizedString("settings.failed", comment: "")
         }
+    }
+
+    /// "123456" for any decimal digits (Western or Arabic-Indic); nil when something else was typed.
+    static func asciiDigits(_ s: String) -> String? {
+        var out = ""
+        for ch in s {
+            guard let v = ch.wholeNumberValue, (0...9).contains(v), ch.isNumber else { return nil }
+            out += String(v)
+        }
+        return out
     }
 }
 
@@ -882,6 +1056,7 @@ struct CallsPage: View {
     @State private var history: [CallHistoryItem] = []
     @State private var names: [String: ConversationSummary] = [:]
     @State private var confirmClear = false
+    @State private var clearing = false
     @State private var loaded = false
     @ObservedObject private var calls = CallManager.shared
     private var token: String { store.session?.token ?? "" }
@@ -988,7 +1163,7 @@ struct CallsPage: View {
                             .padding(.horizontal, 10).frame(minHeight: 40)
                     }
                     .buttonStyle(.plain)
-                    .disabled(calls.phase != .idle)
+                    .disabled(calls.phase != .idle || clearing)
                     .opacity(calls.phase != .idle ? 0.45 : 1)
                     .padding(.top, 8)
                 }
@@ -1026,8 +1201,15 @@ struct CallsPage: View {
         .task { await load() }
         .confirmationDialog(Text("set.c.clear.confirm"), isPresented: $confirmClear, titleVisibility: .visible) {
             Button("set.c.clear", role: .destructive) {
+                guard !clearing else { return }
+                clearing = true
                 Task {
-                    do { try await APIClient.shared.stClearCallHistory(token: token) } catch {
+                    defer { clearing = false }
+                    sw.problem = nil
+                    do {
+                        try await APIClient.shared.stClearCallHistory(token: token)
+                        history = [] // gone at once, not only after the list is read again
+                    } catch {
                         sw.problem = NSLocalizedString("settings.failed", comment: "")
                     }
                     await load()
@@ -1076,6 +1258,10 @@ struct AppearancePage: View {
 }
 
 struct AboutPage: View {
+    static var versionBuild: String {
+        let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? ""
+        return build.isEmpty || build == AppConfig.version ? AppConfig.version : "\(AppConfig.version) (\(build))"
+    }
     @State private var note: String?
     @ObservedObject private var stats = DeliveryStats.shared
     @State private var mediaLog = MediaLog.read()
@@ -1085,8 +1271,9 @@ struct AboutPage: View {
                      subtitle: String(format: NSLocalizedString("ux3.set.version.n", comment: ""), AppConfig.version), icon: "info.circle") {
             SBanner(icon: "info.circle", title: "Tradeflor", subtitle: NSLocalizedString("ux3.set.about.sub", comment: ""), image: "BrandFlower")
             SCard {
-                SKeyValue(key: NSLocalizedString("set.version", comment: ""), value: AppConfig.version, action: NSLocalizedString("set.copy", comment: "")) {
-                    UIPasteboard.general.string = "Tradeflor iOS \(AppConfig.version)"
+                // the version and its build ("1.4 (212)"): two TestFlight builds of one version were told apart nowhere
+                SKeyValue(key: NSLocalizedString("set.version", comment: ""), value: Self.versionBuild, action: NSLocalizedString("set.copy", comment: "")) {
+                    UIPasteboard.general.string = "Tradeflor iOS \(Self.versionBuild)"
                     note = NSLocalizedString("set.copied", comment: "")
                 }
                 SDivider()

@@ -55,7 +55,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
 
     private static let defaults: [String: Bool] = [
         "notifications.enabled": true, "notifications.sound": true, "notifications.previews": true,
-        "notifications.when_focused": false, "notifications.groups": true, "notifications.mentions": true,
+        "notifications.when_focused": true, "notifications.groups": true, "notifications.mentions": true,
         "notifications.mentions_in_muted": true,
     ]
 
@@ -131,6 +131,9 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     }
 
     private func flag(_ k: String) -> Bool { settings[k] ?? Self.defaults[k] ?? false }
+
+    /// A switch saved in Settings › Notifications: in force here at once.
+    func settingChanged(_ key: String, _ value: Bool) { settings[key] = value }
 
     private func isMuted(_ conversation: String) -> Bool {
         (mutedUntil[conversation] ?? 0) > Int64(Date().timeIntervalSince1970)

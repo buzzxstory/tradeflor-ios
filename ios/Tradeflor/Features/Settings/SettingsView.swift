@@ -19,9 +19,12 @@ struct SettingsView: View {
     @State private var adminRole = UserDefaults.standard.string(forKey: "tf.admin.role") ?? ""
     @State private var confirmSignOut = false
     @State private var signingOut = false
-    @State private var sharingCount = 0
+    /// The last live-location count, kept like the profile: the row does not flick from "None" to "Sharing in 2 chats".
+    private static var lastSharing = 0
+    @State private var sharingCount = SettingsView.lastSharing
     @AppStorage("tf.night") private var night = true
     @ObservedObject private var calls = CallManager.shared
+    @State private var appeared = false
 
     private var token: String { store.session?.token ?? "" }
     private var username: String { profile?.username ?? store.session?.username ?? "" }
@@ -122,6 +125,12 @@ struct SettingsView: View {
                 .padding(.bottom, 32)
             }
             .buttonStyle(.plain)
+            // back from a page (Live location's Stop, My Profile, My Identity): the count and the card read again; the
+            // first appearance is the .task below
+            .onAppear {
+                guard appeared else { appeared = true; return }
+                Task { await refreshQuick() }
+            }
             // a pull never waits on the admin check's slow retries (the spinner stayed up to a minute and a half)
             .refreshable { await load(retryAdmin: false) }
             .background(SettingsBackground())
@@ -206,26 +215,50 @@ struct SettingsView: View {
         .background { SettingsSweep(peak: 0.28, tail: 0.08, share: 0.55).opacity(0.8) }
         .sCardChrome()
         .contentShape(Rectangle())
+        // one VoiceOver stop: "Buzzhub, @buzzhub, Online, My Profile" (the web's aria-label)
+        .accessibilityElement(children: .combine)
     }
 
     /// Forgets the cached profile and admin role (sign-out): the next account never shows the previous one's card or
     /// Admin Center.
     static func forgetCache() {
         lastProfile = nil
+        lastSharing = 0
         UserDefaults.standard.removeObject(forKey: "tf.admin.role")
+    }
+
+    /// The profile card and the live-location count (no admin check).
+    private func refreshQuick() async {
+        guard !token.isEmpty else { return }
+        if let p = try? await APIClient.shared.profile(token: token) { took(p) }
+        await countShares()
+    }
+
+    private func took(_ p: Profile) {
+        profile = p
+        Self.lastProfile = p
+        // the session keeps the name typed at sign-in (it can be the email) and never heard of a username change: the
+        // "@name" on the Sign Out row, Account and elsewhere follow the server's
+        store.renamed(p.username)
+    }
+
+    private func countShares() async {
+        let now = Int64(Date().timeIntervalSince1970)
+        // only the ones still running (as Live location's own list): an ended share no longer counted as "Sharing"
+        let n = await APIClient.shared.stMyLocations(token: token).filter { $0.stopped != true && $0.until > now }.count
+        sharingCount = n
+        Self.lastSharing = n
     }
 
     private func load(retryAdmin: Bool = true) async {
         guard !token.isEmpty else { return }
         do {
-            let p = try await APIClient.shared.profile(token: token)
-            profile = p
-            Self.lastProfile = p
+            took(try await APIClient.shared.profile(token: token))
         } catch APIError.badCredentials {
             store.sessionExpired()
             return
         } catch {}
-        sharingCount = await APIClient.shared.stMyLocations(token: token).filter { $0.stopped != true }.count
+        await countShares()
         for n in 0..<6 {
             switch await APIClient.shared.stAdminCheck(token: token) {
             case .role(let r):
@@ -663,17 +696,21 @@ struct EditProfileSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                // the server's limits (auth/profile.go: name 64, username 2-32, bio 200, counted in Unicode scalars, so an
+                // emoji made of several counts as several): a longer text was refused with an English line
                 Section(header: Text("settings.name")) {
                     TextField("set.name.ph", text: $name).textContentType(.name)
+                        .onChange(of: name) { v in let c = Self.clip(v, 64); if c != v { name = c } }
                 }
                 .listRowBackground(Theme.surface)
                 Section(header: Text("signup.username")) {
                     TextField("signup.username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .onChange(of: username) { v in let c = Self.clip(v, 32); if c != v { username = c } }
                 }
                 .listRowBackground(Theme.surface)
-                Section(header: Text("settings.bio"), footer: Text("\(bio.count)/200")) {
+                Section(header: Text("settings.bio"), footer: Text(verbatim: "\(bio.unicodeScalars.count)/200")) {
                     TextField("set.bio.ph", text: $bio, axis: .vertical).lineLimit(3...6)
-                        .onChange(of: bio) { v in if v.count > 200 { bio = String(v.prefix(200)) } }
+                        .onChange(of: bio) { v in let c = Self.clip(v, 200); if c != v { bio = c } }
                 }
                 .listRowBackground(Theme.surface)
                 if let problem { Section { Text(problem).foregroundStyle(Theme.danger).font(.footnote) }.listRowBackground(Theme.surface) }
@@ -708,5 +745,19 @@ struct EditProfileSheet: View {
             username = profile.username
             bio = profile.bio
         }
+    }
+
+    /// At most `max` Unicode scalars (the server's count), never cutting a character in half.
+    static func clip(_ s: String, _ max: Int) -> String {
+        guard s.unicodeScalars.count > max else { return s }
+        var out = ""
+        var n = 0
+        for ch in s {
+            let k = ch.unicodeScalars.count
+            if n + k > max { break }
+            out.append(ch)
+            n += k
+        }
+        return out
     }
 }
