@@ -392,14 +392,24 @@ struct ListRowRule: View {
     var body: some View { Rectangle().fill(ListLook.rowRule).frame(height: 1) }
 }
 
+/// A tab that was read less than `within` seconds ago is not read again when it is entered once more (the live events keep it
+/// right meanwhile). Keyed by the screen and the session, so another account never skips its first read.
+enum FreshGate {
+    private static let lock = NSLock()
+    private static var at: [String: Date] = [:]
+    static func isFresh(_ key: String, within: TimeInterval = 20) -> Bool {
+        lock.withLock { at[key].map { Date().timeIntervalSince($0) < within } ?? false }
+    }
+    static func mark(_ key: String) { lock.withLock { at[key] = Date() } }
+}
+
 /// The status ring around a row's picture (18-status.css .avatar-status: 2.5 pt gap, a 2 pt ring, accent = new, grey = seen).
 struct ListAvatarRing<Content: View>: View {
     let seen: Bool
     @ViewBuilder let content: () -> Content
     var body: some View {
         content()
-            .padding(2.5)
-            .overlay(Circle().stroke(seen ? ListLook.ringSeen : Theme.accent, lineWidth: 2).padding(-1))
+            .overlay(Circle().stroke(seen ? ListLook.ringSeen : Theme.accent, lineWidth: 2).padding(-3.5))
     }
 }
 

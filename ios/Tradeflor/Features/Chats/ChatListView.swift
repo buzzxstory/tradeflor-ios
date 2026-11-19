@@ -82,6 +82,30 @@ struct ChatListView: View {
 
     @State private var lastReload = Date.distantPast
 
+    /// A text message that arrived live goes onto its row at once: the preview, the time, the unread count, and the row moves
+    /// to the top. Other kinds (photos, voice, calls) wait for the reload that follows, which makes their preview.
+    private func applyLive(_ m: Message) {
+        guard m.kind == "text", !m.isDeleted, !m.isSealed, !lockedIDs.contains(m.conversation_id),
+              let i = chats.firstIndex(where: { $0.conversation_id == m.conversation_id }) else { return }
+        let c = chats[i]
+        let mine = m.sender_id == (store.session?.userID ?? "")
+        let ms = chats.contains { $0.last_message_at > 100_000_000_000 } // the list's own unit (seconds or milliseconds)
+        let secs = m.created_at > 100_000_000_000 ? m.created_at / 1000 : m.created_at
+        let at = ms ? secs * 1000 : secs
+        guard at >= c.last_message_at else { return }
+        let open = path.last?.conversation_id == c.conversation_id
+        let patched = ConversationSummary(
+            conversation_id: c.conversation_id, peer_id: c.peer_id, peer_username: c.peer_username,
+            peer_display_name: c.peer_display_name, peer_avatar_id: c.peer_avatar_id, last_message: m.body,
+            last_message_at: at, last_message_mine: mine, unread_count: (mine || open) ? c.unread_count : c.unread_count + 1,
+            last_message_kind: "text", last_file_type: nil, last_duration_ms: nil, last_message_status: nil,
+            last_call_state: nil, disappear_secs: c.disappear_secs)
+        var next = chats
+        next[i] = patched
+        next.sort { $0.last_message_at > $1.last_message_at }
+        chats = next
+    }
+
     /// At most one reload every 3 s: a busy chat used to reload the list (3-4 requests) for nearly every message.
     private func reloadSoon() {
         guard pendingReload == nil else { return } // one is already on its way and will include this
@@ -179,7 +203,12 @@ struct ChatListView: View {
         }
         // a burst of new messages (a busy group) is one reload, not one per message: that redrew the list all the time
         // groups are not in this list: their messages and receipts never reload it
-        .onReceive(live.messages) { m in if !m.conversation_id.hasPrefix("grp_") { reloadSoon() } }
+        .onReceive(live.messages) { m in
+            if !m.conversation_id.hasPrefix("grp_") {
+                applyLive(m) // the row shows it now (no 0.7-3 s wait)
+                reloadSoon()
+            }
+        }
         .onReceive(live.changes) { id in if !id.hasPrefix("grp_") { reloadSoon() } }
         // the socket is back (after a lock, a drop): what arrived meanwhile is read at once, not at the next poll
         .onReceive(live.opened) { _ in reloadSoon() }
@@ -190,9 +219,13 @@ struct ChatListView: View {
         .onChange(of: lockedIDs) { l in if filter == "locked" && l.isEmpty { filter = "all" } }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
-            await load()
-            await reloadFolders()
-            await loadStatuses()
+            let k = "chats|" + token
+            if !(FreshGate.isFresh(k) && !chats.isEmpty) {
+                await load()
+                await reloadFolders()
+                await loadStatuses()
+                FreshGate.mark(k)
+            }
             var rounds = 0
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: refreshEvery * 1_000_000_000)

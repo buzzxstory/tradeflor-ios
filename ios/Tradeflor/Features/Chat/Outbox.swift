@@ -47,7 +47,7 @@ enum OutboxStore {
 
     static func save(account: String, conversation: String, _ pending: [PendingMessage]) {
         guard let url = file(account, conversation) else { return }
-        let entries = pending.filter { $0.video == nil || $0.file != nil }.map {
+        let entries = pending.filter { !$0.missing && ($0.video == nil || $0.file != nil) }.map {
             Entry(id: $0.id, body: $0.body, date: $0.date, jpeg: $0.jpeg, audio: $0.audio, durationMs: $0.durationMs,
                   waveform: $0.waveform, replyTo: $0.replyTo, fileName: $0.file?.lastPathComponent,
                   isVideo: $0.file != nil ? $0.video != nil : nil, docName: $0.docName.isEmpty ? nil : $0.docName,
@@ -157,7 +157,11 @@ enum OutboxStore {
             if let name = e.fileName {
                 // the file must still be there (it is removed once sent); without it the entry cannot be sent
                 let url = ResumableUploader.folder.appendingPathComponent(name)
-                guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+                guard FileManager.default.fileExists(atPath: url.path) else {
+                    // said, not dropped: the bubble tells that it was not sent and can be removed
+                    p.missing = true; p.failed = true; p.refused = true
+                    return p
+                }
                 p.file = url
                 if e.isVideo == true { p.video = Data() }
                 p.docName = e.docName ?? ""

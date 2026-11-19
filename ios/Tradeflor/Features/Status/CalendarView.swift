@@ -189,7 +189,12 @@ struct CalendarView: View {
                 }
             }
         }
-        .task(id: key) { await load(manual: false) }
+        .task(id: key) {
+            let k = "cal|" + token + "|" + key
+            if FreshGate.isFresh(k) && loaded { return }
+            await load(manual: false)
+            FreshGate.mark(k)
+        }
         .task(id: failed || serverStale) {
             if failed || serverStale {
                 try? await Task.sleep(nanoseconds: 6_000_000_000)

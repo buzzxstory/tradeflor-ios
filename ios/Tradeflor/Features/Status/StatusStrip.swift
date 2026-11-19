@@ -62,7 +62,12 @@ struct StatusStrip: View {
             .padding(.top, 8)
             .padding(.bottom, 4)
         }
-        .task { await load() }
+        .task {
+            let k = "strip|" + token
+            if FreshGate.isFresh(k) && !groups.isEmpty { return }
+            await load()
+            FreshGate.mark(k)
+        }
         // the web re-reads every two minutes and when the app comes back to the front
         .task {
             while !Task.isCancelled {

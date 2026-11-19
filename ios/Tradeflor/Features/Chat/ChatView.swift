@@ -405,7 +405,9 @@ struct ChatView: View {
     /// A message on its way (dimmed, with its upload progress and X), or one that failed (Retry / Delete).
     private func pendingRow(_ p: PendingMessage) -> some View {
         Group {
-            if let img = p.image {
+            if p.missing {
+                MissingMediaBubble()
+            } else if let img = p.image {
                 // the picture at once, dimmed, with a ring and an X until it is sent (website bcfeb0a)
                 PhotoBubble(mine: true, date: p.date, state: p.failed ? .failed : .sending, caption: "", size: img.size) {
                     ZStack {
@@ -469,9 +471,12 @@ struct ChatView: View {
             }
         }
         .id(p.id)
-        .onTapGesture { if p.failed { Task { await deliver(p, retry: true) } } }
+        .onTapGesture {
+            if p.missing { pending.removeAll { $0.id == p.id } } // nothing to send: a tap removes the note
+            else if p.failed { Task { await deliver(p, retry: true) } }
+        }
         .overlay(alignment: .bottomTrailing) {
-            if p.failed {
+            if p.failed && !p.missing {
                 // "Not sent · Retry" (website FailedBadge), with Delete in the menu
                 Text("chat.notsent.retry").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.danger)
                     .padding(.horizontal, 8).padding(.vertical, 3).background(Theme.card, in: Capsule())
@@ -479,9 +484,11 @@ struct ChatView: View {
                     .allowsHitTesting(false)
             }
         }
-        .padding(.bottom, p.failed ? 18 : 0)
+        .padding(.bottom, p.failed && !p.missing ? 18 : 0)
         .contextMenu {
-            if p.failed {
+            if p.missing {
+                Button(role: .destructive) { pending.removeAll { $0.id == p.id } } label: { Label("chat.delete", systemImage: "trash") }
+            } else if p.failed {
                 Button { Task { await deliver(p, retry: true) } } label: { Label("chat.retry", systemImage: "arrow.clockwise") }
                 Button(role: .destructive) {
                     pending.removeAll { $0.id == p.id }
@@ -2450,6 +2457,26 @@ private struct HoldClock: View {
     }
 }
 
+/// The note for a pending photo / video / document whose file is gone from this phone.
+struct MissingMediaBubble: View {
+    var body: some View {
+        HStack {
+            Spacer(minLength: 48)
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle").font(.system(size: 18)).foregroundStyle(Theme.gold)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("chat.media.missing").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                    Text("chat.media.missing.tap").font(.system(size: 12)).foregroundStyle(Theme.faint)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .tfBubble(mine: true)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
 struct PendingMessage: Identifiable, Equatable {
     let id: String // also the idempotency key
     let body: String
@@ -2473,6 +2500,9 @@ struct PendingMessage: Identifiable, Equatable {
     var docMime = ""
     /// The server refused it for good (kept in the saved outbox as such).
     var refused = false
+    /// A photo, video or document whose file is no longer on this phone (cleaned up, storage freed): it cannot be sent. It shows
+    /// as a note with "Tap to remove" instead of vanishing without a word.
+    var missing = false
 }
 
 struct ViewedPhoto: Identifiable {

@@ -185,7 +185,12 @@ struct GroupsListView: View {
                 Button("chat.close", role: .cancel) {}
             }
         }
-        .task { await load() }
+        .task {
+            let k = "groups|" + token
+            if FreshGate.isFresh(k) && !groups.isEmpty { return }
+            await load()
+            FreshGate.mark(k)
+        }
         .task(id: discoverNeedle) {
             // web GroupDiscover: 2+ characters, 300 ms after the last key; what was found for older text is not kept on screen
             let q = discoverNeedle
@@ -577,34 +582,43 @@ struct GroupsListView: View {
         // the spinner only shows with no groups on screen; flipping it on every quiet reload redrew the whole list
         if groups.isEmpty { loading = true }
         defer { if loading { loading = false } }
+        // everything the list needs is asked at once and put on screen in ONE update (it used to arrive in 4-5 steps:
+        // archived and locked groups showed, then vanished; pinned ones moved)
+        async let prefsList = try? APIClient.shared.prefs(token: token)
+        async let extrasMap = APIClient.shared.grpListExtras(token: token)
+        async let statusFeed = try? APIClient.shared.statusFeed(token: token)
+        var fresh: [GroupSummary]?
         do {
-            // the same list again (a burst of messages elsewhere) redraws nothing
-            let fresh = try await APIClient.shared.groups(token: token)
-            if fresh != groups { groups = fresh }
-            BadgeStore.shared.groups = groups.filter { $0.unread_count > 0 }.count
-            #if DEBUG
-            // CI only: TF_CI_OPEN_GROUP=1 opens the first group once, for a screenshot of a group chat
-            if ProcessInfo.processInfo.environment["TF_CI_OPEN_GROUP"] == "1", path.isEmpty, let first = groups.first,
-               !UserDefaults.standard.bool(forKey: "tf.ci.groupOpened") {
-                UserDefaults.standard.set(true, forKey: "tf.ci.groupOpened")
-                path = [first]
-            }
-            #endif
-            if let feed = try? await APIClient.shared.statusFeed(token: token) {
-                var map: [String: StatusGroup] = [:]
-                for s in feed { if let gid = s.group_id, !s.posts.isEmpty { map[gid] = s } }
-                groupStatuses = map
-            }
+            fresh = try await APIClient.shared.groups(token: token)
         } catch APIError.badCredentials {
             store.sessionExpired()
             return
         } catch {}
-        if let list = try? await APIClient.shared.prefs(token: token) {
-            prefs = Dictionary(list.map { ($0.conversation_id, $0) }, uniquingKeysWith: { a, _ in a })
+        let list = await prefsList
+        let ex = await extrasMap
+        let feed = await statusFeed
+        if let fresh, fresh != groups { groups = fresh }
+        if let list {
+            let p = Dictionary(list.map { ($0.conversation_id, $0) }, uniquingKeysWith: { a, _ in a })
+            prefs = p
         }
-        extras = await APIClient.shared.grpListExtras(token: token)
-        // a locked group never shows in the tab's badge either (Chats does the same for locked chats)
-        BadgeStore.shared.groups = groups.filter { $0.unread_count > 0 && !isLocked($0) }.count
+        extras = ex
+        if let feed {
+            var map: [String: StatusGroup] = [:]
+            for s in feed { if let gid = s.group_id, !s.posts.isEmpty { map[gid] = s } }
+            if map != groupStatuses { groupStatuses = map }
+        }
+        // a locked group never shows in the tab's badge either (Chats does the same for locked chats); written once
+        let badge = groups.filter { $0.unread_count > 0 && !isLocked($0) }.count
+        if BadgeStore.shared.groups != badge { BadgeStore.shared.groups = badge }
+        #if DEBUG
+        // CI only: TF_CI_OPEN_GROUP=1 opens the first group once, for a screenshot of a group chat
+        if ProcessInfo.processInfo.environment["TF_CI_OPEN_GROUP"] == "1", path.isEmpty, let first = groups.first,
+           !UserDefaults.standard.bool(forKey: "tf.ci.groupOpened") {
+            UserDefaults.standard.set(true, forKey: "tf.ci.groupOpened")
+            path = [first]
+        }
+        #endif
         if folders.isEmpty { await reloadFolders() }
     }
 
