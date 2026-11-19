@@ -899,10 +899,18 @@ struct Avatar: View {
                 loaded = (owner, key, hit)
                 return
             }
+            // a picture seen before is on disk (its id changes with the picture): shown at once, no download
+            let diskKey = "avatar/\(owner)/\(id)"
+            if let d = FileDiskCache.load(diskKey), let img = await AvatarImages.decode(d, maxPixels: pixels) {
+                AvatarImages.put(img, key)
+                if !Task.isCancelled { loaded = (owner, key, img) }
+                return
+            }
             let data = groupID != nil
                 ? await APIClient.shared.groupAvatar(token: token, groupID: groupID ?? "", avatarID: id)
                 : await APIClient.shared.avatar(token: token, userID: userID, avatarID: id)
             guard let data, !Task.isCancelled else { return }
+            FileDiskCache.save(diskKey, data)
             guard let img = await AvatarImages.decode(data, maxPixels: pixels) else { return }
             AvatarImages.put(img, key)
             if !Task.isCancelled { loaded = (owner, key, img) }

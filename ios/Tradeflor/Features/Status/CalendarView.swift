@@ -23,6 +23,8 @@ struct CalendarView: View {
     @State private var failed = false
     /// The server's own answer was the last good data while the provider is down (web data.stale).
     @State private var serverStale = false
+    /// The amber stale line is shown only after the data stayed stale for a few seconds (it flashed on entering, then went).
+    @State private var staleShown = false
     @State private var updatedAt: Date?
     /// The open day's high/medium/low events, sorted, worked out once per answer (not on every read during a redraw).
     @State private var dayList: [CalendarEvent] = []
@@ -188,6 +190,14 @@ struct CalendarView: View {
             }
         }
         .task(id: key) { await load(manual: false) }
+        .task(id: failed || serverStale) {
+            if failed || serverStale {
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                if !Task.isCancelled { staleShown = true }
+            } else {
+                staleShown = false
+            }
+        }
         .task(id: tzID) { await loadNext() }
         .task {
             while !Task.isCancelled {
@@ -397,7 +407,7 @@ struct CalendarView: View {
             dayNav
             feedLine
             chips
-            if (failed || serverStale) && loaded {
+            if (failed || serverStale) && staleShown && loaded {
                 staleBanner.padding(.top, 6)
             }
             eventsBlock.padding(.top, 6)
@@ -505,6 +515,11 @@ struct CalendarView: View {
             // previous day's LIVE / STALE time
             guard loaded, updatedAt != nil else {
                 return (NSLocalizedString(errorKey == key ? "ux3.cal.offline" : "ux3.cal.connecting", comment: ""), P.mu, P.mu2)
+            }
+            if (failed || serverStale) && !staleShown {
+                // not shown yet: a moment of grace, quietly (no amber)
+                return (String(format: NSLocalizedString("cal.live", comment: ""), updatedAt.map { time($0, seconds: true) } ?? ""),
+                        Theme.dyn(0x9FF0CF, 0x0C7A4F), P.up)
             }
             if failed || serverStale {
                 return (String(format: NSLocalizedString("ux4.cal.stale", comment: ""), updatedAt.map { time($0, seconds: true) } ?? ""),

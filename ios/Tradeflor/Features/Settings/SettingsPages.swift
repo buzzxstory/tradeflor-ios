@@ -42,8 +42,10 @@ struct MyProfilePage: View {
         .navigationTitle(Text("set.myprofile.title"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .toolbarBackground(Theme.header, for: .navigationBar)
+        // the bar has the page's own colour (the top of the star-field), not a second darker band
+        .toolbarBackground(Theme.dyn(0x02242F, 0xF3F7FA), for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
+        .modifier(DockSpace()) // the last rows are not hidden behind the floating dock
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Button { editing = true } label: { Image(systemName: "pencil") }

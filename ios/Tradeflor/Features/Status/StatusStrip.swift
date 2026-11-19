@@ -45,7 +45,7 @@ struct StatusStrip: View {
                      onPlus: { manage = true }) {
                     Avatar(token: token, userID: me, avatarID: myAvatar, title: store.session?.username ?? "?", size: faceSize)
                 } action: {
-                    if let m = mine, !m.posts.isEmpty { open = StatusOpen(groups: [m], index: 0) } else { manage = true }
+                    if let m = mine, !m.posts.isEmpty { open = StatusOpen(groups: [m] + others, index: 0) } else { manage = true }
                 }
                 if let o = official, let posts = o.posts, !posts.isEmpty {
                     officialItem(o)

@@ -33,6 +33,7 @@ struct RootView: View {
     @EnvironmentObject private var store: SessionStore
     @EnvironmentObject private var live: LiveConnection
     @Environment(\.scenePhase) private var scenePhase
+    @State private var settling = false
     @ObservedObject private var calls = CallManager.shared
     @ObservedObject private var badges = BadgeStore.shared
     @ObservedObject private var notifier = LocalNotifier.shared
@@ -188,7 +189,16 @@ struct RootView: View {
         }
         .onChange(of: store.session?.token) { _ in syncLive() }
         .onReceive(live.sessionInvalid) { _ in if store.session != nil { store.sessionExpired() } }
+        // the first moments after unlocking the phone: a touch that was meant for the lock screen or an animation still running
+        // is not a tap on a row (it opened a chat by itself)
+        .overlay {
+            if settling { Color.clear.contentShape(Rectangle()).ignoresSafeArea() }
+        }
         .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                settling = true
+                Task { try? await Task.sleep(nanoseconds: 450_000_000); settling = false }
+            }
             // online = the app is in front (server d4d2e77)
             live.setActive(phase != .background) // Control Center or a system sheet (.inactive) is not "offline"
             if phase == .active { live.probe(); Task { await FlashHub.shared.askPending() } }
