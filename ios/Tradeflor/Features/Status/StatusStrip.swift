@@ -2,6 +2,12 @@ import SwiftUI
 
 /// The status row under the search pill (website StatusBar.tsx): "My status" (dashed ring and a + when empty),
 /// the verified "TRADEFLOR Official" ring, then each contact with statuses (accent ring = new, grey = seen).
+struct OfficialOpen: Identifiable {
+    let id = UUID()
+    let posts: [OfficialPost]
+    let name: String?
+}
+
 struct StatusStrip: View {
     @EnvironmentObject private var store: SessionStore
     @State private var groups: [StatusGroup] = []
@@ -9,19 +15,20 @@ struct StatusStrip: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.layoutDirection) private var layoutDirection
     @State private var officialRetry = 0
+    /// Counts the reads of the feed: an older answer that arrives late never replaces a newer one (a ring flipped back to new).
+    @State private var loadGen = 0
     @State private var myAvatar: String?
     @State private var open: StatusOpen?
-    @State private var openOfficial = false
+    @State private var openOfficial: OfficialOpen?
     /// The Official posts as they were when the ring was tapped: a reload while the viewer is open (every two minutes, or a
     /// live status event) no longer swaps the list under it, which moved the viewer onto another post
-    @State private var officialShown: [OfficialPost] = []
     @State private var manage = false
 
     private var token: String { store.session?.token ?? "" }
     private var me: String { store.session?.userID ?? "" }
     private var mine: StatusGroup? { groups.first { $0.isMine && $0.group_id == nil } }
     private var others: [StatusGroup] {
-        groups.filter { !($0.isMine && $0.group_id == nil) && !$0.posts.isEmpty }
+        groups.filter { !($0.isMine && $0.group_id == nil) && $0.posts.contains { !StatusGone.expired($0.expires_at) } }
             .sorted { ($0.all_seen ? 1 : 0, -$0.latest) < ($1.all_seen ? 1 : 0, -$1.latest) }
     }
 
@@ -45,7 +52,7 @@ struct StatusStrip: View {
                 }
                 ForEach(others) { g in
                     item(name: g.title, ring: g.all_seen ? .seen : .unseen) {
-                        Avatar(token: token, userID: g.user_id, avatarID: nil, title: g.title, size: faceSize)
+                        Avatar(token: token, userID: g.user_id, avatarID: nil, title: g.title, groupID: g.group_id, size: faceSize)
                     } action: {
                         if let i = others.firstIndex(of: g) { open = StatusOpen(groups: others, index: i) }
                     }
@@ -71,8 +78,10 @@ struct StatusStrip: View {
         .fullScreenCover(item: $open) { o in
             StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) {}
         }
-        .fullScreenCover(isPresented: $openOfficial) {
-            OfficialViewer(token: token, posts: officialShown, name: official.flatMap { $0.name.isEmpty ? nil : $0.name })
+        // the posts travel inside the item: a cover built from separate state opened with an empty list (a black screen
+        // with only the name and the buttons, that closed itself)
+        .fullScreenCover(item: $openOfficial) { o in
+            OfficialViewer(token: token, posts: o.posts, name: o.name)
         }
         .fullScreenCover(isPresented: $manage) {
             StatusCreatorSheet { NotificationCenter.default.post(name: .tfStatusChanged, object: nil) }
@@ -128,8 +137,8 @@ struct StatusStrip: View {
         let fresh = !o.all_seen
         return Button {
             // only posts still within their time (a copy kept from an earlier visit may hold expired ones)
-            officialShown = (o.posts ?? []).filter { !StatusGone.expired($0.expires_at) }
-            if !officialShown.isEmpty { openOfficial = true }
+            let shown = (o.posts ?? []).filter { !StatusGone.expired($0.expires_at) }
+            if !shown.isEmpty { openOfficial = OfficialOpen(posts: shown, name: o.name.isEmpty ? nil : o.name) }
         } label: {
             VStack(spacing: 4) {
                 ZStack {
@@ -173,11 +182,13 @@ struct StatusStrip: View {
 
     private func load() async {
         guard !token.isEmpty else { return }
-        await StatusSeenQueue.shared.drain() // the statuses just watched are counted as seen in this answer
+        loadGen += 1
+        let gen = loadGen
+        await StatusSeenQueue.shared.drain(timeout: 2) // the statuses just watched are counted as seen in this answer
         async let feed = APIClient.shared.statusFeed(token: token)
         async let off = APIClient.shared.official(token: token)
         async let prof = APIClient.shared.profile(token: token)
-        groups = (try? await feed) ?? groups
+        if let f = try? await feed, gen == loadGen { groups = f }
         // my picture first: the Official retry below returns early (my new photo never reached "My status" while it ran)
         if let p = try? await prof { myAvatar = p.avatar_id.isEmpty ? nil : p.avatar_id }
         if let o = try? await off {

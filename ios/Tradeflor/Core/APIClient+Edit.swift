@@ -159,8 +159,34 @@ enum ListCache {
         return String(h, radix: 36)
     }
 
+    /// Chat Lock: the chats the server says are locked. The last-message text of these is never written to disk.
+    private static let lockedLock = NSLock()
+    private static var _locked: Set<String>?
+    static func noteLocked(_ ids: Set<String>, token: String) {
+        lockedLock.lock(); _locked = ids; lockedLock.unlock()
+        if let d = try? JSONEncoder().encode(Array(ids)) { save("locked", token: token, d) }
+        // lists already on disk lose the text of a chat that has just been locked
+        for kind in ["conversations", "groups"] { if let d = load(kind, token: token) { save(kind, token: token, d) } }
+    }
+    private static func lockedIDs(token: String) -> Set<String> {
+        lockedLock.lock(); let hit = _locked; lockedLock.unlock()
+        if let hit { return hit }
+        guard let d = load("locked", token: token), let a = try? JSONDecoder().decode([String].self, from: d) else { return [] }
+        return Set(a)
+    }
+    private static func sealed(_ kind: String, token: String, _ data: Data) -> Data {
+        guard kind == "conversations" || kind == "groups" else { return data }
+        let ids = lockedIDs(token: token)
+        guard !ids.isEmpty, var arr = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] else { return data }
+        for i in arr.indices {
+            if let c = arr[i]["conversation_id"] as? String, ids.contains(c) { arr[i]["last_message"] = "" }
+        }
+        return (try? JSONSerialization.data(withJSONObject: arr)) ?? data
+    }
+
     static func save(_ kind: String, token: String, _ data: Data) {
         guard let dir else { return }
+        let data = sealed(kind, token: token, data)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // one copy per kind: an older session's file goes
         if let old = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
@@ -173,7 +199,8 @@ enum ListCache {
 
     static func load(_ kind: String, token: String) -> Data? {
         guard let dir, !token.isEmpty else { return nil }
-        return try? Data(contentsOf: dir.appendingPathComponent("\(kind)-\(tag(token)).json"))
+        guard let d = try? Data(contentsOf: dir.appendingPathComponent("\(kind)-\(tag(token)).json")) else { return nil }
+        return sealed(kind, token: token, d)
     }
 
     static func conversations(token: String) -> [ConversationSummary] {

@@ -78,6 +78,9 @@ struct Message: Decodable, Identifiable, Equatable {
     let signal: String?
     let views: Int?
     let comments: CommentSummary?
+    /// Chat Lock: the server sends only this stub for a locked chat on a device that has not unlocked it.
+    let locked: Bool?
+    var isSealed: Bool { locked == true }
 
     /// {"emoji": [userID, ...]} -> [(emoji, count, mine)] in a stable order.
     /// Remembered by (me, reactions JSON): every row read it 2-3 times per redraw, each a JSON decode.

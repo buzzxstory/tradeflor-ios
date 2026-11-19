@@ -56,6 +56,7 @@ struct OfficialViewer: View {
     var name: String? = nil
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
     @State private var index: Int
     /// bumped to start the same post again (a tap back on the first post)
@@ -122,6 +123,9 @@ struct OfficialViewer: View {
         .onChange(of: holding) { h in
             if h { setPaused(true) } else { lastGestureAt = Date(); resume() }
         }
+        .onChange(of: scenePhase) { ph in
+            if ph == .active { resume() } else { setPaused(true) }
+        }
         .onChange(of: touching) { t in
             // a drag the system cancelled (no onEnded): put the story back
             guard !t else { return }
@@ -160,6 +164,12 @@ struct OfficialViewer: View {
             .ignoresSafeArea()
             .environment(\.layoutDirection, .leftToRight)
             .simultaneousGesture(hold)
+            // VoiceOver: the taps on the sides are not reachable, so next / previous / pause are actions of the story
+            .accessibilityElement()
+            .accessibilityLabel(Text("stx.a11y.story"))
+            .accessibilityAction(named: Text("stx.a11y.next")) { next() }
+            .accessibilityAction(named: Text("stx.a11y.previous")) { previous() }
+            .accessibilityAction(named: Text("stx.a11y.pause")) { userPausedToggle() }
             VStack(spacing: 9) {
                 bars
                 header
@@ -351,6 +361,8 @@ struct OfficialViewer: View {
 
     private func resume() { setPaused(mustHold) }
 
+    private func userPausedToggle() { userPaused.toggle(); resume() }
+
     /// After an interruption, a route change or coming back to the front: sound as the speaker button says, play on unless held.
     private func restoreAudio() {
         guard !closing, post?.kind == "video" else { return }
@@ -385,9 +397,10 @@ struct OfficialViewer: View {
         poster = nil
         videoStarted = false
         loadFailed = false
+        if CallManager.shared.lineInUse { muted = true }
         clock.progress = 0
         guard let post else {
-            if posts.isEmpty { close() } // nothing to show: the viewer goes instead of staying black
+            if posts.isEmpty { close() } else { index = 0; round += 1 } // never stuck black on an index past the list
             return
         }
         if StatusGone.expired(post.expires_at) {
@@ -436,7 +449,7 @@ struct OfficialViewer: View {
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 33_000_000)
             if Task.isCancelled { return }
-            if paused {
+            if paused || UIAccessibility.isVoiceOverRunning {
                 if pausedAt == nil { pausedAt = Date() }
                 continue
             }
@@ -455,10 +468,12 @@ struct OfficialViewer: View {
             end.ended = true
         }
         defer { NotificationCenter.default.removeObserver(obs) }
+        let opened = Date()
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 33_000_000)
             if Task.isCancelled { return }
-            if item.status == .failed {
+            // no first frame after 15 s (not held): it will not play, the spinner must not stay for ever
+            if item.status == .failed || (!videoStarted && !paused && Date().timeIntervalSince(opened) > 15) {
                 // it cannot play: the story still moves on, on a clock
                 videoStarted = true
                 await runClock(imageSeconds, from: imageSeconds * clock.progress)

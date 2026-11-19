@@ -192,6 +192,8 @@ enum OfficialFeedCache {
         return posts.isEmpty ? nil : OfficialChannel(name: f.name, posts: posts, all_seen: f.all_seen)
     }
 
+    static func forget() { UserDefaults.standard.removeObject(forKey: key) }
+
     static func keep(_ f: OfficialChannel) {
         if (f.posts ?? []).isEmpty { UserDefaults.standard.removeObject(forKey: key); return }
         if let d = try? JSONEncoder().encode(f) { UserDefaults.standard.set(d, forKey: key) }

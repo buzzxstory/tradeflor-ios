@@ -75,7 +75,9 @@ extension APIClient {
     // MARK: Chat Lock
 
     func ctLockState(token: String) async throws -> LockState {
-        try decode(LockState.self, try await getJSON("locks", token: token))
+        let st = try decode(LockState.self, try await getJSON("locks", token: token))
+        ListCache.noteLocked(Set((st.locks ?? []).map(\.conversation_id)), token: token)
+        return st
     }
 
     func ctSetLocked(token: String, conversationID: String, locked: Bool, hidePreviews: Bool) async throws {

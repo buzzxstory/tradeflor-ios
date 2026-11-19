@@ -33,6 +33,36 @@ final class StatusReactCache: @unchecked Sendable {
     }
 }
 
+/// The server's time, as far as this phone can tell from the `Date` header of its answers. A phone whose clock is hours off
+/// would otherwise call every valid status "no longer available" (ahead) or keep showing expired ones (behind).
+enum ServerClock {
+    private static let lock = NSLock()
+    private static var offset: TimeInterval = 0
+    private static let format: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "GMT")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return f
+    }()
+    static var now: Date {
+        lock.lock(); defer { lock.unlock() }
+        return Date().addingTimeInterval(offset)
+    }
+    static func note(_ http: HTTPURLResponse) {
+        guard let s = http.value(forHTTPHeaderField: "Date") else { return }
+        lock.lock(); defer { lock.unlock() }
+        guard let d = format.date(from: s) else { return }
+        let off = d.timeIntervalSinceNow
+        offset = abs(off) > 30 ? off : 0 // a few seconds of difference is just latency
+    }
+}
+
+/// True for Arabic script: a slanted (italic) face is wrong typography for it.
+func tfHasArabic(_ s: String) -> Bool {
+    s.unicodeScalars.contains { (0x0600...0x06FF).contains($0.value) || (0x0750...0x077F).contains($0.value) }
+}
+
 /// The "seen" calls still on their way (a status or an Official post just watched). A list read waits for them first, so
 /// a ring read right after the viewer closes is never the stale turquoise one.
 final class StatusSeenQueue: @unchecked Sendable {
@@ -46,14 +76,24 @@ final class StatusSeenQueue: @unchecked Sendable {
         pending.append(t)
     }
 
-    func drain() async {
+    /// Waits for the calls on their way, but never longer than `timeout` seconds: a hung request must not hold a list reload.
+    func drain(timeout: Double = 3) async {
         let list: [Task<Void, Never>] = {
             lock.lock(); defer { lock.unlock() }
             let l = pending
             pending = []
             return l
         }()
-        for t in list { await t.value }
+        guard !list.isEmpty else { return }
+        final class Once: @unchecked Sendable {
+            private let l = NSLock(); private var done = false
+            func fire() -> Bool { l.lock(); defer { l.unlock() }; if done { return false }; done = true; return true }
+        }
+        let once = Once()
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            Task { for t in list { await t.value }; if once.fire() { c.resume() } }
+            Task { try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000)); if once.fire() { c.resume() } }
+        }
     }
 }
 
@@ -134,7 +174,7 @@ final class StatusGone: @unchecked Sendable {
     }
 
     /// Past its own 24 hours by this phone's clock (expires_at in seconds or milliseconds).
-    static func expired(_ expiresAt: Int64?, now: Date = Date()) -> Bool {
+    static func expired(_ expiresAt: Int64?, now: Date = ServerClock.now) -> Bool {
         guard let e = expiresAt, let d = serverDate(e) else { return false }
         return d <= now
     }
@@ -409,7 +449,7 @@ struct StatusViewerLine: View {
 // MARK: the web phone viewer's look (18-status.css, 54-status-instant.css, 60-status-react.css, 53-admin.css)
 
 /// When a status was posted, as the web viewer's head says it: "just now", "12 min ago", "6 h ago".
-func statusAgo(_ d: Date?, now: Date = Date()) -> String {
+func statusAgo(_ d: Date?, now: Date = ServerClock.now) -> String {
     guard let d else { return "" }
     let s = max(0, Int(now.timeIntervalSince(d)))
     if s < 60 { return NSLocalizedString("ux2.ago.now", comment: "") }

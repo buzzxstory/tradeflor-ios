@@ -747,6 +747,7 @@ struct ChatView: View {
         }
         .onReceive(live.joinRequests) { d in if d["conversation_id"] == chat.conversation_id { Task { await loadJoinWaiting() } } }
         // the server says this group changed (rights, pins, members): re-read at once instead of waiting for the minute
+        .onReceive(NotificationCenter.default.publisher(for: .tfStatusChanged)) { _ in if isGroup { Task { await loadGroupStatus() } } }
         .onReceive(live.groupChanged) { id in
             guard isGroup, id == chat.conversation_id else { return }
             Task {
@@ -926,7 +927,7 @@ struct ChatView: View {
             await runQueue()
         }
         .onReceive(live.messages) { m in
-            guard m.conversation_id == chat.conversation_id, !locked else { return } // a locked chat shows nothing until it is unlocked
+            guard m.conversation_id == chat.conversation_id, !locked, !m.isSealed else { return } // a locked chat shows nothing until it is unlocked
             let isNew = !messages.contains { $0.id == m.id }
             merge([m])
             pending.removeAll { $0.id == m.client_key }
@@ -1629,7 +1630,7 @@ struct ChatView: View {
     }
 
     private func loadGroupStatus() async {
-        let feed = (try? await APIClient.shared.statusFeed(token: token)) ?? []
+        guard let feed = try? await APIClient.shared.statusFeed(token: token) else { return } // a failed read keeps what is shown
         groupStatus = feed.first { $0.group_id == chat.conversation_id && !$0.posts.isEmpty }
     }
 
@@ -1904,6 +1905,7 @@ struct ChatView: View {
 
     /// Adds or replaces by id, kept in server order (seq).
     private func merge(_ incoming: [Message]) {
+        let incoming = incoming.filter { !$0.isSealed } // a stub of a locked chat is never shown or kept
         guard !incoming.isEmpty else { return }
         var byID = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for m in incoming { byID[m.id] = m }

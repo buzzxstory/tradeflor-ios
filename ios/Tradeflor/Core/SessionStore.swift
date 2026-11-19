@@ -98,6 +98,7 @@ final class SessionStore: ObservableObject {
         // a notification tapped before the sign-out must not open a chat of the next account
         LocalNotifier.shared.tappedConversation = nil
         ListCache.clear(); ChatMemo.clear()
+        OfficialFeedCache.forget()
         SettingsView.forgetCache()
         TradeFlorView.forgetCache()
         // the pictures known for this account's people, and the likes it sent

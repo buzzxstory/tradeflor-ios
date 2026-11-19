@@ -1907,3 +1907,9 @@
 "cam.interrupted" = "The camera was interrupted.";
 
 "chat.video.exportfailed" = "The video could not be prepared. Try again.";
+"stx.load.failed" = "Could not load this status.";
+"stx.a11y.story" = "Status";
+"stx.a11y.next" = "Next";
+"stx.a11y.previous" = "Previous";
+"stx.a11y.pause" = "Pause or play";
+"stx.video.toolong" = "A status video can be up to 60 seconds. Choose a shorter one.";

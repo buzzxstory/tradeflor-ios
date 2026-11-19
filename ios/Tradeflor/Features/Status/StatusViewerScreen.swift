@@ -10,6 +10,7 @@ struct StatusViewerScreen: View {
     let onClose: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var g: Int
     @State private var p: Int
     /// how far the story on screen has played: read only by the bars and a voice status's art (not this whole screen)
@@ -36,6 +37,9 @@ struct StatusViewerScreen: View {
     @State private var userPaused = false
     @State private var reply = ""
     @State private var replyNote: String?
+    /// One Idempotency-Key per draft: a send retried after a lost answer is not delivered twice.
+    @State private var replyKey: String?
+    @State private var loadFailed = false
     @State private var sending = false
     @FocusState private var replyFocused: Bool
     @State private var myReacts: [String: String] = [:] // changed on this visit
@@ -107,6 +111,10 @@ struct StatusViewerScreen: View {
         .onChange(of: holding) { h in
             if h { setPaused(true) } else { lastGestureAt = Date(); resume() }
         }
+        // the app left the front (Home, lock): the story waits, so no sound plays and no later story is marked seen
+        .onChange(of: scenePhase) { ph in
+            if ph == .active { resume() } else { setPaused(true) }
+        }
         .onChange(of: touching) { t in
             // a drag the system cancelled (no onEnded): put the story back
             guard !t else { return }
@@ -126,6 +134,7 @@ struct StatusViewerScreen: View {
                 replyNote = nil
             }
         }
+        .onChange(of: reply) { _ in replyKey = nil }
         .onChange(of: showEmoji) { _ in resume() }
         .onChange(of: showViewers) { _ in resume() }
         .onChange(of: confirmDelete) { _ in resume() }
@@ -195,6 +204,12 @@ struct StatusViewerScreen: View {
             .ignoresSafeArea()
             .environment(\.layoutDirection, .leftToRight)
             .simultaneousGesture(hold)
+            // VoiceOver: the taps on the sides are not reachable, so next / previous / pause are actions of the story
+            .accessibilityElement()
+            .accessibilityLabel(Text("stx.a11y.story"))
+            .accessibilityAction(named: Text("stx.a11y.next")) { next() }
+            .accessibilityAction(named: Text("stx.a11y.previous")) { previous() }
+            .accessibilityAction(named: Text("stx.a11y.pause")) { userPausedToggle() }
             // WhatsApp's quick reactions: the status dims and eight big emojis come up while the reply box is focused
             if canReply && replyFocused && !showEmoji && post != nil {
                 StatusQuickGrid(onPick: { e in Task { await quickReact(e) } }, onDismiss: { replyFocused = false })
@@ -302,6 +317,8 @@ struct StatusViewerScreen: View {
 
     private func resume() { setPaused(mustHold) }
 
+    private func userPausedToggle() { userPaused.toggle(); resume() }
+
     /// After an interruption, a route change or coming back to the front: the audio is set up again, the players follow the
     /// speaker button (`muted`) and play on unless the story is held.
     private func restoreAudio() {
@@ -325,7 +342,7 @@ struct StatusViewerScreen: View {
                     StatusStyle.background(post.style)
                     Text(post.text ?? "")
                         .font(.system(size: StatusStyle.size(for: post.text ?? ""), weight: font.weight, design: font.design))
-                        .italic(font.italic)
+                        .italic(font.italic && !tfHasArabic(post.text ?? ""))
                         .foregroundStyle(bg.ink)
                         .multilineTextAlignment(.center)
                         .padding(28)
@@ -335,10 +352,20 @@ struct StatusViewerScreen: View {
                 ZStack {
                     if let poster { Image(uiImage: poster).resizable().scaledToFit() }
                     if let player { StatusVideoLayer(player: player) }
-                    if !videoStarted { ProgressView().tint(.white) }
+                    if loadFailed && poster == nil {
+                        Text("stx.load.failed").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
+                            .multilineTextAlignment(.center).padding(24)
+                    } else if !videoStarted { ProgressView().tint(.white) }
                 }
             case "image":
-                if let image { Image(uiImage: image).resizable().scaledToFit() } else { ProgressView().tint(.white) }
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFit()
+                } else if loadFailed {
+                    Text("stx.load.failed").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
+                        .multilineTextAlignment(.center).padding(24)
+                } else {
+                    ProgressView().tint(.white)
+                }
             case "voice":
                 // web VoiceStatusArt: the speaker in the middle, breathing rings, lit bars and "0:12 / 0:40"
                 StatusClockReader(clock: clock) { progress in
@@ -540,6 +567,9 @@ struct StatusViewerScreen: View {
         videoStarted = false
         clock.progress = 0
         ready = false
+        reply = ""; replyNote = nil // a half-typed reply belongs to the story it was typed on
+        loadFailed = false
+        if CallManager.shared.lineInUse { muted = true } // a call started while the viewer is open: its sound stays out of the call
         guard let post else {
             // nothing to show (an empty list): the viewer goes instead of staying black
             if groups.allSatisfy({ $0.posts.isEmpty }) { close() }
@@ -563,7 +593,7 @@ struct StatusViewerScreen: View {
             let d = await APIClient.shared.statusMedia(token: token, id: post.id)
             // moved on meanwhile: this picture belongs to the story before (it flashed over the next one)
             if Task.isCancelled { return }
-            if let d { image = UIImage(data: d) }
+            if let d, let ui = UIImage(data: d) { image = ui } else { loadFailed = true }
         case "video", "voice":
             // heard with the ring / silent switch on silent (the default session kept a voice status mute); never during a call
             StatusAudio.prepare()
@@ -611,7 +641,7 @@ struct StatusViewerScreen: View {
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 33_000_000)
             if Task.isCancelled { return }
-            if paused {
+            if paused || UIAccessibility.isVoiceOverRunning {
                 if pausedAt == nil { pausedAt = Date() }
                 continue
             }
@@ -636,9 +666,11 @@ struct StatusViewerScreen: View {
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 33_000_000)
             if Task.isCancelled { return }
-            if item.status == .failed {
+            let stuck = !videoStarted && !paused && Date().timeIntervalSince(opened) > 15 // no first frame: do not spin for ever
+            if item.status == .failed || stuck {
                 if !logged { MediaLog.record(id: post.id, ok: false, ms: Int(Date().timeIntervalSince(opened) * 1000)) }
                 // it cannot play: the story still moves on, on a clock
+                loadFailed = true
                 videoStarted = true
                 await runClock(fallback, from: fallback * clock.progress)
                 return
@@ -773,9 +805,10 @@ struct StatusViewerScreen: View {
     /// A quick reaction from the big grid: the emoji floats up and goes to the owner's chat as a reaction line; the like
     /// stays as it is and the status plays on.
     private func quickReact(_ emoji: String) async {
-        guard let post else { return }
+        guard let post, !reacting else { return }
+        reacting = true
+        defer { reacting = false }
         showBurst(emoji)
-        reply = ""
         replyFocused = false
         if !(await sendReactionLine(emoji, for: post)) {
             replyNote = NSLocalizedString("stx.reply.failed", comment: "")
@@ -823,7 +856,11 @@ struct StatusViewerScreen: View {
             default: what = "📷"
             }
             let body = String(format: NSLocalizedString("stx.reply.quote", comment: ""), what) + "\n" + text
-            _ = try await APIClient.shared.sendText(token: token, conversationID: conv, body: body, key: UUID().uuidString.lowercased())
+            let key = replyKey ?? UUID().uuidString.lowercased()
+            replyKey = key
+            _ = try await APIClient.shared.sendText(token: token, conversationID: conv, body: body, key: key)
+            // the viewer moved on to another story while it was sending: the reply is sent, nothing more happens here
+            guard self.post?.id == post.id, !closing else { return }
             reply = ""
             replyFocused = false
             replyNote = nil
@@ -957,7 +994,7 @@ struct TextStatusComposer: View {
                 TextField("status.text.placeholder", text: $text, axis: .vertical)
                     .focused($focused)
                     .font(.system(size: StatusStyle.size(for: text.isEmpty ? "Aa" : text), weight: f.weight, design: f.design))
-                    .italic(f.italic)
+                    .italic(f.italic && !tfHasArabic(text))
                     .foregroundStyle(b.ink)
                     .multilineTextAlignment(.center)
                     .padding(24)

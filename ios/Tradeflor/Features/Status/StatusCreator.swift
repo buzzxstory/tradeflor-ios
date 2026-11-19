@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import AVFoundation
+import ImageIO
 import UniformTypeIdentifiers
 
 /// The phone status creator (website MobileStatusCreator.tsx): "New status" / "Share a moment" with the tiles
@@ -18,6 +19,8 @@ struct StatusCreatorSheet: View {
         var image: UIImage?
         var videoURL: URL?
         var caption = ""
+        /// The exported MP4, kept once it is made: the export deletes its source, so a retry after a failed upload uses this.
+        var prepared: Data?
     }
 
     @State private var items: [Item] = []
@@ -32,6 +35,8 @@ struct StatusCreatorSheet: View {
     @State private var posting = false
     @State private var progress = ""
     @State private var problem: String?
+    /// A text or voice status that did not go: kept here (the sheets that made it are closed) so one tap sends it again.
+    @State private var retryPost: (() async -> Void)?
 
     private var token: String { store.session?.token ?? "" }
 
@@ -59,7 +64,7 @@ struct StatusCreatorSheet: View {
                                     TextField("stx.caption", text: $it.caption, axis: .vertical).lineLimit(1...3)
                                         .foregroundStyle(Theme.text).padding(8)
                                         .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10))
-                                    Button(role: .destructive) { items.removeAll { $0.id == it.id } } label: {
+                                    Button(role: .destructive) { drop(it) } label: {
                                         Label("stx.remove.one", systemImage: "trash").font(.system(size: 12))
                                     }
                                 }
@@ -87,6 +92,13 @@ struct StatusCreatorSheet: View {
                                 .multilineTextAlignment(.center).frame(maxWidth: .infinity)
                                 .padding(.horizontal, 14).padding(.vertical, 12)
                                 .background(Theme.hex(0xFF8F8F, 0.1), in: RoundedRectangle(cornerRadius: 14))
+                            if let retryPost {
+                                Button { Task { await retryPost() } } label: {
+                                    Text("chats.retry").font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.onAccent)
+                                        .padding(.horizontal, 22).frame(height: 40).background(Theme.accent, in: Capsule())
+                                }
+                                .disabled(posting)
+                            }
                         }
                     }
                     .padding(.horizontal, 16)
@@ -119,10 +131,18 @@ struct StatusCreatorSheet: View {
             picked = []
             Task {
                 var missed = false
-                for item in list {
+                for item in list where items.count < 10 { // the queue holds ten, however often the picker is used
                     if item.supportedContentTypes.contains(where: { $0.conforms(to: .movie) }) {
-                        if let m = try? await item.loadTransferable(type: PickedMovie.self) { items.append(Item(videoURL: m.url)) } else { missed = true }
-                    } else if let d = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: d) {
+                        if let m = try? await item.loadTransferable(type: PickedMovie.self) {
+                            if await Self.tooLong(m.url) {
+                                try? FileManager.default.removeItem(at: m.url)
+                                problem = NSLocalizedString("stx.video.toolong", comment: "")
+                            } else {
+                                items.append(Item(videoURL: m.url))
+                            }
+                        } else { missed = true }
+                    } else if let d = try? await item.loadTransferable(type: Data.self),
+                              let img = await Task.detached(priority: .userInitiated, operation: { Self.small(d) }).value {
                         items.append(Item(image: img))
                     } else {
                         missed = true
@@ -144,43 +164,28 @@ struct StatusCreatorSheet: View {
             }
         }
         .fullScreenCover(isPresented: $showCamera) {
-            CameraStudio(allowNote: false, onPhoto: { img in items.append(Item(image: img)) }, onVideo: { url in items.append(Item(videoURL: url)) })
+            CameraStudio(allowNote: false, onPhoto: { img in items.append(Item(image: img)) }, onVideo: { url in
+                Task {
+                    if await Self.tooLong(url) {
+                        try? FileManager.default.removeItem(at: url)
+                        problem = NSLocalizedString("stx.video.toolong", comment: "")
+                    } else {
+                        items.append(Item(videoURL: url))
+                    }
+                }
+            })
         }
         .sheet(isPresented: $showText) {
             TextStatusComposer { text, bg, font in
                 Task {
-                    posting = true
-                    progress = ""
-                    problem = nil
-                    defer { posting = false }
-                    do {
-                        try await APIClient.shared.stPostTextStatus(token: token, groupID: groupID, text: text, bg: bg, font: font, music: music)
-                        onPosted()
-                        dismiss()
-                    } catch APIError.refused(let why) {
-                        problem = why
-                    } catch {
-                        problem = NSLocalizedString("status.post.failed", comment: "")
-                    }
+                    await send { try await APIClient.shared.stPostTextStatus(token: token, groupID: groupID, text: text, bg: bg, font: font, music: items.isEmpty ? nil : music) }
                 }
             }
         }
         .sheet(isPresented: $showVoice) {
             VoiceStatusRecorder { data, ms in
                 Task {
-                    posting = true
-                    progress = ""
-                    problem = nil
-                    defer { posting = false }
-                    do {
-                        try await APIClient.shared.stPostStatus(token: token, groupID: groupID, file: data, fileName: "voice.m4a", mime: "audio/mp4", voiceMs: ms)
-                        onPosted()
-                        dismiss()
-                    } catch APIError.refused(let why) {
-                        problem = why
-                    } catch {
-                        problem = NSLocalizedString("status.post.failed", comment: "")
-                    }
+                    await send { try await APIClient.shared.stPostStatus(token: token, groupID: groupID, file: data, fileName: "voice.m4a", mime: "audio/mp4", voiceMs: ms) }
                 }
             }
             .presentationDetents([.medium])
@@ -207,6 +212,7 @@ struct StatusCreatorSheet: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .disabled(posting) // an upload on its way is not left running unseen behind a closed sheet
             .accessibilityLabel(Text("chat.close"))
             Text(groupName ?? NSLocalizedString("stx.new", comment: ""))
                 .font(.system(size: 17, weight: .bold))
@@ -356,11 +362,72 @@ struct StatusCreatorSheet: View {
         .contentShape(shape)
     }
 
+    /// Posts one text or voice status. On failure the same post is kept for the Try again button (nothing typed or recorded is lost).
+    private func send(_ work: @escaping () async throws -> Void) async {
+        guard !posting else { return }
+        posting = true
+        progress = ""
+        problem = nil
+        retryPost = nil
+        let bg = Self.beginBackground()
+        defer { Self.endBackground(bg); posting = false }
+        do {
+            try await work()
+            onPosted()
+            dismiss()
+        } catch APIError.refused(let why) {
+            problem = why.isEmpty ? NSLocalizedString("status.post.failed", comment: "") : why
+            retryPost = { await send(work) }
+        } catch {
+            problem = NSLocalizedString("status.post.failed", comment: "")
+            retryPost = { await send(work) }
+        }
+    }
+
+    /// A status plays for at most 60 s: a longer video is said up front, not cut without a word.
+    private static func tooLong(_ url: URL) async -> Bool {
+        let s = (try? await AVURLAsset(url: url).load(.duration).seconds) ?? 0
+        return s.isFinite && s > 60.5
+    }
+
+    /// A picked photo decoded at a size that suits the screen (not at its full 12 MP+), upright.
+    private nonisolated static func small(_ data: Data) -> UIImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 2400,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary).map { UIImage(cgImage: $0) }
+    }
+
+    /// An item leaves the queue: its picked video file goes too (it can be hundreds of MB).
+    private func drop(_ it: Item) {
+        if let u = it.videoURL { try? FileManager.default.removeItem(at: u) }
+        items.removeAll { $0.id == it.id }
+    }
+
+    /// Time to finish an upload when the phone is locked meanwhile.
+    private static func beginBackground() -> UIBackgroundTaskIdentifier {
+        var id = UIBackgroundTaskIdentifier.invalid
+        id = UIApplication.shared.beginBackgroundTask(withName: "tf.status.post") {
+            UIApplication.shared.endBackgroundTask(id)
+            id = .invalid
+        }
+        return id
+    }
+    private static func endBackground(_ id: UIBackgroundTaskIdentifier) {
+        if id != .invalid { UIApplication.shared.endBackgroundTask(id) }
+    }
+
     private func postAll() async {
         guard !posting else { return }
         posting = true
         problem = nil
-        defer { posting = false }
+        retryPost = nil
+        let bgTask = Self.beginBackground()
+        defer { Self.endBackground(bgTask); posting = false }
         let list = items
         var posted = 0
         var skipped = false
@@ -378,12 +445,26 @@ struct StatusCreatorSheet: View {
                     try await APIClient.shared.stPostStatus(token: token, groupID: groupID, file: jpeg, fileName: "status.jpg", mime: "image/jpeg",
                                                             caption: it.caption, music: music)
                 } else if let url = it.videoURL {
-                    guard let out = await VideoPrep.mp4(from: url, maxBytes: 29_000_000) else {
-                        problem = NSLocalizedString("status.video.toolarge", comment: "")
-                        skipped = true
-                        continue
+                    var mp4 = it.prepared
+                    if mp4 == nil {
+                        switch await VideoPrep.export(from: url, maxBytes: 29_000_000) {
+                        case .ok(let data, _):
+                            mp4 = data
+                            // kept: a failed upload below can then be tried again (the export deleted its source)
+                            if let k = items.firstIndex(where: { $0.id == it.id }) { items[k].prepared = data }
+                        case .tooLarge:
+                            problem = NSLocalizedString("status.video.toolarge", comment: "")
+                            skipped = true
+                            items.removeAll { $0.id == it.id } // its file is gone: it cannot be tried again
+                            continue
+                        case .failed:
+                            problem = NSLocalizedString("status.post.failed", comment: "")
+                            skipped = true
+                            continue
+                        }
                     }
-                    try await APIClient.shared.stPostStatus(token: token, groupID: groupID, file: out.data, fileName: "status.mp4", mime: "video/mp4",
+                    guard let mp4 else { continue }
+                    try await APIClient.shared.stPostStatus(token: token, groupID: groupID, file: mp4, fileName: "status.mp4", mime: "video/mp4",
                                                             caption: it.caption, music: nil)
                 }
                 posted += 1
