@@ -44,6 +44,29 @@ final class PushManager: NSObject {
         if !voipHex.isEmpty { send(kind: "voip", hex: voipHex) }
     }
 
+    /// A VoIP push woke the app, possibly with no screen: the live socket and the calls are attached from the saved session now,
+    /// so the call that is ringing reaches the app (the screens attach the same things again later; both are idempotent).
+    func ensureConnected() {
+        guard let s = Keychain.load() else { return }
+        if bearer.isEmpty { bearer = s.token }
+        LiveConnection.shared.start(token: s.token)
+        CallManager.shared.attach(live: LiveConnection.shared, token: s.token, userID: s.userID)
+    }
+
+    /// Sign-out: both tokens leave the server while the session is still valid (called before the logout request).
+    func unregisterNow() async {
+        let token = bearer
+        let pairs = [("alert", alertHex), ("voip", voipHex)].filter { !$0.1.isEmpty }
+        guard !token.isEmpty else { return }
+        for (kind, hex) in pairs {
+            _ = try? await APIClient.shared.postJSON("push/apns/unregister", token: token,
+                                                     body: ["Token": hex, "Env": Self.env, "Kind": kind])
+        }
+        alertHex = ""
+        voipHex = ""
+        PushKeys.clear()
+    }
+
     /// Sign-out or a revoked session: the server stops pushing to this phone.
     func stop() {
         let token = bearer
@@ -110,7 +133,9 @@ extension PushManager: PKPushRegistryDelegate {
         let tf = payload.dictionaryPayload["tf"] as? [String: Any]
         let callID = (tf?["call_id"] as? String) ?? ""
         Task { @MainActor in
+            // CallKit first (iOS kills an app that does not report), then the socket so the call can be named
             CallManager.shared.reportPushCall(callID: callID)
+            PushManager.shared.ensureConnected()
             completion()
         }
     }

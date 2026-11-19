@@ -9,6 +9,9 @@ import Network
 /// - reconnects with backoff (1, 2, 4 ... 30 s), and immediately when the app comes back to the foreground
 @MainActor
 final class LiveConnection: ObservableObject {
+    /// The one connection of the app: made without any screen too (a VoIP push wakes the app in the background).
+    static let shared = LiveConnection()
+
     @Published private(set) var connected = false {
         didSet { connectedChanged() }
     }

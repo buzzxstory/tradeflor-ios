@@ -420,7 +420,8 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     }
 
     private func handle(action: String, info: [String: Any], text: String?) async {
-        let conv = info["conversation_id"] as? String
+        // a local notification carries the chat id itself; a remote one may carry it inside "tf" (never for a locked chat)
+        let conv = (info["conversation_id"] as? String) ?? ((info["tf"] as? [String: Any])?["conversation_id"] as? String)
         switch action {
         case Self.replyAction:
             let t = currentToken()

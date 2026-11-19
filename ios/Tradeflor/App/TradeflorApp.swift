@@ -5,7 +5,7 @@ struct TradeflorApp: App {
     @UIApplicationDelegateAdaptor(TradeflorAppDelegate.self) private var appDelegate
     @StateObject private var store = SessionStore()
     @AppStorage("tf.night") private var night = true
-    @StateObject private var live = LiveConnection()
+    @StateObject private var live = LiveConnection.shared
 
     init() {
         Theme.applyAppearance()

@@ -52,6 +52,7 @@ final class SessionStore: ObservableObject {
             // the phone kept its location on for a session that no longer existed)
             await LocationSharer.shared.stopAll(token: token)
             await APIClient.shared.relockChats(token: token)
+            await PushManager.shared.unregisterNow() // no push for this phone after the session ends
             await APIClient.shared.logout(token: token)
         }
         Keychain.delete()
