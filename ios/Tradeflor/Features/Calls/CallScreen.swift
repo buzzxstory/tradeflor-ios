@@ -148,6 +148,16 @@ struct CallScreen: View {
                !["declined", "busy", "no_answer", "hangup", "canceled", "completed"].contains(r) {
                 Text(r).font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.white.opacity(0.45)).padding(.top, 4)
             }
+            // the microphone is off for Tradeflor: one tap to where it is turned on
+            if calls.endReason == "mic_denied" {
+                Button {
+                    if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+                } label: {
+                    Text("chat.settings").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 18).frame(minHeight: 44)
+                }
+                .padding(.top, 4)
+            }
         }
     }
 

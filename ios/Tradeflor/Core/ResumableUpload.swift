@@ -245,8 +245,9 @@ final class ResumableUploader {
                         case 200, 409:
                             // 409: the server is elsewhere (a chunk landed whose answer was lost): continue from it
                             if let r = Self.received(data) { confirmed = min(size, r) }
-                            // a 200 that moved nothing: treated as a failed try (asks the server, gives up after ~6)
-                            if http.statusCode == 200 && confirmed <= offset { throw APIError.network }
+                            // a 200 that moved nothing, or a 409 that says the server is exactly where this chunk started
+                            // (it refused the chunk and is not elsewhere): a failed try (backs off, asks the server, gives up after ~6)
+                            if http.statusCode == 200 ? confirmed <= offset : confirmed == offset { throw APIError.network }
                             failures = 0
                             meter.report(confirmed, size, .uploading)
                         case 404:
@@ -333,7 +334,7 @@ final class ResumableUploader {
         let bytes: Data
         if let data, !data.isEmpty {
             bytes = data
-        } else if let source, let d = try? Data(contentsOf: source), !d.isEmpty {
+        } else if let source, let d = try? Data(contentsOf: source, options: .mappedIfSafe), !d.isEmpty { // mapped: not copied into memory first
             bytes = d
         } else {
             throw APIError.refused("")
