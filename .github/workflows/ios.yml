@@ -149,7 +149,15 @@ jobs:
             <key>compileBitcode</key><false/>
           </dict></plist>
           PLIST
-          xcodebuild archive             -project Tradeflor.xcodeproj -scheme Tradeflor -configuration Release             -sdk iphoneos -destination "generic/platform=iOS" -archivePath build/Tradeflor.xcarchive             -derivedDataPath build             CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$TEAM_ID"             PROVISIONING_PROFILE_SPECIFIER="$NAME" CODE_SIGN_IDENTITY="Apple Distribution"             OTHER_CODE_SIGN_FLAGS="--keychain $KC" | tee build-signed.log | grep -E "error:|\*\* ARCHIVE" || true
+          # Push Notifications: the app declares aps-environment only when the profile allows it (else the archive is refused)
+          ENT_ARG=""
+          if security cms -D -i "$PROF" | plutil -extract Entitlements.aps-environment raw - >/dev/null 2>&1; then
+            ENT_ARG="CODE_SIGN_ENTITLEMENTS=Entitlements/Tradeflor.entitlements"
+            echo "push entitlement ON (profile has aps-environment)"
+          else
+            echo "::notice::the profile has no Push Notifications: signed without remote push"
+          fi
+          xcodebuild archive             -project Tradeflor.xcodeproj -scheme Tradeflor -configuration Release             -sdk iphoneos -destination "generic/platform=iOS" -archivePath build/Tradeflor.xcarchive             -derivedDataPath build             CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$TEAM_ID"             PROVISIONING_PROFILE_SPECIFIER="$NAME" CODE_SIGN_IDENTITY="Apple Distribution"             $ENT_ARG OTHER_CODE_SIGN_FLAGS="--keychain $KC" | tee build-signed.log | grep -E "error:|\*\* ARCHIVE" || true
           grep -q "\*\* ARCHIVE SUCCEEDED \*\*" build-signed.log
           xcodebuild -exportArchive -archivePath build/Tradeflor.xcarchive -exportPath build/signed             -exportOptionsPlist ExportAdHoc.plist | tee export.log | grep -E "error:|\*\* EXPORT" || true
           grep -q "\*\* EXPORT SUCCEEDED \*\*" export.log
@@ -157,6 +165,7 @@ jobs:
           cp build/signed/Tradeflor.ipa Tradeflor-signed.ipa
           rm -rf verify && mkdir verify && cd verify && unzip -q ../Tradeflor-signed.ipa
           codesign --verify --deep --strict Payload/Tradeflor.app && echo "codesign ok"
+          codesign -d --entitlements - Payload/Tradeflor.app 2>/dev/null | grep -q aps-environment && echo "aps-environment in the app" || echo "no aps-environment in the app"
           plutil -extract application-identifier raw Payload/Tradeflor.app/embedded.mobileprovision >/dev/null 2>&1 || true
           security cms -D -i Payload/Tradeflor.app/embedded.mobileprovision | plutil -extract Name raw - | grep -qx "$NAME"
           echo "profile $NAME embedded ok"

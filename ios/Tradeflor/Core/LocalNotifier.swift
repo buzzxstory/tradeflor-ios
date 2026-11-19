@@ -459,7 +459,9 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         // in front, a missed call is already on screen (the end-of-call card): only kept in Notification Center
-        if notification.request.content.categoryIdentifier == LocalNotifier.missedCallCategory {
+        if notification.request.content.userInfo["tf"] != nil {
+            completionHandler([]) // a remote push ("New message"): the app in front shows the real message itself
+        } else if notification.request.content.categoryIdentifier == LocalNotifier.missedCallCategory {
             completionHandler([.list])
         } else {
             completionHandler([.banner, .list, .sound])

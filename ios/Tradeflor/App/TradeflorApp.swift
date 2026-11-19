@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct TradeflorApp: App {
+    @UIApplicationDelegateAdaptor(TradeflorAppDelegate.self) private var appDelegate
     @StateObject private var store = SessionStore()
     @AppStorage("tf.night") private var night = true
     @StateObject private var live = LiveConnection()
@@ -231,6 +232,7 @@ struct RootView: View {
     private func syncLive() {
         if let s = store.session {
             live.start(token: s.token)
+            PushManager.shared.start(token: s.token) // alert and VoIP tokens go to the server (remote push)
             CallManager.shared.attach(live: live, token: s.token, userID: s.userID)
             LocalNotifier.shared.attach(live: live, token: s.token, userID: s.userID)
             OutboxFlusher.shared.attach(live: live, token: s.token, userID: s.userID)
@@ -238,6 +240,7 @@ struct RootView: View {
             FlashHub.shared.attach(live: live, token: s.token)
         } else {
             FlashHub.shared.detach()
+            PushManager.shared.stop()
             CallManager.shared.detach()
             LocalNotifier.shared.detach()
             OutboxFlusher.shared.detach()

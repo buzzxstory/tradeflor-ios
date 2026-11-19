@@ -108,6 +108,52 @@ final class CallManager: NSObject, ObservableObject {
     private let provider: CXProvider
     private let callController = CXCallController()
 
+    // MARK: VoIP push (PushKit)
+    /// Call ids a VoIP push already reported to CallKit, not yet seen on the live socket.
+    private var pushCalls = Set<String>()
+    /// The person answered / declined in the system UI before the socket told the app about the call: done when it does.
+    private var pendingAnswer: UUID?
+    private var pendingEnd: UUID?
+
+    /// iOS demands a CallKit incoming call for every VoIP push, before anything else: it rings as "Tradeflor" and the real
+    /// name arrives with the call on the socket (ringIncoming). A call the socket never knows (it ended before this phone
+    /// woke up) is ended again, so no phantom ring stays.
+    func reportPushCall(callID: String) {
+        let id = UUID(uuidString: callID) ?? UUID()
+        let update = callCapabilities()
+        let name = (self.callID == callID && !peerName.isEmpty) ? peerName : "Tradeflor"
+        update.remoteHandle = CXHandle(type: .generic, value: name)
+        update.localizedCallerName = name
+        let key = id.uuidString
+        provider.reportNewIncomingCall(with: id, update: update) { [weak self] err in
+            guard err == nil else { return } // already ringing from the socket, or the system refused (Do Not Disturb)
+            Task { @MainActor in
+                guard let self else { return }
+                self.pushCalls.insert(key)
+                self.guardPushCall(key: key, uuid: id)
+            }
+        }
+    }
+
+    private func guardPushCall(key: String, uuid: UUID) {
+        Task { @MainActor [weak self] in
+            // wait for the socket (up to 45 s: the caller rings that long), then give the server 6 s to name the call
+            var waited = 0
+            while waited < 90 {
+                guard let self, self.pushCalls.contains(key) else { return } // the socket knows it now
+                if self.live?.connected == true { break }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                waited += 1
+            }
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard let self, self.pushCalls.contains(key) else { return }
+            self.pushCalls.remove(key)
+            if self.uuid != uuid || self.phase == .idle || self.phase == .ended {
+                self.provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
+            }
+        }
+    }
+
     override init() {
         let cfg = CXProviderConfiguration()
         cfg.supportsVideo = false
@@ -609,14 +655,19 @@ final class CallManager: NSObject, ObservableObject {
         update.remoteHandle = CXHandle(type: .generic, value: peerName)
         update.localizedCallerName = peerName
         let ringUUID = uuid, name = peerName, conv = conversationID
-        provider.reportNewIncomingCall(with: uuid, update: update) { err in
-            // CallKit refused to ring (not because of Do Not Disturb or a block): a plain notification instead
-            guard let err else { return }
-            let code = (err as? CXErrorCodeIncomingCallError)?.code
-            guard code != .filteredByDoNotDisturb, code != .filteredByBlockList else { return }
-            Task { @MainActor in
-                guard self.uuid == ringUUID, self.phase == .incoming else { return }
-                LocalNotifier.shared.incomingCallFallback(name: self.peerName.isEmpty ? name : self.peerName, callID: id, conversationID: conv)
+        if pushCalls.remove(uuid.uuidString) != nil {
+            // a VoIP push already made CallKit ring: it only learns who is calling now
+            provider.reportCall(with: uuid, updated: update)
+        } else {
+            provider.reportNewIncomingCall(with: uuid, update: update) { err in
+                // CallKit refused to ring (not because of Do Not Disturb or a block): a plain notification instead
+                guard let err else { return }
+                let code = (err as? CXErrorCodeIncomingCallError)?.code
+                guard code != .filteredByDoNotDisturb, code != .filteredByBlockList else { return }
+                Task { @MainActor in
+                    guard self.uuid == ringUUID, self.phase == .incoming else { return }
+                    LocalNotifier.shared.incomingCallFallback(name: self.peerName.isEmpty ? name : self.peerName, callID: id, conversationID: conv)
+                }
             }
         }
         showScreen = true
@@ -625,6 +676,9 @@ final class CallManager: NSObject, ObservableObject {
             self.endReason = "no_answer"
             self.finish()
         }
+        // answered or declined in the system call screen before the app knew the call (a VoIP push woke it)
+        if pendingEnd == uuid { pendingEnd = nil; pendingAnswer = nil; decline() }
+        else if pendingAnswer == uuid { pendingAnswer = nil; doAccept() }
     }
 
     private func lookUpName(_ userID: String) async {
@@ -1055,12 +1109,18 @@ extension CallManager: CXProviderDelegate {
     }
     nonisolated func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         CallManager.configureAudioSession()
-        Task { @MainActor in self.doAccept() }
+        let u = action.callUUID
+        Task { @MainActor in
+            if self.phase == .incoming { self.doAccept() }
+            else if self.pushCalls.contains(u.uuidString) { self.pendingAnswer = u } // the socket has not told the app yet
+        }
         action.fulfill()
     }
     nonisolated func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+        let u = action.callUUID
         Task { @MainActor in
-            if self.phase == .incoming { self.decline() }
+            if self.phase == .idle || self.phase == .ended, self.pushCalls.contains(u.uuidString) { self.pendingEnd = u }
+            else if self.phase == .incoming { self.decline() }
             else if self.phase != .ended && self.phase != .idle {
                 if self.phase == .outgoing && !self.userEnding { self.localReason = "system_end" }
                 self.hangUp()
