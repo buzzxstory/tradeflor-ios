@@ -406,10 +406,7 @@ final class APIClient {
         var req = URLRequest(url: url)
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let got = try? await send(req)
-        // a status that is gone for good (404) is marked, so no viewer or ring shows it again
-        if let got, got.1.statusCode == 404, !id.hasPrefix("official-") { StatusGone.shared.mark(id) }
-        guard let out = got, out.1.statusCode == 200, !out.0.isEmpty else { return nil }
+        guard let out = try? await send(req), out.1.statusCode == 200, !out.0.isEmpty else { return nil }
         avatarCache.setObject(out.0 as NSData, forKey: key, cost: out.0.count)
         return out.0
     }
@@ -726,7 +723,10 @@ final class APIClient {
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let unlock = unlockToken { req.setValue(unlock, forHTTPHeaderField: "X-Tradeflor-Unlock") }
-        guard let out = try? await send(req), out.1.statusCode == 200, !out.0.isEmpty else { return nil }
+        let got = try? await send(req)
+        // a status that is gone for good (404) is marked, so no viewer or ring shows it again
+        if let got, got.1.statusCode == 404, !id.hasPrefix("official-") { StatusGone.shared.mark(id) }
+        guard let out = got, out.1.statusCode == 200, !out.0.isEmpty else { return nil }
         avatarCache.setObject(out.0 as NSData, forKey: key, cost: out.0.count)
         return out.0
     }
