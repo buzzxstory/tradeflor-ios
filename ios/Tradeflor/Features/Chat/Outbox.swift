@@ -61,6 +61,20 @@ enum OutboxStore {
         }
     }
 
+    /// File names (in ResumableUploader.folder) that saved outbox entries still need.
+    static func referencedFiles() -> Set<String> {
+        struct Ref: Decodable { let fileName: String? }
+        guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first,
+              let en = FileManager.default.enumerator(at: dir.appendingPathComponent("outbox", isDirectory: true), includingPropertiesForKeys: nil) else { return [] }
+        var out = Set<String>()
+        for case let u as URL in en where u.pathExtension == "json" {
+            if let d = try? Data(contentsOf: u), let rs = try? JSONDecoder().decode([Ref].self, from: d) {
+                for r in rs { if let n = r.fileName { out.insert(n) } }
+            }
+        }
+        return out
+    }
+
     static func load(account: String, conversation: String) -> [PendingMessage] {
         guard let url = file(account, conversation),
               let data = queue.sync(execute: { () -> Data? in

@@ -36,8 +36,6 @@ final class SessionStore: ObservableObject {
             await APIClient.shared.logout(token: token)
         }
         Keychain.delete()
-        // the Lock PIN kept behind Face ID belongs to this account: the next one to sign in here must not be offered it
-        BiometricPIN.delete()
         forgetAccount()
         session = nil
     }
@@ -62,6 +60,10 @@ final class SessionStore: ObservableObject {
     /// This account's lists, profile card, statuses and admin role leave the phone with it, so the next account to sign
     /// in never sees them (they were kept in memory across a sign-out before).
     private func forgetAccount() {
+        // the Lock PIN kept behind Face ID belongs to this account: the next one to sign in here must not be offered it
+        // (sign-out and a revoked session both come through here)
+        BiometricPIN.delete()
+        APIClient.shared.avatarCache.removeAllObjects()
         ListCache.clear(); ChatMemo.clear()
         SettingsView.forgetCache()
         TradeFlorView.forgetCache()

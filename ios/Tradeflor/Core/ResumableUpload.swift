@@ -151,8 +151,9 @@ final class ResumableUploader {
         let folder = dir.appendingPathComponent("uploads", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let cutoff = Date().addingTimeInterval(-2 * 86400)
+        let keep = OutboxStore.referencedFiles() // a pending message still points at these: never aged out
         if let items = try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey]) {
-            for u in items where ((try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date()) < cutoff {
+            for u in items where !keep.contains(u.lastPathComponent) && ((try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date()) < cutoff {
                 try? FileManager.default.removeItem(at: u)
             }
         }
