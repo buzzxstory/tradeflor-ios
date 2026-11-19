@@ -5,7 +5,26 @@ final class SessionStore: ObservableObject {
     @Published private(set) var session: Session?
 
     init() {
+        Self.dropKeychainLeftoversAfterReinstall()
         session = Keychain.load()
+    }
+
+    /// Keychain items survive deleting the app, UserDefaults and the app's folders do not. On the first launch after an install
+    /// (nothing of this app on the phone yet) a session or Face ID PIN left by the previous install is removed, so deleting the
+    /// app really signs out. An update of an older build, which has files and tf.* settings here, keeps its session.
+    private static func dropKeychainLeftoversAfterReinstall() {
+        let d = UserDefaults.standard
+        guard !d.bool(forKey: "tf.firstLaunchDone") else { return }
+        defer { d.set(true, forKey: "tf.firstLaunchDone") }
+        let hasSettings = d.dictionaryRepresentation().keys.contains { $0.hasPrefix("tf.") }
+        var hasFiles = false
+        if let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            hasFiles = ["outbox", "uploads"].contains { FileManager.default.fileExists(atPath: dir.appendingPathComponent($0).path) }
+        }
+        if !hasSettings && !hasFiles {
+            Keychain.delete()
+            BiometricPIN.delete()
+        }
     }
 
     func signIn(username: String, password: String) async throws {
@@ -72,7 +91,12 @@ final class SessionStore: ObservableObject {
         if let items = try? FileManager.default.contentsOfDirectory(at: ResumableUploader.folder, includingPropertiesForKeys: nil) {
             for u in items { try? FileManager.default.removeItem(at: u) }
         }
-        UserDefaults.standard.removeObject(forKey: "tf.hiddenChats")
+        BadgeStore.forgetHidden()
+        ChatDrafts.clearAll() // what was typed and not sent
+        // attachments opened for Quick Look or sharing (decrypted copies, also from locked chats)
+        try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("tf-files", isDirectory: true))
+        // a notification tapped before the sign-out must not open a chat of the next account
+        LocalNotifier.shared.tappedConversation = nil
         ListCache.clear(); ChatMemo.clear()
         SettingsView.forgetCache()
         TradeFlorView.forgetCache()

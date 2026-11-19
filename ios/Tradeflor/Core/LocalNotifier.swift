@@ -49,6 +49,9 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     private var loadedGroups: Set<String> = []
     private var notified: [String] = []
     private var lockedChats: Set<String> = [] // Chat Lock: their notifications carry no name and no text
+    private var archivedChats: Set<String> = []
+    private var blockedPeers: Set<String> = []
+    private var hiddenChats: Set<String> = [] // deleted from the list on this phone, no newer message yet
     private var refreshedAt = Date.distantPast
     /// Chats with unread messages (server count at the last refresh, plus every chat announced since): the icon badge.
     private var unread: Set<String> = []
@@ -125,7 +128,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     func detach() {
         subs.removeAll()
         token = ""
-        unread = []; settings = [:]; mutedUntil = [:]; titles = [:]; names = [:]; peers = [:]; loadedGroups = []; notified = []; lockedChats = []
+        unread = []; settings = [:]; mutedUntil = [:]; titles = [:]; names = [:]; peers = [:]; loadedGroups = []; notified = []; lockedChats = []; archivedChats = []; blockedPeers = []; hiddenChats = []
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         setIconBadge(0)
@@ -148,8 +151,12 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             var m: [String: Int64] = [:]
             for x in p { if let u = x.muted_until { m[x.conversation_id] = u } }
             mutedUntil = m
+            archivedChats = Set(p.filter { $0.archived ?? false }.map { $0.conversation_id })
         }
         if let st = try? await APIClient.shared.ctLockState(token: token) { lockedChats = Set((st.locks ?? []).map(\.conversation_id)) }
+        if let b = try? await APIClient.shared.blocked(token: token) { blockedPeers = Set(b) }
+        let hiddenAt = (UserDefaults.standard.dictionary(forKey: BadgeStore.hiddenKey(me)) as? [String: Double]) ?? [:]
+        var hidden: Set<String> = []
         var fresh: Set<String> = []
         if let list = try? await APIClient.shared.conversations(token: token) {
             for c in list {
@@ -157,6 +164,8 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
                 names[c.peer_id] = c.title
                 peers[c.conversation_id] = c.peer_id
                 if c.unread_count > 0 { fresh.insert(c.conversation_id) }
+                if let h = hiddenAt[c.conversation_id],
+                   !(Double(c.last_message_at > 100_000_000_000 ? c.last_message_at / 1000 : c.last_message_at) > h) { hidden.insert(c.conversation_id) }
             }
         }
         if let gs = try? await APIClient.shared.groups(token: token) {
@@ -165,6 +174,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
                 if g.unread_count > 0 { fresh.insert(g.conversation_id) }
             }
         }
+        hiddenChats = hidden
         unread = fresh
     }
 
@@ -187,6 +197,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
 
     private func enteringForeground() {
         endBackgroundTask()
+        Task { await refresh() } // the counts and mutes as they are now (the socket may have been asleep)
     }
 
     private func endBackgroundTask() {
@@ -195,7 +206,14 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         backgroundTask = .invalid
     }
 
-    private func badgeCount() -> Int { unread.filter { !isMuted($0) }.count }
+    /// The app icon number: the same rule as the tab bar badges (BadgeStore.counts): unread chats that are not muted,
+    /// archived, locked, blocked or deleted from the list.
+    private func badgeCount() -> Int {
+        unread.filter { id in
+            BadgeStore.counts(unread: true, archived: archivedChats.contains(id), muted: isMuted(id), locked: lockedChats.contains(id),
+                              blocked: peers[id].map { blockedPeers.contains($0) } ?? false, hidden: hiddenChats.contains(id))
+        }.count
+    }
 
     private func setIconBadge(_ n: Int) {
         if #available(iOS 17.0, *) {
@@ -286,6 +304,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         content.categoryIdentifier = Self.messageCategory
         content.targetContentIdentifier = m.conversation_id
         content.userInfo = ["conversation_id": m.conversation_id, "message_id": m.id]
+        hiddenChats.remove(m.conversation_id) // a newer message brings a deleted chat back to the list
         unread.insert(m.conversation_id)
         content.badge = NSNumber(value: badgeCount())
         notified.append(m.id)
@@ -373,6 +392,30 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         return Keychain.load()?.token ?? ""
     }
 
+    /// A Reply typed on the lock screen that could not be sent (no network, session gone, chat locked): saved with the chat's
+    /// unsent messages, so it is sent again, with the same key, the next time that chat is opened.
+    private func keepUnsentReply(id: String, body: String, conversation: String) {
+        let account = me.isEmpty ? (Keychain.load()?.userID ?? "") : me
+        guard !account.isEmpty else { return }
+        var list = OutboxStore.load(account: account, conversation: conversation)
+        guard !list.contains(where: { $0.id == id }) else { return }
+        var p = PendingMessage(id: id, body: body, date: Date())
+        p.failed = true
+        list.append(p)
+        OutboxStore.save(account: account, conversation: conversation, list)
+    }
+
+    private func postReplyFailed(conversation: String) {
+        let content = UNMutableNotificationContent()
+        content.title = NSLocalizedString("priv.reply.failed", comment: "")
+        content.body = titles[conversation] ?? NSLocalizedString("priv.reply.failed.body", comment: "")
+        content.sound = .default
+        content.threadIdentifier = conversation
+        content.targetContentIdentifier = conversation
+        content.userInfo = ["conversation_id": conversation]
+        Task { try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "replyfail|\(UUID().uuidString)", content: content, trigger: nil)) }
+    }
+
     private func handle(action: String, info: [String: Any], text: String?) async {
         let conv = info["conversation_id"] as? String
         switch action {
@@ -380,8 +423,15 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             let t = currentToken()
             let body = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard let conv, !t.isEmpty, !body.isEmpty else { return }
-            _ = try? await APIClient.shared.sendText(token: t, conversationID: conv, body: body,
-                                                     key: UUID().uuidString.lowercased())
+            let key = UUID().uuidString.lowercased()
+            do {
+                _ = try await APIClient.shared.sendText(token: t, conversationID: conv, body: body, key: key)
+            } catch {
+                // not lost: kept in this chat's unsent messages (sent again, same key, when the chat is opened) and said now
+                keepUnsentReply(id: key, body: body, conversation: conv)
+                postReplyFailed(conversation: conv)
+                return
+            }
             await APIClient.shared.markRead(token: t, conversationID: conv) // replying reads the chat (WhatsApp)
             clear(conversation: conv)
             setIconBadge(badgeCount())

@@ -31,6 +31,13 @@ final class VoiceRecorder: ObservableObject {
     private var previewTask: Task<Void, Never>?
     private var timer: Timer?
     private var url: URL?
+    /// A start is on its way (the permission prompt, the session): a second tap meanwhile must not open a second recorder.
+    private var starting = false
+    private var interruptionLink: AnyCancellable?
+    /// Set when the microphone is not available to a voice note (a call is on); a screen may show it.
+    @Published var notice: String?
+    /// The recording stopped by itself (a call, Siri, an alarm, or the 15-minute limit) and is waiting in the review state.
+    @Published private(set) var interrupted = false
 
     nonisolated static let maxDuration: TimeInterval = 15 * 60
 
@@ -38,16 +45,45 @@ final class VoiceRecorder: ObservableObject {
         if mirrorsMeter {
             meterLink = meter.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         }
+        // a phone call, Siri, an alarm or a FaceTime ring pauses the recorder by itself: the clock must not stay frozen on "recording"
+        interruptionLink = NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+            .sink { [weak self] n in
+                let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+                let began = raw == AVAudioSession.InterruptionType.began.rawValue
+                Task { @MainActor in if began { self?.audioInterrupted() } }
+            }
+    }
+
+    /// The system took the microphone: what was recorded so far is kept and shown for Send or Delete.
+    private func audioInterrupted() {
+        guard recorder != nil, recording, !reviewing else { return }
+        interrupted = true
+        review()
+    }
+
+    /// Letting go of the session after a start that did not go through (never during a call).
+    private func releaseSession() {
+        guard !CallManager.shared.lineInUse else { return }
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     func start() async {
+        guard !starting, recorder == nil else { return }
+        starting = true
+        defer { starting = false }
+        notice = nil
+        interrupted = false
         let session = AVAudioSession.sharedInstance()
         let granted: Bool = await withCheckedContinuation { cont in
             session.requestRecordPermission { cont.resume(returning: $0) }
         }
         guard granted else { denied = true; return }
         // the microphone belongs to the call while one is on (WhatsApp does not record voice notes during a call either)
-        guard !CallManager.shared.lineInUse else { return }
+        guard !CallManager.shared.lineInUse else {
+            notice = "voice.call.busy"
+            UINotificationFeedbackGenerator().notificationOccurred(.warning) // a tap that did something: it says no
+            return
+        }
         do {
             try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetooth])
             try session.setActive(true)
@@ -61,7 +97,10 @@ final class VoiceRecorder: ObservableObject {
             ]
             let r = try AVAudioRecorder(url: file, settings: settings)
             r.isMeteringEnabled = true
-            guard r.record(forDuration: Self.maxDuration) else { return }
+            guard r.record(forDuration: Self.maxDuration) else {
+                releaseSession()
+                return
+            }
             recorder = r
             url = file
             meter.levels = []
@@ -72,16 +111,23 @@ final class VoiceRecorder: ObservableObject {
             }
         } catch {
             recording = false
+            releaseSession()
         }
     }
 
     private func tick() {
         guard let r = recorder else { return }
+        if !r.isRecording && !paused && !reviewing {
+            // stopped by the system (an interruption that sent no notice) or by the 15-minute limit: to Send / Delete,
+            // not a clock frozen on "recording"
+            interrupted = meter.elapsed < Self.maxDuration - 1
+            review()
+            return
+        }
         r.updateMeters()
         let db = Double(r.averagePower(forChannel: 0)) // -160 ... 0
         meter.levels.append(max(0, min(1, (db + 50) / 50)))
         meter.elapsed = r.currentTime
-        if !r.isRecording && !paused { timer?.invalidate() }
     }
 
     func pause() {
@@ -99,7 +145,7 @@ final class VoiceRecorder: ObservableObject {
     /// Stop recording and listen before sending.
     func review() {
         guard let r = recorder, !reviewing else { return }
-        reviewDuration = r.currentTime
+        reviewDuration = max(r.currentTime, meter.elapsed) // a recorder the system already stopped reports 0
         r.stop()
         timer?.invalidate()
         paused = false
@@ -165,6 +211,7 @@ final class VoiceRecorder: ObservableObject {
         recorder = nil
         url = nil
         recording = false
+        interrupted = false
         // switching the audio session off during a call would cut the call's sound and microphone
         if !CallManager.shared.lineInUse { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
     }
@@ -226,6 +273,22 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     nonisolated private static let speedKey = "tf.voiceSpeed"
     nonisolated private static let playedKey = "tf.vnPlayed"
+
+    private var interruptionLink: AnyCancellable?
+
+    override init() {
+        super.init()
+        // a phone call, Siri or an alarm pauses the player by itself: the button must say paused, not keep "playing"
+        interruptionLink = NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+            .sink { [weak self] n in
+                let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+                let began = raw == AVAudioSession.InterruptionType.began.rawValue
+                Task { @MainActor in
+                    guard began, let self, self.playing else { return }
+                    self.pause()
+                }
+            }
+    }
 
     nonisolated private static func savedSpeed() -> Double {
         let v = UserDefaults.standard.double(forKey: speedKey)
@@ -326,8 +389,10 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func playNative(token: String, audioID: String) async {
-        guard let data = await APIClient.shared.voice(token: token, audioID: audioID),
-              current == audioID, let p = try? AVAudioPlayer(data: data) else {
+        let data = await APIClient.shared.voice(token: token, audioID: audioID)
+        // another note was started (or this one stopped) while it downloaded: nothing failed, it is just no longer wanted
+        guard current == audioID else { return }
+        guard let data, let p = try? AVAudioPlayer(data: data) else {
             markFailed(audioID)
             return
         }
@@ -346,7 +411,9 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func playWeb(token: String, audioID: String) async {
-        guard let ticket = try? await APIClient.shared.mediaTicket(token: token), current == audioID else {
+        let ticket = try? await APIClient.shared.mediaTicket(token: token)
+        guard current == audioID else { return } // no longer wanted: not a failure
+        guard let ticket else {
             markFailed(audioID)
             return
         }

@@ -1,5 +1,6 @@
 import AVFoundation
 import AVKit
+import ImageIO
 import PhotosUI
 import SwiftUI
 
@@ -25,14 +26,48 @@ enum MediaDrafts {
                 if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
                     out.append(MediaDraft(image: await poster(movie.url), videoURL: movie.url))
                 }
-            } else if let data = try? await item.loadTransferable(type: Data.self), let img = UIImage(data: data) {
-                let s = img.size, k = 240 / max(s.width, s.height, 1)
-                let t = await img.byPreparingThumbnail(ofSize: CGSize(width: max(1, (s.width * k).rounded()),
-                                                                      height: max(1, (s.height * k).rounded())))
-                out.append(MediaDraft(image: img, thumb: t))
+            } else if let data = try? await item.loadTransferable(type: Data.self) {
+                if let d = photoDraft(data) { out.append(d) }
             }
         }
         return out
+    }
+
+    /// The longest side the app ever sends (HD is fitted to 4096 px, standard to 1600): a bigger original (48 MP, ProRAW)
+    /// is held at this size, not at 8-75 MB of picture data for each of up to 30 photos.
+    private static let heldSide = 4096
+
+    /// A photo draft built through ImageIO: the strip's small picture is decoded straight at its size (the whole picture
+    /// was decoded for it before: hundreds of MB at once with a few big photos), and an oversize original is cut down once.
+    private static func photoDraft(_ data: Data) -> MediaDraft? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else {
+            // not readable by ImageIO: the old way
+            return UIImage(data: data).map { MediaDraft(image: $0, thumb: nil) }
+        }
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        let w = (props?[kCGImagePropertyPixelWidth] as? Int) ?? 0
+        let h = (props?[kCGImagePropertyPixelHeight] as? Int) ?? 0
+        let thumb = scaled(src, maxPixel: 240)
+        var image: UIImage?
+        if max(w, h) > heldSide, let big = scaled(src, maxPixel: heldSide),
+           let jpeg = big.jpegData(compressionQuality: 0.92), let again = UIImage(data: jpeg) {
+            image = again
+        } else {
+            image = UIImage(data: data)
+        }
+        guard let image else { return nil }
+        return MediaDraft(image: image, thumb: thumb)
+    }
+
+    /// The picture upright, at most `maxPixel` on its longer side, decoded at that size.
+    private static func scaled(_ src: CGImageSource, maxPixel: Int) -> UIImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary).map { UIImage(cgImage: $0) }
     }
 
     static func poster(_ url: URL) async -> UIImage? {
@@ -67,6 +102,12 @@ struct MediaSendSheet: View {
     }
 
     private static var limitText: String { String(format: NSLocalizedString("gp2.media.max", comment: ""), maxItems) }
+
+    /// A video copied out of the picker into tmp ("pick-…"): deleted when it will not be sent.
+    private static func removePickedCopy(_ d: MediaDraft) {
+        guard let u = d.videoURL, u.lastPathComponent.hasPrefix("pick-") else { return }
+        try? FileManager.default.removeItem(at: u)
+    }
     private var room: Int { max(0, Self.maxItems - items.count) }
     @State private var index = 0
     @State private var hd = false
@@ -88,6 +129,10 @@ struct MediaSendSheet: View {
     @State private var textEditing: UUID?
     @State private var sending = false
     @State private var toast: String?
+    /// More photos are being read from the picker (it takes a moment with big ones): a spinner in the strip meanwhile.
+    @State private var loadingMore = false
+    /// The items went to the chat (it deletes a video's temporary copy itself); otherwise they are deleted when this closes.
+    @State private var handedOver = false
 
     private var current: MediaDraft? { items.indices.contains(index) ? items[index] : nil }
     private var currentIsPhoto: Bool { current.map { !$0.isVideo && $0.image != nil } ?? false }
@@ -147,8 +192,12 @@ struct MediaSendSheet: View {
             guard !picked.isEmpty else { return }
             adding = []
             Task {
+                loadingMore = true
                 let loaded = await MediaDrafts.load(picked)
+                loadingMore = false
                 let more = Array(loaded.prefix(room))
+                // picked past the limit: their temporary copies are not needed
+                for d in loaded.dropFirst(more.count) { Self.removePickedCopy(d) }
                 notice = loaded.count > more.count ? Self.limitText : nil
                 items.append(contentsOf: more)
                 if !more.isEmpty { index = items.count - more.count }
@@ -159,6 +208,10 @@ struct MediaSendSheet: View {
             tool = .none
             cropBefore = nil
             selectedOverlay = nil
+        }
+        .onDisappear {
+            // closed without sending: the videos copied out of the picker (tmp) are deleted
+            if !handedOver { for d in items { Self.removePickedCopy(d) } }
         }
         .sheet(isPresented: $showStickers) {
             EdStickerPicker { e in
@@ -357,6 +410,7 @@ struct MediaSendSheet: View {
                             Button {
                                 player?.pause(); player = nil
                                 let gone = items[i].id
+                                Self.removePickedCopy(items[i])
                                 items.remove(at: i)
                                 edits[gone] = nil
                                 thumbs[gone] = nil
@@ -370,6 +424,11 @@ struct MediaSendSheet: View {
                             .accessibilityLabel(Text("media.remove"))
                         }
                     }
+                }
+                if loadingMore {
+                    ProgressView().tint(.white)
+                        .frame(width: 56, height: 56).background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                        .accessibilityLabel(Text("ed.preparing"))
                 }
                 if items.count < Self.maxItems {
                     Button { showAdd = true } label: {
@@ -511,6 +570,7 @@ struct MediaSendSheet: View {
     private func send() {
         guard !sending, !items.isEmpty else { return }
         player?.pause()
+        handedOver = true
         let snapshot = items
         let allEdits = edits
         let quality = hd

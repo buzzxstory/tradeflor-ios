@@ -1437,6 +1437,9 @@
 "chat.edit.cancel" = "Cancel editing";
 "chat.edit.failed" = "Could not edit the message.";
 "chat.edit.late" = "A message can be edited for 15 minutes.";
+"chat.toolong" = "This message is too long to send. Shorten it or split it into two.";
+"group.removed" = "You are no longer a member of this group.";
+"chat.blocked.done" = "Blocked.";
 "chat.typing.name" = "%@ is typing…";
 "chat.unread.one" = "1 unread message";
 "chat.unread.n" = "%d unread messages";
@@ -1893,3 +1896,14 @@
 "grp.search.invite" = "Use this invite link";
 "grp.public.none" = "No public group matches \"%@\". Ask the owner for the group's link.";
 "cv3.err.load" = "Couldn't load your contacts.";
+"grp.logo.failed" = "Group saved, but the logo was not uploaded. Tap again to continue without it, or try the logo again.";
+"grp.lookup.network" = "Could not reach the server. Check your connection and try again.";
+"grp.invite.revokefailed" = "Some old links could not be revoked. Try again.";
+"priv.reply.failed" = "Reply not sent";
+"priv.reply.failed.body" = "Open the chat to send it again.";
+"voice.call.busy" = "The microphone is in use by your call. Voice notes are not available right now.";
+"cam.mic.off" = "Microphone is off: this video will have no sound.";
+"cam.call.busy" = "Video is not available during a call.";
+"cam.interrupted" = "The camera was interrupted.";
+
+"chat.video.exportfailed" = "The video could not be prepared. Try again.";

@@ -95,6 +95,24 @@ extension APIClient {
         (try? await list(GrpJoinRequest.self, "groups/\(id)/join-requests", token: token)) ?? []
     }
 
+    // The same lists, but nil when the request failed: a network blip must not empty what the admin already sees
+    // (the versions above return [] for a failure).
+    func grpBansIfOK(token: String, id: String) async -> [GrpBan]? {
+        try? await list(GrpBan.self, "groups/\(id)/bans", token: token)
+    }
+
+    func grpInvitesIfOK(token: String, id: String) async -> [GrpInvite]? {
+        try? await list(GrpInvite.self, "groups/\(id)/invites", token: token)
+    }
+
+    func grpJoinRequestsIfOK(token: String, id: String) async -> [GrpJoinRequest]? {
+        try? await list(GrpJoinRequest.self, "groups/\(id)/join-requests", token: token)
+    }
+
+    func grpAuditIfOK(token: String, id: String) async -> [GrpAudit]? {
+        try? await list(GrpAudit.self, "groups/\(id)/audit", token: token)
+    }
+
     func grpDecide(token: String, id: String, userID: String, approve: Bool) async throws {
         _ = try await postJSON("groups/\(id)/join-requests/decide", token: token, body: ["UserID": userID, "Approve": approve])
     }

@@ -143,9 +143,25 @@ struct AddMembersSheet: View {
         try? await Task.sleep(nanoseconds: 350_000_000)
         if Task.isCancelled { return }
         let pin = Self.isPin(t)
-        let found = try? await APIClient.shared.ctLookup(token: token, pin: pin ? t : nil, username: pin ? nil : username)
+        var found: IdentityDetail?
+        var unreachable = false
+        do {
+            found = try await APIClient.shared.ctLookup(token: token, pin: pin ? t : nil, username: pin ? nil : username)
+        } catch APIError.network {
+            unreachable = true // no connection is not "no such user"
+        } catch APIError.server(let status) where status >= 500 {
+            unreachable = true
+        } catch {
+            found = nil
+        }
         if Task.isCancelled { return }
         looking = false
+        if unreachable {
+            card = nil
+            none = nil
+            self.error = NSLocalizedString("grp.lookup.network", comment: "")
+            return
+        }
         card = found
         none = found == nil ? (pin ? String(format: NSLocalizedString("ams.none.pin", comment: ""), t)
                                    : String(format: NSLocalizedString("ams.none.user", comment: ""), username)) : nil

@@ -1,5 +1,6 @@
 import AVFoundation
 import AVKit
+import Combine
 import SwiftUI
 
 // The camera behind the composer's camera button (desktop/src/features/camera/CameraStudio.tsx): PHOTO, VIDEO and VIDEO NOTE.
@@ -34,22 +35,60 @@ final class CameraModel: NSObject, ObservableObject {
     /// A camera being set up: a second flip meanwhile is ignored (it found the first one's camera still being added and
     /// ended in "failed").
     private var opening = false
+    /// Every call of `open` takes a number; while one is being set up the others wait, and only the newest goes on (the
+    /// mode buttons, the flip and the scene change used to run two set-ups at once and ended in "failed" with a camera running).
+    private var openGen = 0
+    /// The microphone is not part of this video (denied, or a call has it): the video will have no sound.
+    @Published var micOff = false
+    /// A line to show over the camera (a call is on, the system interrupted the camera); a key of Localizable.strings.
+    @Published var notice: String?
+    /// Set when the studio is closing without sending: a video that finishes recording now is deleted, not kept.
+    var closing = false
+    private var observers = Set<AnyCancellable>()
+
+    override init() {
+        super.init()
+        NotificationCenter.default.publisher(for: AVCaptureSession.wasInterruptedNotification, object: session)
+            .sink { [weak self] _ in Task { @MainActor in self?.notice = "cam.interrupted" } }
+            .store(in: &observers)
+        NotificationCenter.default.publisher(for: AVCaptureSession.interruptionEndedNotification, object: session)
+            .sink { [weak self] _ in Task { @MainActor in self?.notice = nil } }
+            .store(in: &observers)
+    }
+
+    /// Says `key` for a moment (never over a newer line).
+    func say(_ key: String) {
+        notice = key
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_800_000_000)
+            if notice == key { notice = nil }
+        }
+    }
 
     func open(video: Bool) async {
+        guard !self.movieOut.isRecording else { return }
+        openGen += 1
+        let gen = openGen
+        while opening {
+            try? await Task.sleep(nanoseconds: 40_000_000)
+            if gen != openGen { return } // a newer request is waiting: this one is not needed
+        }
+        if gen != openGen { return }
         opening = true
         defer { opening = false }
         phase = .starting
         guard await AVCaptureDevice.requestAccess(for: .video) else { phase = .denied; return }
-        let mic = video ? await AVCaptureDevice.requestAccess(for: .audio) : false
+        // the microphone belongs to a running call: a video recorded now would take it from the call
+        let mic = (video && !CallManager.shared.lineInUse) ? await AVCaptureDevice.requestAccess(for: .audio) : false
+        micOff = video && !mic
         let front = self.front
         let session = self.session, photoOut = self.photoOut, movieOut = self.movieOut
-        let oldIn = input, oldAudio = audioIn
         let result: (AVCaptureDeviceInput?, AVCaptureDeviceInput?) = await withCheckedContinuation { cont in
             queue.async {
                 session.beginConfiguration()
                 session.sessionPreset = video ? .high : .photo
-                if let oldIn { session.removeInput(oldIn) }
-                if let oldAudio { session.removeInput(oldAudio) }
+                // whatever inputs the session has now, read here on its own queue (not a copy taken before the waits above)
+                for old in session.inputs { session.removeInput(old) }
                 var newIn: AVCaptureDeviceInput?
                 var newAudio: AVCaptureDeviceInput?
                 if let dev = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: front ? .front : .back),
@@ -154,7 +193,12 @@ extension CameraModel: AVCaptureFileOutputRecordingDelegate {
         Task { @MainActor in
             self.timer?.invalidate()
             self.phase = .ready
-            if ok { self.videoURL = outputFileURL }
+            if self.closing {
+                // the studio was closed while this was recording: nobody will send it
+                try? FileManager.default.removeItem(at: outputFileURL)
+            } else if ok {
+                self.videoURL = outputFileURL
+            }
         }
     }
 }
@@ -196,6 +240,12 @@ struct CameraStudio: View {
 
     private var reviewing: Bool { cam.photo != nil || cam.videoURL != nil }
 
+    /// The line over the camera: what the system said, or that this video will have no sound.
+    private var hintLine: String? {
+        if let n = cam.notice { return n }
+        return (mode == .video && cam.micOff) ? "cam.mic.off" : nil
+    }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -223,12 +273,29 @@ struct CameraStudio: View {
             VStack {
                 topBar
                 Spacer()
+                if !reviewing, let line = hintLine {
+                    Text(LocalizedStringKey(line))
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .padding(.horizontal, 24).padding(.bottom, 6)
+                        .accessibilityElement(children: .combine)
+                }
                 if reviewing { reviewBar } else { bottomBar }
             }
         }
         .statusBarHidden()
         .task { await cam.open(video: mode == .video) }
-        .onDisappear { cam.stop(); reviewPlayer?.pause() }
+        .onDisappear {
+            // closed without sending: a video recorded or being recorded is deleted from tmp (a sent one belongs to the chat now)
+            if !sent {
+                cam.closing = true
+                cam.discard()
+            }
+            cam.stop()
+            reviewPlayer?.pause()
+        }
         .onChange(of: scenePhase) { p in
             if p == .background { cam.stop() } else if p == .active && !reviewing { Task { await cam.open(video: mode == .video) } }
         }
@@ -278,6 +345,8 @@ struct CameraStudio: View {
                     Button {
                         guard cam.phase != .recording, m != mode else { return }
                         if m == .note { dismiss(); onNote?(); return }
+                        // the microphone is a running call's: the video camera would reconfigure the call's audio
+                        if m == .video && CallManager.shared.lineInUse { cam.say("cam.call.busy"); return }
                         mode = m
                         Task { await cam.open(video: m == .video) }
                     } label: {

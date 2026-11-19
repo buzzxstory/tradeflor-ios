@@ -53,16 +53,26 @@ extension APIClient {
     /// `ok` is false when the group could not be read (no connection, or no longer a member): the other values are then only
     /// defaults and must not replace what the chat already knows.
     func chGroupRole(token: String, groupID: String) async -> (role: String, canSend: Bool, canSendMedia: Bool, canPostSignals: Bool, memberCount: Int,
-                                                               comments: Bool, canReact: Bool, ok: Bool) {
+                                                               comments: Bool, canReact: Bool, ok: Bool, gone: Bool) {
         struct G: Decodable {
             let my_role: String?; let can_send: Bool?; let can_send_media: Bool?; let can_post_signals: Bool?
             let member_count: Int?; let comments: Bool?; let can_react: Bool?
         }
-        guard let g = try? decode(G.self, try await getJSON("groups/\(groupID)", token: token)) else {
-            return ("member", true, true, false, 0, false, true, false)
+        let data: Data
+        do {
+            data = try await getJSON("groups/\(groupID)", token: token)
+        } catch APIError.refused(_) {
+            return ("member", false, false, false, 0, false, false, false, true) // 403: not (or no longer) a member
+        } catch APIError.server(status: 404) {
+            return ("member", false, false, false, 0, false, false, false, true) // the group is gone
+        } catch {
+            return ("member", true, true, false, 0, false, true, false, false)
+        }
+        guard let g = try? decode(G.self, data) else {
+            return ("member", true, true, false, 0, false, true, false, false)
         }
         return (g.my_role ?? "member", g.can_send ?? true, g.can_send_media ?? true, g.can_post_signals ?? false, g.member_count ?? 0,
-                g.comments ?? false, g.can_react ?? true, true)
+                g.comments ?? false, g.can_react ?? true, true, false)
     }
 
     func chLinkPreview(token: String, url: String) async -> LinkPreviewData? {

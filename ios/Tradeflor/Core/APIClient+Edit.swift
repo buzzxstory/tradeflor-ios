@@ -34,10 +34,50 @@ enum FileDiskCache {
         return try? Data(contentsOf: u)
     }
 
+    /// The whole folder may hold this much; the oldest files go first when it grows past it.
+    static let totalLimit: Int64 = 150 << 20
+    private static var savesSinceTrim = 0
+    private static let trimLock = NSLock()
+
     static func save(_ key: String, _ data: Data) {
         guard data.count <= maxBytes, let d = dir, let u = url(key) else { return }
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         try? data.write(to: u, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        trimLock.lock()
+        savesSinceTrim += 1
+        let due = savesSinceTrim >= 25
+        if due { savesSinceTrim = 0 }
+        trimLock.unlock()
+        if due { DispatchQueue.global(qos: .utility).async { trim() } }
+    }
+
+    /// Size of the copy kept for `key` (0 when there is none).
+    static func size(_ key: String) -> Int64 {
+        guard let u = url(key), let n = (try? u.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else { return 0 }
+        return Int64(n)
+    }
+
+    /// Deletes the copy kept for `key` (Clear chat / Free up storage).
+    static func remove(_ key: String) {
+        if let u = url(key) { try? FileManager.default.removeItem(at: u) }
+    }
+
+    /// Keeps the folder under `totalLimit`: oldest files (by modification date) are removed first.
+    static func trim() {
+        guard let d = dir,
+              let items = try? FileManager.default.contentsOfDirectory(
+                at: d, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else { return }
+        var entries: [(url: URL, size: Int64, date: Date)] = items.map {
+            let v = try? $0.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            return ($0, Int64(v?.fileSize ?? 0), v?.contentModificationDate ?? .distantPast)
+        }
+        var total = entries.reduce(Int64(0)) { $0 + $1.size }
+        guard total > totalLimit else { return }
+        entries.sort { $0.date < $1.date }
+        for e in entries where total > totalLimit {
+            try? FileManager.default.removeItem(at: e.url)
+            total -= e.size
+        }
     }
 
     static func clear() {

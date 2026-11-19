@@ -23,7 +23,8 @@ struct ChatListView: View {
     @State private var showArchived = false
     @State private var lockedIDs: Set<String> = []
     @State private var blockedIDs: Set<String> = []
-    @State private var hiddenAt: [String: Double] = (UserDefaults.standard.dictionary(forKey: "tf.hiddenChats") as? [String: Double]) ?? [:]
+    /// Chats deleted from the list on this phone (until a newer message), per account (loaded in load()).
+    @State private var hiddenAt: [String: Double] = [:]
     @State private var showFolderEditor = false
     @State private var editingFolder: EditableFolder?
     @State private var showManageFolders = false
@@ -413,7 +414,8 @@ struct ChatListView: View {
     /// Delete Chat: off this list until a newer message comes (this device only).
     private func hide(_ c: ConversationSummary) {
         hiddenAt[c.conversation_id] = Date().timeIntervalSince1970
-        UserDefaults.standard.set(hiddenAt, forKey: "tf.hiddenChats")
+        UserDefaults.standard.set(hiddenAt, forKey: BadgeStore.hiddenKey(store.session?.userID ?? ""))
+        BadgeStore.shared.chats = badgeNow()
         flash(NSLocalizedString("chats.removed", comment: ""))
     }
 
@@ -479,10 +481,39 @@ struct ChatListView: View {
         return NSLocalizedString("ux1.chats.allarchived", comment: "")
     }
 
+    /// This account's deleted-from-the-list chats (the single-account list of older versions moves to the account that has it).
+    private func loadHidden() {
+        guard let uid = store.session?.userID, !uid.isEmpty else { return }
+        let d = UserDefaults.standard
+        let key = BadgeStore.hiddenKey(uid)
+        if let old = d.dictionary(forKey: "tf.hiddenChats") as? [String: Double] {
+            var mine = (d.dictionary(forKey: key) as? [String: Double]) ?? [:]
+            for (k, v) in old where (mine[k] ?? 0) < v { mine[k] = v }
+            d.set(mine, forKey: key)
+            d.removeObject(forKey: "tf.hiddenChats")
+        }
+        let loaded = (d.dictionary(forKey: key) as? [String: Double]) ?? [:]
+        if loaded != hiddenAt { hiddenAt = loaded }
+    }
+
     private func loadLocks() async {
         if let st = try? await APIClient.shared.ctLockState(token: token) { lockedIDs = Set((st.locks ?? []).map(\.conversation_id)) }
         blockedIDs = Set((try? await APIClient.shared.blocked(token: token)) ?? [])
-        BadgeStore.shared.chats = chats.filter { isUnread($0) && !lockedIDs.contains($0.conversation_id) }.count
+        BadgeStore.shared.chats = badgeNow()
+    }
+
+    /// The tab badge: unread chats the person can see and has not silenced (BadgeStore.counts, the same rule as the app icon).
+    private func badgeNow() -> Int {
+        let now = Int64(Date().timeIntervalSince1970)
+        return chats.filter { c in
+            let p = prefs[c.conversation_id]
+            var hidden = false
+            if let h = hiddenAt[c.conversation_id] {
+                hidden = !(Double(c.last_message_at > 100_000_000_000 ? c.last_message_at / 1000 : c.last_message_at) > h)
+            }
+            return BadgeStore.counts(unread: isUnread(c), archived: p?.archived ?? false, muted: (p?.muted_until ?? 0) > now,
+                                     locked: lockedIDs.contains(c.conversation_id), blocked: blockedIDs.contains(c.peer_id), hidden: hidden)
+        }.count
     }
 
     private func loadPrefs() async {
@@ -493,6 +524,7 @@ struct ChatListView: View {
 
     private func load(quiet: Bool = false) async {
         guard !token.isEmpty else { return }
+        loadHidden()
         if chats.isEmpty {
             // the last list this phone saw, at once; the server's answer replaces it a moment later
             let cached = ListCache.conversations(token: token).sorted { $0.last_message_at > $1.last_message_at }
@@ -508,7 +540,7 @@ struct ChatListView: View {
             await prefsDone; await locksDone // the locked set is known before the rows are shown (a locked chat never flashes)
             let sorted = out.sorted { $0.last_message_at > $1.last_message_at }
             if sorted != chats { chats = sorted }
-            BadgeStore.shared.chats = chats.filter { isUnread($0) && !lockedIDs.contains($0.conversation_id) }.count
+            BadgeStore.shared.chats = badgeNow()
             failed = false
             ciOpenFirstChat()
         } catch APIError.badCredentials {

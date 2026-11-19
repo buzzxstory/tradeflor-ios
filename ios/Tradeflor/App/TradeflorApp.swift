@@ -222,12 +222,14 @@ struct RootView: View {
             live.start(token: s.token)
             CallManager.shared.attach(live: live, token: s.token, userID: s.userID)
             LocalNotifier.shared.attach(live: live, token: s.token, userID: s.userID)
+            OutboxFlusher.shared.attach(live: live, token: s.token, userID: s.userID)
             DeliveryStats.shared.attach(live, me: s.userID)
             FlashHub.shared.attach(live: live, token: s.token)
         } else {
             FlashHub.shared.detach()
             CallManager.shared.detach()
             LocalNotifier.shared.detach()
+            OutboxFlusher.shared.detach()
             live.stop()
         }
     }

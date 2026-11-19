@@ -459,11 +459,16 @@ struct ContactInfoView: View {
 
     /// Free up storage: only this device's copy; nothing on the account changes.
     private func clearLocalCopy() {
-        LocalChatCopy.clear(localCopy)
-        localCopy = LocalChatCopy.Copy()
-        localBytes = 0
-        flash(tr("civ3.storage.cleared"))
-        Task { await measureLocalCopy() }
+        // against the chat's attachments listed again now, not only what the page measured earlier (that can still be empty)
+        Task {
+            let fresh = await LocalChatCopy.measure(token: token, conversationID: chat.conversation_id)
+            LocalChatCopy.clear(localCopy)
+            LocalChatCopy.clear(fresh)
+            localCopy = LocalChatCopy.Copy()
+            localBytes = 0
+            flash(tr("civ3.storage.cleared"))
+            await measureLocalCopy()
+        }
     }
 
     private func togglePin() async {
@@ -542,7 +547,10 @@ struct ContactInfoView: View {
     /// the other person keeps theirs; the chat stays listed. Then this device's copy goes too.
     private func clearChat() async {
         do {
+            // listed before the server clears the chat (afterwards its index of shared items is empty)
+            let fresh = await LocalChatCopy.measure(token: token, conversationID: chat.conversation_id)
             let n = try await APIClient.shared.civ3ClearChat(token: token, conversationID: chat.conversation_id)
+            LocalChatCopy.clear(fresh)
             LocalChatCopy.clear(localCopy)
             localCopy = LocalChatCopy.Copy()
             localBytes = 0

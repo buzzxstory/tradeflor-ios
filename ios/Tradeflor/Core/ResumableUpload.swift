@@ -199,11 +199,15 @@ final class ResumableUploader {
         var failures = 0
         var restarts = 0
 
+        // seconds the server asked for with a 429 (Retry-After), at most 30: waited instead of the short backoff
+        var retryAfter = 0.0
+
         func backoff() async throws {
             failures += 1
             if failures > 6 { throw APIError.network } // the row turns "Not sent · Retry"; the retry resumes
             meter.report(confirmed, size, .retrying)
-            let delay = min(8.0, 0.5 * pow(2.0, Double(failures - 1)))
+            let delay = max(min(8.0, 0.5 * pow(2.0, Double(failures - 1))), retryAfter)
+            retryAfter = 0
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         }
 
@@ -252,6 +256,9 @@ final class ResumableUploader {
                             uploadID = nil
                             confirmed = 0
                         case 408, 429, 500...:
+                            if http.statusCode == 429, let v = Double(http.value(forHTTPHeaderField: "Retry-After") ?? "") {
+                                retryAfter = min(30, max(0, v))
+                            }
                             throw APIError.network
                         default:
                             try api.check(http, data)

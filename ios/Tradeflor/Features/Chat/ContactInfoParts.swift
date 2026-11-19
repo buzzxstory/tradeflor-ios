@@ -333,6 +333,8 @@ enum LocalChatCopy {
         var bytes: Int64 = 0
         var folders: [URL] = []
         var cacheKeys: [String] = []
+        /// Copies kept on disk in Caches (FileDiskCache): "<file id>/t" and "<file id>/f".
+        var diskKeys: [String] = []
     }
 
     static var filesDir: URL { FileManager.default.temporaryDirectory.appendingPathComponent("tf-files", isDirectory: true) }
@@ -371,9 +373,17 @@ enum LocalChatCopy {
                 copy.bytes += folderSize(dir)
             }
             for key in ["\(id)/t", "\(id)/f"] {
+                var counted = false
                 if let d = cache.object(forKey: key as NSString) {
                     copy.cacheKeys.append(key)
                     copy.bytes += Int64(d.length)
+                    counted = true
+                }
+                // the same picture kept on disk (Caches/tf-files): it is removed too, and counted once
+                let onDisk = FileDiskCache.size(key)
+                if onDisk > 0 {
+                    copy.diskKeys.append(key)
+                    if !counted { copy.bytes += onDisk }
                 }
             }
         }
@@ -400,6 +410,9 @@ enum LocalChatCopy {
     static func clear(_ copy: Copy) {
         for d in copy.folders { try? FileManager.default.removeItem(at: d) }
         for k in copy.cacheKeys { APIClient.shared.avatarCache.removeObject(forKey: k as NSString) }
+        for k in copy.diskKeys { FileDiskCache.remove(k) }
+        // pictures that were only on disk are gone from memory as well
+        for k in copy.diskKeys { APIClient.shared.avatarCache.removeObject(forKey: k as NSString) }
     }
 }
 

@@ -37,6 +37,7 @@ struct CreateGroupView: View {
     @State private var error: String?
     @State private var createKey = ""
     @State private var createSig = ""
+    @State private var logoFailedOnce = false
 
     private var token: String { store.session?.token ?? "" }
     private var isEdit: Bool { editing != nil }
@@ -289,8 +290,15 @@ struct CreateGroupView: View {
                 id = try await APIClient.shared.createGroup(token: token, name: cleanName, description: about, isPublic: isPublic,
                                                             memberIDs: Array(picked), handle: h, key: createKey)
             }
-            if let logo, let jpeg = GrpImage.squareJPEG(logo) {
-                try? await APIClient.shared.grpUploadAvatar(token: token, id: id, jpeg: jpeg)
+            if let logo, !logoFailedOnce, let jpeg = GrpImage.squareJPEG(logo) {
+                do {
+                    try await APIClient.shared.grpUploadAvatar(token: token, id: id, jpeg: jpeg)
+                } catch {
+                    // the group is saved; say that the logo is not, and let the next tap go on without it (or try again)
+                    logoFailedOnce = true
+                    self.error = NSLocalizedString("grp.logo.failed", comment: "")
+                    return
+                }
             }
             dismiss()
             onCreated(id)
@@ -581,7 +589,7 @@ struct GroupInfoView: View {
         .onReceive(live.joinRequests) { d in
             guard d["conversation_id"] == groupID, group?.isAdmin == true else { return }
             if let u = d["user_id"], !u.isEmpty { freshIDs.insert(u) }
-            Task { requests = await APIClient.shared.grpJoinRequests(token: token, id: groupID) }
+            Task { if let fresh = await APIClient.shared.grpJoinRequestsIfOK(token: token, id: groupID) { requests = fresh } }
         }
         // and every 30 s while Group Info is open, in case a live event was missed (website 3c68bec)
         .task(id: admin) {
@@ -589,7 +597,7 @@ struct GroupInfoView: View {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 30_000_000_000)
                 if Task.isCancelled { return }
-                let fresh = await APIClient.shared.grpJoinRequests(token: token, id: groupID)
+                guard let fresh = await APIClient.shared.grpJoinRequestsIfOK(token: token, id: groupID) else { continue } // a failed request keeps the list
                 for r in fresh where !requests.contains(where: { $0.user_id == r.user_id }) { freshIDs.insert(r.user_id) }
                 requests = fresh
             }
@@ -1202,9 +1210,19 @@ struct GroupInfoView: View {
         creatingInvite = true
         defer { creatingInvite = false }
         do {
-            if resetAll { for i in invites { try? await APIClient.shared.grpRevokeInvite(token: token, id: groupID, inviteID: i.id) } }
+            if resetAll {
+                // every old link must be revoked before a new one is made: a failure is said, not hidden
+                for i in invites {
+                    do { try await APIClient.shared.grpRevokeInvite(token: token, id: groupID, inviteID: i.id) }
+                    catch {
+                        problem = NSLocalizedString("grp.invite.revokefailed", comment: "")
+                        if let l = await APIClient.shared.grpInvitesIfOK(token: token, id: groupID) { invites = l }
+                        return
+                    }
+                }
+            }
             newLink = try await APIClient.shared.grpCreateInvite(token: token, id: groupID, hours: inviteHours, maxUses: inviteUses)
-            invites = await APIClient.shared.grpInvites(token: token, id: groupID)
+            if let l = await APIClient.shared.grpInvitesIfOK(token: token, id: groupID) { invites = l }
         } catch APIError.refused(let why) {
             problem = why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why
         } catch {
@@ -1611,11 +1629,12 @@ struct GroupInfoView: View {
             everyone = out
         }
         stats = await APIClient.shared.grpMediaStats(token: token, conversationID: groupID)
-        if g.isAdmin || g.can_invite == true { invites = await APIClient.shared.grpInvites(token: token, id: groupID) }
-        if g.isAdmin { bans = await APIClient.shared.grpBans(token: token, id: groupID) }
+        // a failed request leaves the list as it was (it used to turn into an empty list)
+        if g.isAdmin || g.can_invite == true, let l = await APIClient.shared.grpInvitesIfOK(token: token, id: groupID) { invites = l }
+        if g.isAdmin, let l = await APIClient.shared.grpBansIfOK(token: token, id: groupID) { bans = l }
         if g.isOwner || g.isAdmin {
-            requests = await APIClient.shared.grpJoinRequests(token: token, id: groupID)
-            audit = await APIClient.shared.grpAudit(token: token, id: groupID)
+            if let l = await APIClient.shared.grpJoinRequestsIfOK(token: token, id: groupID) { requests = l }
+            if let l = await APIClient.shared.grpAuditIfOK(token: token, id: groupID) { audit = l }
         }
     }
 }

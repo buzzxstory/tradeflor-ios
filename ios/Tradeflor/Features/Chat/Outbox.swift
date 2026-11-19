@@ -21,6 +21,8 @@ enum OutboxStore {
         var docName: String?
         var docMime: String?
         var poster: Data?
+        /// The server refused it for good (not a passing error): kept as "Not sent", never sent again by itself.
+        var failed: Bool?
     }
 
     private static func file(_ account: String, _ conversation: String) -> URL? {
@@ -49,7 +51,8 @@ enum OutboxStore {
             Entry(id: $0.id, body: $0.body, date: $0.date, jpeg: $0.jpeg, audio: $0.audio, durationMs: $0.durationMs,
                   waveform: $0.waveform, replyTo: $0.replyTo, fileName: $0.file?.lastPathComponent,
                   isVideo: $0.file != nil ? $0.video != nil : nil, docName: $0.docName.isEmpty ? nil : $0.docName,
-                  docMime: $0.docMime.isEmpty ? nil : $0.docMime, poster: $0.poster)
+                  docMime: $0.docMime.isEmpty ? nil : $0.docMime, poster: $0.poster,
+                  failed: $0.refused ? true : nil)
         }
         queue.async {
             let first = waiting[url] == nil
@@ -75,6 +78,71 @@ enum OutboxStore {
         return out
     }
 
+    /// A text or voice message waiting in a saved outbox: what OutboxFlusher sends when no chat screen is open.
+    struct QueuedLine {
+        let conversation: String
+        let id: String
+        let body: String
+        let date: Date
+        let audio: Data?
+        let durationMs: Int?
+        let waveform: [Double]
+        let replyTo: String
+    }
+
+    /// Every text / voice message of this account still waiting (not the ones the server refused, not photos / videos /
+    /// documents: those resume from their own files when their chat opens).
+    static func lines(account: String) -> [QueuedLine] {
+        guard !account.isEmpty, let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return [] }
+        let folder = dir.appendingPathComponent("outbox/\(account)", isDirectory: true)
+        return queue.sync { () -> [QueuedLine] in
+            for (u, e) in waiting { write(e, u) } // writes still waiting go first
+            waiting.removeAll()
+            let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+            var out: [QueuedLine] = []
+            for u in files where u.pathExtension == "json" {
+                guard let data = try? Data(contentsOf: u), let entries = try? JSONDecoder().decode([Entry].self, from: data) else { continue }
+                let conv = u.deletingPathExtension().lastPathComponent
+                for e in entries where e.failed != true && e.fileName == nil && e.jpeg == nil && e.docName == nil && e.isVideo != true {
+                    out.append(QueuedLine(conversation: conv, id: e.id, body: e.body, date: e.date, audio: e.audio,
+                                          durationMs: e.durationMs, waveform: e.waveform, replyTo: e.replyTo))
+                }
+            }
+            return out
+        }
+    }
+
+    private static func mutate(_ account: String, _ conversation: String, _ change: (inout [Entry]) -> Void) {
+        guard let url = file(account, conversation) else { return }
+        queue.sync { () -> Void in
+            if let e = waiting.removeValue(forKey: url) { write(e, url) }
+            guard let data = try? Data(contentsOf: url), var entries = try? JSONDecoder().decode([Entry].self, from: data) else { return }
+            change(&entries)
+            write(entries, url)
+        }
+    }
+
+    /// Sent: it leaves the saved outbox.
+    static func remove(account: String, conversation: String, id: String) {
+        mutate(account, conversation) { entries in entries.removeAll { $0.id == id } }
+    }
+
+    /// Refused for good: kept, shown as "Not sent" when the chat opens, never sent again by itself.
+    static func markFailed(account: String, conversation: String, id: String) {
+        mutate(account, conversation) { entries in
+            for i in entries.indices where entries[i].id == id { entries[i].failed = true }
+        }
+    }
+
+    /// The whole outbox of one chat goes (e.g. I am no longer a member of that group).
+    static func clear(account: String, conversation: String) {
+        guard let url = file(account, conversation) else { return }
+        queue.sync { () -> Void in
+            waiting.removeValue(forKey: url)
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     static func load(account: String, conversation: String) -> [PendingMessage] {
         guard let url = file(account, conversation),
               let data = queue.sync(execute: { () -> Data? in
@@ -84,6 +152,8 @@ enum OutboxStore {
               let entries = try? JSONDecoder().decode([Entry].self, from: data) else { return [] }
         return entries.compactMap { (e: Entry) -> PendingMessage? in
             var p = PendingMessage(id: e.id, body: e.body, date: e.date)
+            p.refused = e.failed == true
+            p.failed = p.refused
             if let name = e.fileName {
                 // the file must still be there (it is removed once sent); without it the entry cannot be sent
                 let url = ResumableUploader.folder.appendingPathComponent(name)
@@ -103,4 +173,27 @@ enum OutboxStore {
             return p
         }
     }
+}
+
+/// What was typed and not sent, per account and chat: kept when the chat is left or the app goes to the background, put
+/// back when the chat opens, gone with the account on sign-out. (Locked chats keep none.)
+enum ChatDrafts {
+    private static let key = "tf.chatDrafts"
+
+    private static func name(_ account: String, _ conversation: String) -> String { account + "|" + conversation }
+
+    static func get(account: String, conversation: String) -> String {
+        let all = (UserDefaults.standard.dictionary(forKey: key) as? [String: String]) ?? [:]
+        return all[name(account, conversation)] ?? ""
+    }
+
+    static func set(account: String, conversation: String, _ text: String) {
+        guard !account.isEmpty else { return }
+        var all = (UserDefaults.standard.dictionary(forKey: key) as? [String: String]) ?? [:]
+        let kept: String? = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : String(text.prefix(4000))
+        all[name(account, conversation)] = kept
+        UserDefaults.standard.set(all, forKey: key)
+    }
+
+    static func clearAll() { UserDefaults.standard.removeObject(forKey: key) }
 }

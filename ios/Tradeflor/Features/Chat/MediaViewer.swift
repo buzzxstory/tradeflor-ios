@@ -131,7 +131,11 @@ struct MediaViewer: View {
         .onDisappear {
             hideTask?.cancel()
             noteTask?.cancel()
-            if !PiPKeeper.shared.adopt(playback) { playback.stop() }
+            if !PiPKeeper.shared.adopt(playback) {
+                playback.stop()
+                // the viewer is gone: the music or podcast another app was playing carries on (never during a call, nor over a voice note)
+                if !VoicePlayer.shared.playing { StatusAudio.release() }
+            }
         }
         .onChange(of: currentID) { _ in
             remembered = current

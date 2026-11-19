@@ -310,17 +310,71 @@ struct PickedMovie: Transferable {
     }
 }
 
+/// One video export at a time: sending several videos at once started one AVAssetExportSession for each (iOS limits how
+/// many run together, and each result was read into memory), and the extra ones failed as "too large".
+private actor ExportGate {
+    static let shared = ExportGate()
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func enter() async {
+        if !busy { busy = true; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func leave() {
+        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+    }
+}
+
 enum VideoPrep {
+    /// What an export came to: the bytes, a result over the server's limit at every size, or an export that did not run.
+    enum Outcome {
+        case ok(data: Data, seconds: Double)
+        case tooLarge
+        case failed
+    }
+
     /// Re-encodes to H.264 MP4 (iPhone videos are often HEVC .mov, which not every browser plays) at a size that
     /// suits a chat, and keeps it under the server's 50 MB limit. Returns the MP4 bytes and the length in seconds.
+    /// Nil when it did not work; `export(from:)` says whether it was too large or the export itself failed.
     static func mp4(from source: URL, maxBytes: Int = 49_000_000) async -> (data: Data, seconds: Double)? {
+        if case .ok(let data, let seconds) = await export(from: source, maxBytes: maxBytes) { return (data, seconds) }
+        return nil
+    }
+
+    /// Like `mp4`, but tells "too large" apart from "the export failed" (the source file is kept when it failed, so a
+    /// retry has something to work from; after a result or a too-large one it is deleted).
+    static func export(from source: URL, maxBytes: Int = 49_000_000) async -> Outcome {
+        await ExportGate.shared.enter()
+        let bg = await MainActor.run { beginBackgroundTime() }
+        let outcome = await run(source: source, maxBytes: maxBytes)
+        await MainActor.run { endBackgroundTime(bg) }
+        await ExportGate.shared.leave()
+        if case .failed = outcome {} else { try? FileManager.default.removeItem(at: source) }
+        return outcome
+    }
+
+    /// Time to finish an export if the person leaves the app meanwhile.
+    @MainActor private static func beginBackgroundTime() -> UIBackgroundTaskIdentifier {
+        var id = UIBackgroundTaskIdentifier.invalid
+        id = UIApplication.shared.beginBackgroundTask(withName: "tf.video.export") {
+            UIApplication.shared.endBackgroundTask(id)
+            id = .invalid
+        }
+        return id
+    }
+
+    @MainActor private static func endBackgroundTime(_ id: UIBackgroundTaskIdentifier) {
+        if id != .invalid { UIApplication.shared.endBackgroundTask(id) }
+    }
+
+    private static func run(source: URL, maxBytes: Int) async -> Outcome {
         let asset = AVURLAsset(url: source)
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("send-\(UUID().uuidString).mp4")
-        defer {
-            try? FileManager.default.removeItem(at: out)
-            try? FileManager.default.removeItem(at: source)
-        }
+        defer { try? FileManager.default.removeItem(at: out) }
         let seconds = (try? await asset.load(.duration).seconds) ?? 0
+        var largest = false
         for preset in [AVAssetExportPreset1280x720, AVAssetExportPreset960x540, AVAssetExportPreset640x480] {
             guard let export = AVAssetExportSession(asset: asset, presetName: preset) else { continue }
             try? FileManager.default.removeItem(at: out)
@@ -328,10 +382,12 @@ enum VideoPrep {
             export.outputFileType = .mp4
             export.shouldOptimizeForNetworkUse = true
             await export.export()
-            guard export.status == .completed, let data = try? Data(contentsOf: out) else { continue }
-            if data.count <= maxBytes { return (data, seconds) }
+            // mapped, not copied: the file goes when this function ends, the bytes stay readable for whoever holds them
+            guard export.status == .completed, let data = try? Data(contentsOf: out, options: .mappedIfSafe) else { continue }
+            if data.count <= maxBytes { return .ok(data: data, seconds: seconds) }
+            largest = true
         }
-        return nil
+        return largest ? .tooLarge : .failed
     }
 
     /// The video's cover picture to send with it (website e0f0b7a): one early frame of a local video, upright, at most

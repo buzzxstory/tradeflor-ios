@@ -106,6 +106,12 @@ struct ChatView: View {
     /// Text and voice waiting to leave, in writing order (one at a time per conversation).
     @State private var sendQueue: [String] = []
     @State private var queueRunning = false
+    /// The chat screen is not on screen: its line stops sending (OutboxFlusher takes over from the saved outbox).
+    @State private var gone = false
+    /// Server errors (5xx) seen per queued message: after five it is "Not sent" and the line goes on.
+    @State private var serverRetries: [String: Int] = [:]
+    /// Admin removed / banned me, or the group was deleted, while this chat was open.
+    @State private var removedFromGroup = false
     /// The line's wait (rate limit / offline): Retry cuts it short (web lane.wake()).
     @State private var queueWait: Task<Void, Never>?
     /// Photos / videos / documents: automatic retries on a passing error (web: files keep their own timer).
@@ -460,7 +466,7 @@ struct ChatView: View {
             }
         }
         .id(p.id)
-        .onTapGesture { if p.failed { Task { await deliver(p) } } }
+        .onTapGesture { if p.failed { Task { await deliver(p, retry: true) } } }
         .overlay(alignment: .bottomTrailing) {
             if p.failed {
                 // "Not sent · Retry" (website FailedBadge), with Delete in the menu
@@ -473,7 +479,7 @@ struct ChatView: View {
         .padding(.bottom, p.failed ? 18 : 0)
         .contextMenu {
             if p.failed {
-                Button { Task { await deliver(p) } } label: { Label("chat.retry", systemImage: "arrow.clockwise") }
+                Button { Task { await deliver(p, retry: true) } } label: { Label("chat.retry", systemImage: "arrow.clockwise") }
                 Button(role: .destructive) {
                     pending.removeAll { $0.id == p.id }
                     if let f = p.file { try? FileManager.default.removeItem(at: f) } // this device's copy of a large file
@@ -646,7 +652,7 @@ struct ChatView: View {
                         .onChange(of: g.size.height) { composerHeight = $0 }
                 })
         } else {
-            Text("group.readonly").font(.footnote).foregroundStyle(.secondary)
+            Text(LocalizedStringKey(removedFromGroup ? "group.removed" : "group.readonly")).font(.footnote).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity).padding(.vertical, 14)
                 .background(barColor.ignoresSafeArea(edges: .bottom))
         }
@@ -684,7 +690,10 @@ struct ChatView: View {
             Button("chat.block", role: .destructive) {
                 Task {
                     // `problem` only shows on an empty chat: the toast is what the user sees here
-                    do { try await APIClient.shared.block(token: token, userID: chat.peer_id) } catch {
+                    do {
+                        try await APIClient.shared.block(token: token, userID: chat.peer_id)
+                        flash("chat.blocked.done")
+                    } catch {
                         flash("chat.action.failed")
                     }
                 }
@@ -893,8 +902,14 @@ struct ChatView: View {
             await loadNewest()
         }
         // after a dropped connection or a return to the app: catch up so nothing sent meanwhile is missing
-        .onReceive(live.opened) { _ in Task { await loadNewest(quiet: true) } }
-        .onChange(of: scenePhase) { p in if p == .active { Task { await loadNewest(quiet: true) } } }
+        .onReceive(live.opened) { _ in
+            queueWait?.cancel() // the connection is back: a waiting line tries now
+            Task { await loadNewest(quiet: true) }
+        }
+        .onChange(of: scenePhase) { p in
+            if p == .active { Task { await loadNewest(quiet: true) } }
+            if p == .background { saveDraft() }
+        }
         // unsent messages are kept on the device and sent again when the chat opens (same idempotency key)
         .onChange(of: pending) { list in
             if outboxLoaded { OutboxStore.save(account: me, conversation: chat.conversation_id, list) }
@@ -905,8 +920,9 @@ struct ChatView: View {
             pending.append(contentsOf: saved)
             outboxLoaded = true
             // texts and voice first, in writing order; a long upload never holds them back
-            for p in saved.sorted(by: { $0.date < $1.date }) where isLine(p) { sendQueue.append(p.id) }
-            for p in saved where !isLine(p) { Task { await deliver(p) } }
+            // (what the server refused for good stays "Not sent": Retry sends it, opening the chat does not)
+            for p in saved.sorted(by: { $0.date < $1.date }) where isLine(p) && !p.refused { sendQueue.append(p.id) }
+            for p in saved where !isLine(p) && !p.refused { Task { await deliver(p) } }
             await runQueue()
         }
         .onReceive(live.messages) { m in
@@ -985,13 +1001,29 @@ struct ChatView: View {
             box.onMentionChange = { q in mentionQ = q }
             LocalNotifier.shared.openConversation = chat.conversation_id
             LocalNotifier.shared.clear(conversation: chat.conversation_id)
+            gone = false
+            // back on this chat (pushed screen closed): the line that stopped sending goes on
+            if !sendQueue.isEmpty && !queueRunning { Task { await runQueue() } }
+            // what was typed and not sent when this chat was left
+            if box.text.isEmpty {
+                let kept = ChatDrafts.get(account: me, conversation: chat.conversation_id)
+                if !kept.isEmpty { box.text = kept }
+            }
         }
         .onDisappear {
             if !locked && !messages.isEmpty { ChatMemo.put(chat.conversation_id, Array(messages.suffix(80))) }
             TabChrome.shared.conversationClosed()
             if LocalNotifier.shared.openConversation == chat.conversation_id { LocalNotifier.shared.openConversation = nil }
+            saveDraft()
+            // this screen stops sending; what is still waiting is sent from the saved outbox
+            gone = true
+            queueWait?.cancel()
+            OutboxFlusher.shared.flushSoon()
             VoicePlayer.shared.stop()
             if recorder.recording { recorder.cancel() }
+        }
+        .onChange(of: recorder.notice) { n in
+            if let n { flash(n); recorder.notice = nil }
         }
         .alert(Text("chat.mic.denied"), isPresented: $recorder.denied) {
             Button("chat.settings") {
@@ -1552,7 +1584,18 @@ struct ChatView: View {
     @discardableResult
     private func refreshRights() async -> Bool {
         let g = await APIClient.shared.chGroupRole(token: token, groupID: chat.conversation_id)
+        if g.gone {
+            // removed, banned, or the group deleted: no composer, nothing waiting to be sent, nothing remembered
+            removedFromGroup = true
+            liveCanSend = false
+            pending.removeAll()
+            sendQueue.removeAll()
+            OutboxStore.clear(account: me, conversation: chat.conversation_id)
+            ChatMemo.drop(chat.conversation_id)
+            return false
+        }
         guard g.ok else { return false }
+        removedFromGroup = false
         myRole = g.role
         liveCanSend = g.canSend
         groupCanSendMedia = g.canSendMedia
@@ -1793,8 +1836,31 @@ struct ChatView: View {
         if !quiet { loading = true }
         defer { loading = false }
         do {
-            let page = try await APIClient.shared.messages(token: token, conversationID: chat.conversation_id, limit: pageSize)
-            if messages.isEmpty { reachedStart = page.count < pageSize }
+            var page = try await APIClient.shared.messages(token: token, conversationID: chat.conversation_id, limit: pageSize)
+            // messages came in while this phone was away (a dropped connection, a long time in the background): when the newest
+            // page does not reach back to the last one on screen, the pages in between are fetched too, so no hole stays
+            if let known = messages.last?.seq, let oldest = page.map(\.seq).min(), oldest > known + 1 {
+                var cursor = oldest
+                var met = false
+                for _ in 0..<10 {
+                    let older = try await APIClient.shared.messages(token: token, conversationID: chat.conversation_id,
+                                                                    before: cursor, limit: pageSize)
+                    guard let low = older.map(\.seq).min() else { met = true; break } // nothing older: the range is whole
+                    page = older + page
+                    cursor = low
+                    if low <= known + 1 { met = true; break }
+                }
+                if !met {
+                    // too long a gap: start again from the newest messages (older ones load as the reader scrolls up)
+                    messages = []
+                    reachedStart = false
+                }
+            }
+            if messages.isEmpty {
+                // the start of the chat only when the page reaches message 1 or is empty (a page can hold fewer messages when one
+                // could not be read: that alone does not mean the start)
+                reachedStart = page.isEmpty || (page.map(\.seq).min() ?? 2) <= 1
+            }
             merge(page)
             if !unreadMarkSet && !page.isEmpty {
                 // "N unread messages" where the unread start (website unreadMark.ts), once, when the chat opens
@@ -1845,6 +1911,11 @@ struct ChatView: View {
         // disappearing messages leave once their time is up (the server erases them too)
         let next = byID.values.filter { ($0.expires_at ?? 0) == 0 || ($0.expires_at ?? 0) > now }.sorted { $0.seq < $1.seq }
         if next != messages { messages = next }
+        // a message that came back from the server (a reload, the live socket) is no longer "sending"
+        if !pending.isEmpty {
+            let keys = Set(incoming.compactMap { $0.client_key })
+            if !keys.isEmpty { pending.removeAll { keys.contains($0.id) } }
+        }
     }
 
     // MARK: sending
@@ -1858,7 +1929,11 @@ struct ChatView: View {
         composerFocused = true
     }
 
+    /// The server refuses a text over 16000 bytes (413): said before sending, with what was typed kept.
+    private static let maxTextBytes = 16000
+
     private func saveEdit(_ m: Message, _ text: String) async {
+        if text.utf8.count > Self.maxTextBytes { flash("chat.toolong"); return } // stays in the field to be shortened
         editing = nil
         draft = ""
         guard text != m.body else { return }
@@ -1877,6 +1952,12 @@ struct ChatView: View {
         }
     }
 
+    /// Keeps what is typed (not a message being edited, not a locked chat) for the next time this chat opens.
+    private func saveDraft() {
+        guard !locked, !me.isEmpty else { return }
+        ChatDrafts.set(account: me, conversation: chat.conversation_id, editing == nil ? draft : "")
+    }
+
     private func flashText(_ text: String) {
         toast = text
         Task {
@@ -1893,9 +1974,11 @@ struct ChatView: View {
     private func sendDraft() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        if text.utf8.count > Self.maxTextBytes { flash("chat.toolong"); return } // not sent, not cleared: shorten it or split it
         if let e = editing { await saveEdit(e, text); return }
         unreadMarkID = nil // the "N unread messages" line goes once I write here (web 5b6f8e1)
         draft = ""
+        ChatDrafts.set(account: me, conversation: chat.conversation_id, "")
         var p = PendingMessage(id: UUID().uuidString.lowercased(), body: text, date: Date())
         p.replyTo = replyingTo?.id ?? ""
         replyingTo = nil
@@ -2079,6 +2162,7 @@ struct ChatView: View {
         guard let rec = recorder.finish() else { return }
         let p = PendingMessage(id: UUID().uuidString.lowercased(), body: "", date: Date(),
                                audio: rec.data, durationMs: rec.durationMs, waveform: rec.waveform)
+        replyingTo = nil // a voice note carries no reply: the bar goes, the next text does not inherit it
         pending.append(p)
         await deliver(p)
     }
@@ -2122,11 +2206,13 @@ struct ChatView: View {
         placeholder.poster = poster
         placeholder.image = poster.flatMap { UIImage(data: $0) }
         pending.append(placeholder)
-        guard let out = await VideoPrep.mp4(from: url) else {
+        let outcome = await VideoPrep.export(from: url)
+        guard case .ok(let vdata, let vseconds) = outcome else {
             if let i = pending.firstIndex(where: { $0.id == key }) { pending[i].failed = true }
-            flash("chat.video.toolarge") // `problem` only shows on an empty chat
+            if case .failed = outcome { flash("chat.video.exportfailed") } else { flash("chat.video.toolarge") } // `problem` only shows on an empty chat
             return
         }
+        let out = (data: vdata, seconds: vseconds)
         guard let i = pending.firstIndex(where: { $0.id == key }) else { return } // cancelled (the X) while it was prepared
         // written once to a file kept on this device: sent in chunks from it when 4 MB or more (resumed after a drop, and by
         // Retry or the outbox after a restart, same key); kept in memory only if the file cannot be written
@@ -2168,14 +2254,15 @@ struct ChatView: View {
         p.audio != nil || (p.jpeg == nil && p.video == nil && p.docName.isEmpty && p.file == nil)
     }
 
-    private func deliver(_ p: PendingMessage) async {
+    private func deliver(_ p: PendingMessage, retry: Bool = false) async {
         if isLine(p) {
             if !sendQueue.contains(p.id) { sendQueue.append(p.id) }
             // millisecond order of writing, not of tapping Retry
             let order = Dictionary(pending.map { ($0.id, $0.date) }, uniquingKeysWith: { a, _ in a })
             sendQueue.sort { (order[$0] ?? .distantFuture) < (order[$1] ?? .distantFuture) }
-            if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = false }
-            if queueRunning { queueWait?.cancel() } // Retry: stop waiting and try now
+            if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = false; pending[i].refused = false }
+            // only the Retry button cuts a wait short (a new message does not: the server's Retry-After still stands)
+            if retry && queueRunning { queueWait?.cancel() }
             await runQueue()
         } else {
             _ = await sendOne(p, queued: false)
@@ -2189,9 +2276,13 @@ struct ChatView: View {
         queueRunning = true
         defer { queueRunning = false }
         var backoff: UInt64 = 1
-        while let id = sendQueue.first {
+        while let id = sendQueue.first, !gone, !Task.isCancelled {
             guard let p = pending.first(where: { $0.id == id }) else { sendQueue.removeFirst(); continue }
-            switch await sendOne(p, queued: true) {
+            let outcome = await sendOne(p, queued: true)
+            // the screen went away meanwhile (a cancelled request looks like a lost connection): nothing is dropped, the
+            // message stays in the saved outbox for OutboxFlusher
+            if gone || Task.isCancelled { return }
+            switch outcome {
             case .sent, .failed:
                 sendQueue.removeAll { $0 == id }
                 backoff = 1
@@ -2204,6 +2295,7 @@ struct ChatView: View {
                 queueWait = t
                 await t.value
                 queueWait = nil
+                if gone || Task.isCancelled { return }
                 backoff = min(backoff * 2, 30)
             }
         }
@@ -2212,7 +2304,7 @@ struct ChatView: View {
     private func sendOne(_ p: PendingMessage, queued: Bool) async -> SendOutcome {
         if let v = p.video, v.isEmpty, p.file == nil { return .failed } // still being re-encoded, or the re-encode failed
         if uploads[p.id] != nil { return .failed } // already going (a second tap, or the outbox and a retry at once)
-        if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = false }
+        if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = false; pending[i].refused = false }
         do {
             let m: Message
             if let audio = p.audio, let ms = p.durationMs {
@@ -2260,6 +2352,7 @@ struct ChatView: View {
             merge([m])
             pending.removeAll { $0.id == p.id }
             fileRetries[p.id] = nil
+            serverRetries[p.id] = nil
             if let f = p.file { try? FileManager.default.removeItem(at: f) } // sent: this device's copy is no longer needed
             return .sent
         } catch APIError.badCredentials {
@@ -2275,7 +2368,11 @@ struct ChatView: View {
             if queued, let a = error as? APIError {
                 switch a {
                 case .rateLimited, .network: return .wait
-                case .server(let status) where status >= 500: return .wait
+                case .server(let status) where status >= 500:
+                    // a server that keeps failing for this one message must not hold every later message back
+                    let n = (serverRetries[p.id] ?? 0) + 1
+                    serverRetries[p.id] = n
+                    if n < 5 { return .wait }
                 default: break
                 }
             }
@@ -2290,7 +2387,11 @@ struct ChatView: View {
                 }
                 return .wait
             }
-            if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = true }
+            if let i = pending.firstIndex(where: { $0.id == p.id }) {
+                pending[i].failed = true
+                // refused for good (not a passing error): kept as "Not sent", opening the chat never sends it again by itself
+                if !transient(error) { pending[i].refused = true }
+            }
             if case let .refused(why)? = error as? APIError, !why.isEmpty {
                 problem = why
                 flashText(why) // why it was not sent, also when the chat already has messages
@@ -2365,6 +2466,8 @@ struct PendingMessage: Identifiable, Equatable {
     /// A document's own name and type (empty for every other kind).
     var docName = ""
     var docMime = ""
+    /// The server refused it for good (kept in the saved outbox as such).
+    var refused = false
 }
 
 struct ViewedPhoto: Identifiable {
