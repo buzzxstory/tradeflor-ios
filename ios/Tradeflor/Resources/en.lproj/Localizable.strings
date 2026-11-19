@@ -1913,3 +1913,13 @@
 "stx.a11y.previous" = "Previous";
 "stx.a11y.pause" = "Pause or play";
 "stx.video.toolong" = "A status video can be up to 60 seconds. Choose a shorter one.";
+"pv2.online" = "Online";
+"pv2.bio.empty" = "Add a few words about you";
+"pv2.share" = "Share";
+"pv2.groups" = "Groups";
+"pv2.chats" = "Chats";
+"pv2.since" = "Member since";
+"pv2.account" = "Account & Security";
+"pv2.privacy" = "Privacy";
+"pv2.app" = "App Settings";
+"pv2.app.sub" = "Appearance and the app itself";

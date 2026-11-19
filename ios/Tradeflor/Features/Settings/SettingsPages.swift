@@ -18,57 +18,39 @@ struct MyProfilePage: View {
     @State private var confirmRemove = false
     @State private var note: String?
     @State private var busy = false
+    @State private var groupsCount: Int?
+    @State private var chatsCount: Int?
+    @EnvironmentObject private var live: LiveConnection
 
     @State private var cropping: PickedImage?
     private var token: String { store.session?.token ?? "" }
 
     var body: some View {
-        SettingsPage(title: NSLocalizedString("set.myprofile.title", comment: "")) {
-            VStack(spacing: 10) {
-                Avatar(token: token, userID: profile?.user_id ?? "", avatarID: (profile?.avatar_id.isEmpty ?? true) ? nil : profile?.avatar_id,
-                       title: profile?.display_name.isEmpty == false ? (profile?.display_name ?? "") : (profile?.username ?? "?"), size: 110)
-                    .onTapGesture { if !(profile?.avatar_id.isEmpty ?? true) { viewing = true } }
-                Text(profile.map { $0.display_name.isEmpty ? $0.username : $0.display_name } ?? "")
-                    .font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
-                Text("@" + (profile?.username ?? "")).font(.system(size: 14)).foregroundStyle(Theme.accent)
-                if let bio = profile?.bio, !bio.isEmpty {
-                    Text(bio).font(.system(size: 14)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
-                }
+        ScrollView {
+            VStack(spacing: 18) {
+                hero
+                actionRow
+                statRow
+                if let pin = identity?.pin, !pin.isEmpty { pinRow(pin) }
+                linksCard
+                if let note { Text(note).font(.system(size: 13)).foregroundStyle(Theme.accent) }
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-
-            HStack(spacing: 10) {
-                Button { editing = true } label: {
-                    Label("set.edit.profile", systemImage: "pencil").font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 42).background(Theme.accent, in: Capsule())
-                }
-                .disabled(profile == nil) // the sheet needs the profile: before it arrived the sheet opened empty
-                Menu {
-                    PhotosPicker(selection: $picked, matching: .images) {
-                        Label(LocalizedStringKey((profile?.avatar_id.isEmpty ?? true) ? "set.photo.add" : "set.photo.change"), systemImage: "photo")
-                    }
-                    if !(profile?.avatar_id.isEmpty ?? true) {
-                        Button { viewing = true } label: { Label("set.photo.view", systemImage: "eye") }
-                    }
-                    Button { copy("@" + (profile?.username ?? ""), "set.copied.username") } label: { Label("set.copy.username", systemImage: "at") }
-                    if let pin = identity?.pin, !pin.isEmpty { Button { copy(pin, "set.copied.pin") } label: { Label("set.copy.pin", systemImage: "number") } }
-                    if !(profile?.avatar_id.isEmpty ?? true) {
-                        Button(role: .destructive) { confirmRemove = true } label: { Label("set.photo.remove", systemImage: "trash") }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
-                        .frame(width: 42, height: 42).background(Theme.card, in: Circle()).overlay(Circle().stroke(Theme.borderStrong, lineWidth: 1))
-                }
-                .disabled(busy)
-                .accessibilityLabel(Text("chat.more"))
+            .padding(.horizontal, 16)
+            .padding(.bottom, 28)
+        }
+        .background(Starfield())
+        .navigationTitle(Text("set.myprofile.title"))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.visible, for: .navigationBar)
+        .toolbarBackground(Theme.header, for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Button { editing = true } label: { Image(systemName: "pencil") }
+                    .disabled(profile == nil) // the sheet needs the profile: before it arrived the sheet opened empty
+                    .accessibilityLabel(Text("set.edit.profile"))
+                moreMenu
             }
-            if let pin = identity?.pin, !pin.isEmpty {
-                SCard {
-                    SKeyValue(key: "PIN", value: pin, action: NSLocalizedString("set.copy", comment: "")) { copy(pin, "set.copied.pin") }
-                }
-            }
-            if let note { Text(note).font(.system(size: 13)).foregroundStyle(Theme.accent) }
         }
         .overlay { if busy { ProgressView().tint(Theme.accent) } }
         .task { await load() }
@@ -149,6 +131,204 @@ struct MyProfilePage: View {
         }
     }
 
+    // MARK: look (the web's My Profile: desktop/src/features/profile/PersonalProfilePanel.tsx, 85-profile-v2.css)
+
+    private static let azure = Theme.hex(0x5AA8FF)
+    private var displayName: String {
+        guard let p = profile else { return "" }
+        return p.display_name.isEmpty ? p.username : p.display_name
+    }
+    private var hasPhoto: Bool { !(profile?.avatar_id.isEmpty ?? true) }
+    private var edge: Color { Theme.accent.opacity(0.28) }
+
+    /// The picture with its turquoise ring and camera badge, the name, the @handle, "Online" and the bio, on soft curved light lines.
+    private var hero: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                ProfileHeroLines().frame(height: 220)
+                ZStack(alignment: .bottomTrailing) {
+                    Avatar(token: token, userID: profile?.user_id ?? "", avatarID: hasPhoto ? profile?.avatar_id : nil,
+                           title: displayName.isEmpty ? "?" : displayName, size: 124)
+                        .padding(5)
+                        .overlay(Circle().strokeBorder(LinearGradient(colors: [Theme.accent, Self.azure], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 3))
+                        .shadow(color: Theme.accent.opacity(0.35), radius: 16)
+                        .onTapGesture { if hasPhoto { viewing = true } }
+                    PhotosPicker(selection: $picked, matching: .images) {
+                        Image(systemName: "camera.fill").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.onAccent)
+                            .frame(width: 38, height: 38)
+                            .background(LinearGradient(colors: [Theme.accent, Theme.hex(0x0AAAB4)], startPoint: .top, endPoint: .bottom), in: Circle())
+                            .overlay(Circle().stroke(Theme.panel, lineWidth: 3))
+                    }
+                    .disabled(busy)
+                    .accessibilityLabel(Text(LocalizedStringKey(hasPhoto ? "set.photo.change" : "set.photo.add")))
+                    .offset(x: 2, y: 2)
+                }
+            }
+            Text(displayName).font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.text)
+                .lineLimit(2).multilineTextAlignment(.center)
+            if let u = profile?.username, !u.isEmpty {
+                Text("＠" + u).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.accent)
+            }
+            if live.steadyConnected && profile != nil {
+                HStack(spacing: 6) {
+                    Circle().fill(Theme.hex(0x14D99A)).frame(width: 8, height: 8)
+                    Text("pv2.online").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                }
+            }
+            // the bio as it was written (its own line breaks, Arabic and English per line, emoji); a tap edits it
+            Button { if profile != nil { editing = true } } label: {
+                let bio = profile?.bio ?? ""
+                Text(bio.isEmpty ? NSLocalizedString("pv2.bio.empty", comment: "") : bio)
+                    .font(.system(size: 15)).lineSpacing(3)
+                    .foregroundStyle(bio.isEmpty ? Theme.faint : Theme.muted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 8).padding(.top, 6)
+            }
+            .buttonStyle(.plain)
+            .disabled(profile == nil)
+        }
+        .padding(.top, -6)
+    }
+
+    /// Edit Profile (the wide turquoise-to-azure pill), Share and My Identity's QR (square glass buttons).
+    private var actionRow: some View {
+        HStack(spacing: 10) {
+            Button { editing = true } label: {
+                Label("set.edit.profile", systemImage: "pencil").font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 54)
+                    .background(LinearGradient(colors: [Theme.hex(0x12D6D8), Theme.hex(0x0AAAB4), Theme.hex(0x0B86C4)],
+                                               startPoint: .leading, endPoint: .trailing), in: Capsule())
+            }
+            .disabled(profile == nil)
+            ShareLink(item: "＠" + (profile?.username ?? "") + " · TRADEFLOR") {
+                squareButton("square.and.arrow.up")
+            }
+            .disabled((profile?.username ?? "").isEmpty)
+            .accessibilityLabel(Text("pv2.share"))
+            NavigationLink { MyIdentityPage() } label: { squareButton("qrcode") }
+                .accessibilityLabel(Text("settings.identity"))
+        }
+    }
+
+    private func squareButton(_ icon: String) -> some View {
+        Image(systemName: icon).font(.system(size: 19)).foregroundStyle(Theme.accent)
+            .frame(width: 54, height: 54)
+            .background(Theme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(edge, lineWidth: 1))
+    }
+
+    /// Groups, Chats and Member since (a year): turquoise, azure and gold.
+    private var statRow: some View {
+        HStack(spacing: 10) {
+            stat("person.2", groupsCount.map(String.init) ?? "—", "pv2.groups", Theme.accent)
+            stat("bubble.left.and.bubble.right", chatsCount.map(String.init) ?? "—", "pv2.chats", Self.azure)
+            stat("calendar", memberYear ?? "—", "pv2.since", Theme.gold)
+        }
+    }
+
+    private var memberYear: String? {
+        guard let t = identity?.member_since, t > 0, let d = serverDate(t) else { return nil }
+        return String(Calendar.current.component(.year, from: d))
+    }
+
+    private func stat(_ icon: String, _ value: String, _ label: String, _ tint: Color) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon).font(.system(size: 19)).foregroundStyle(tint)
+            Text(value).font(.system(size: 30, weight: .heavy)).monospacedDigit().foregroundStyle(Theme.text)
+                .minimumScaleFactor(0.6).lineLimit(1)
+            Text(LocalizedStringKey(label)).font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 108)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(tint.opacity(0.35), lineWidth: 1))
+    }
+
+    private func pinRow(_ pin: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: "key.fill").font(.system(size: 19)).foregroundStyle(Theme.accent)
+                .frame(width: 50, height: 50)
+                .background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(edge, lineWidth: 1))
+            VStack(alignment: .leading, spacing: 0) {
+                Text("PIN").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.faint)
+                Text(pin).font(.system(size: 32, weight: .heavy)).monospacedDigit().tracking(2).foregroundStyle(Theme.text)
+                    .minimumScaleFactor(0.6).lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            Button { copy(pin, "set.copied.pin") } label: {
+                Label("set.copy", systemImage: "doc.on.doc").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 16).frame(height: 46)
+                    .background(Theme.accent.opacity(0.10), in: Capsule())
+                    .overlay(Capsule().stroke(edge, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(16)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(edge, lineWidth: 1))
+    }
+
+    /// Account & Security, Privacy, Notifications and App Settings: icon tile, title, one line, chevron.
+    private var linksCard: some View {
+        VStack(spacing: 0) {
+            linkRow("checkmark.shield", Theme.accent, "pv2.account", "settings.account.sub") { AccountPage() }
+            linkDivider
+            linkRow("lock", Self.azure, "pv2.privacy", "settings.privacy.sub") { PrivacyPage() }
+            linkDivider
+            linkRow("bell", Theme.gold, "settings.notifications", "settings.notifications.sub") { NotificationsPage() }
+            linkDivider
+            linkRow("slider.horizontal.3", Theme.accent, "pv2.app", "pv2.app.sub") { AppearancePage() }
+        }
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(edge, lineWidth: 1))
+    }
+
+    private var linkDivider: some View { Rectangle().fill(edge.opacity(0.5)).frame(height: 1).padding(.leading, 78) }
+
+    private func linkRow<D: View>(_ icon: String, _ tint: Color, _ title: String, _ sub: String,
+                                  @ViewBuilder _ dest: @escaping () -> D) -> some View {
+        NavigationLink { dest() } label: {
+            HStack(spacing: 14) {
+                Image(systemName: icon).font(.system(size: 19)).foregroundStyle(tint)
+                    .frame(width: 50, height: 50)
+                    .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(tint.opacity(0.35), lineWidth: 1))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(LocalizedStringKey(title)).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.text)
+                    Text(LocalizedStringKey(sub)).font(.system(size: 13.5)).foregroundStyle(Theme.muted).lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.forward").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.faint)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The photo actions, copy, and remove (the web's "more" menu).
+    private var moreMenu: some View {
+        Menu {
+            PhotosPicker(selection: $picked, matching: .images) {
+                Label(LocalizedStringKey(hasPhoto ? "set.photo.change" : "set.photo.add"), systemImage: "photo")
+            }
+            if hasPhoto {
+                Button { viewing = true } label: { Label("set.photo.view", systemImage: "eye") }
+            }
+            Button { copy("＠" + (profile?.username ?? ""), "set.copied.username") } label: { Label("set.copy.username", systemImage: "at") }
+            if let pin = identity?.pin, !pin.isEmpty { Button { copy(pin, "set.copied.pin") } label: { Label("set.copy.pin", systemImage: "number") } }
+            if hasPhoto {
+                Button(role: .destructive) { confirmRemove = true } label: { Label("set.photo.remove", systemImage: "trash") }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .disabled(busy)
+        .accessibilityLabel(Text("chat.more"))
+    }
+
     private func copy(_ s: String, _ key: String) {
         UIPasteboard.general.string = s
         note = NSLocalizedString(key, comment: "")
@@ -156,7 +336,11 @@ struct MyProfilePage: View {
 
     private func load() async {
         // a failed read keeps what is on screen (it used to blank the page)
+        async let g = try? APIClient.shared.groups(token: token)
+        async let c = try? APIClient.shared.conversations(token: token)
         if let p = try? await APIClient.shared.profile(token: token) { profile = p }
+        if let g = await g { groupsCount = g.count }
+        if let c = await c { chatsCount = c.count }
         if let d = try? await APIClient.shared.getJSON("identity/me", token: token) {
             identity = try? JSONDecoder().decode(StIdentity.self, from: d)
         }
@@ -174,6 +358,30 @@ struct MyProfilePage: View {
                                 width: img.size.width * scale, height: img.size.height * scale))
         }
         return out.jpegData(compressionQuality: 0.85)
+    }
+}
+
+/// The soft curved turquoise / azure light lines behind the picture (the web's profile hero).
+struct ProfileHeroLines: View {
+    var body: some View {
+        Canvas { ctx, size in
+            for i in 0..<4 {
+                let k = CGFloat(i)
+                var p = Path()
+                let y0 = size.height * (0.28 + 0.13 * k)
+                p.move(to: CGPoint(x: 0, y: y0))
+                p.addCurve(to: CGPoint(x: size.width, y: y0 - 34 + k * 12),
+                           control1: CGPoint(x: size.width * 0.28, y: y0 - 80),
+                           control2: CGPoint(x: size.width * 0.66, y: y0 + 70))
+                ctx.stroke(p, with: .linearGradient(Gradient(colors: [Theme.accent.opacity(0.0), Theme.accent.opacity(0.45),
+                                                                      Theme.hex(0x5AA8FF, 0.32), Theme.accent.opacity(0.0)]),
+                                                    startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0)),
+                           lineWidth: 1.3)
+            }
+        }
+        .mask(LinearGradient(colors: [.clear, .black, .black, .clear], startPoint: .leading, endPoint: .trailing))
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
