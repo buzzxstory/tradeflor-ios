@@ -6,6 +6,7 @@ import UIKit
 struct GroupsListView: View {
     @EnvironmentObject private var store: SessionStore
     @EnvironmentObject private var live: LiveConnection
+    @Environment(.scenePhase) private var scenePhase
     @State private var groups: [GroupSummary] = []
     @State private var groupStatuses: [String: StatusGroup] = [:]
     @State private var watchGroup: StatusGroup?
@@ -204,6 +205,9 @@ struct GroupsListView: View {
         }
         .onReceive(live.messages) { m in if m.conversation_id.hasPrefix("grp_") { reloadSoon() } }
         .onReceive(live.groupChanged) { _ in reloadSoon() }
+        // after a socket gap or coming back to the app the list is fetched again (it only listened to live events before)
+        .onReceive(live.opened) { _ in reloadSoon() }
+        .onChange(of: scenePhase) { if $0 == .active { reloadSoon() } }
         .onChange(of: path.count) { n in if n == 0 { reloadAfterReturn() } }
     }
 

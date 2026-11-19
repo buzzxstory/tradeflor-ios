@@ -498,20 +498,23 @@ struct ChatListView: View {
             let cached = ListCache.conversations(token: token).sorted { $0.last_message_at > $1.last_message_at }
             if !cached.isEmpty { chats = cached }
         }
-        await loadPrefs()
-        await loadLocks()
         if !quiet { loading = true }
         defer { loading = false }
+        // prefs, locks and the list asked together (they waited for each other before), the list on screen as soon as it is here
+        async let prefsDone: Void = loadPrefs()
+        async let locksDone: Void = loadLocks()
         do {
             let out = try await APIClient.shared.conversations(token: token)
+            await prefsDone; await locksDone // the locked set is known before the rows are shown (a locked chat never flashes)
             let sorted = out.sorted { $0.last_message_at > $1.last_message_at }
             if sorted != chats { chats = sorted }
+            BadgeStore.shared.chats = chats.filter { isUnread($0) && !lockedIDs.contains($0.conversation_id) }.count
             failed = false
             ciOpenFirstChat()
         } catch APIError.badCredentials {
             store.sessionExpired()
         } catch {
-            if !quiet { failed = true }
+            if !quiet && !Task.isCancelled { failed = true } // leaving the tab cancels the load: not an error
         }
     }
 }

@@ -95,6 +95,12 @@ struct RootView: View {
             }
         }
         .tint(Theme.accent)
+        // a chat unlocked with its PIN is hidden in the app switcher and while the app is not in front
+        .overlay {
+            if scenePhase != .active, APIClient.shared.unlockToken != nil {
+                Rectangle().fill(.regularMaterial).ignoresSafeArea()
+            }
+        }
         .onOpenURL { url in DeepLinks.shared.handle(url) }
         // Tradeflor links tapped inside the app open here instead of the browser
         .environment(\.openURL, OpenURLAction { url in DeepLinks.shared.handle(url) ? .handled : .systemAction })
@@ -181,9 +187,10 @@ struct RootView: View {
             #endif
         }
         .onChange(of: store.session?.token) { _ in syncLive() }
+        .onReceive(live.sessionInvalid) { _ in if store.session != nil { store.sessionExpired() } }
         .onChange(of: scenePhase) { phase in
             // online = the app is in front (server d4d2e77)
-            live.setActive(phase == .active)
+            live.setActive(phase != .background) // Control Center or a system sheet (.inactive) is not "offline"
             if phase == .active { live.probe(); Task { await FlashHub.shared.askPending() } }
             // Locked chats lock again as soon as the app leaves the screen.
             if phase == .background, let token = store.session?.token {

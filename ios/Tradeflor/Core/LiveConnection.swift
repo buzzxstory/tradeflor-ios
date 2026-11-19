@@ -54,6 +54,8 @@ final class LiveConnection: ObservableObject {
     private(set) var appActive = true
     /// Fires every time the socket (re)opens, so calls can send call.sync.
     let opened = PassthroughSubject<Void, Never>()
+    /// The server refused the ticket (401): this session was ended elsewhere. The root view signs the phone out.
+    let sessionInvalid = PassthroughSubject<Void, Never>()
     /// Someone asked to join a group I own or run: conversation_id, group, name, user_id.
     let joinRequests = PassthroughSubject<[String: String], Never>()
     /// Something changed in my signed-in sessions (sign-in, sign-out, rename on any device): Linked Devices reloads.
@@ -192,7 +194,8 @@ final class LiveConnection: ObservableObject {
                 try await receive(ws)
             } catch APIError.badCredentials {
                 connected = false
-                return // signed out elsewhere; the screens notice on their next request
+                if gen == generation { sessionInvalid.send(()) }
+                return // signed out elsewhere
             } catch {
                 // fall through to the backoff below
             }
@@ -201,7 +204,7 @@ final class LiveConnection: ObservableObject {
             if !online.isEmpty { online = [] } // not connected: nobody is shown "online" from an old answer (website liveHub.ts); last seen stays
             if Task.isCancelled { return }
             // during a call: try again every second (the server ends a call whose device stays away 20 s)
-            let delay = callInProgress ? 1.0 : min(30.0, pow(2.0, Double(attempt)))
+            let delay = callInProgress ? 1.0 : min(30.0, pow(2.0, Double(attempt))) * Double.random(in: 0.75...1.25) // jitter: no herd after a server restart
             attempt += 1
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         }

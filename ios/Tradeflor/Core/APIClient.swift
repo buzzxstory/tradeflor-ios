@@ -485,6 +485,9 @@ final class APIClient {
         unlockToken = g.token
     }
 
+    /// Local only (a revoked session cannot call the server): the unlock grant leaves memory.
+    func forgetUnlock() { unlockToken = nil }
+
     func relockChats(token: String) async {
         guard unlockToken != nil else { return }
         unlockToken = nil

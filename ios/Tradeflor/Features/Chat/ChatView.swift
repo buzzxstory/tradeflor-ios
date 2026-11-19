@@ -910,7 +910,7 @@ struct ChatView: View {
             await runQueue()
         }
         .onReceive(live.messages) { m in
-            guard m.conversation_id == chat.conversation_id else { return }
+            guard m.conversation_id == chat.conversation_id, !locked else { return } // a locked chat shows nothing until it is unlocked
             let isNew = !messages.contains { $0.id == m.id }
             merge([m])
             pending.removeAll { $0.id == m.client_key }
@@ -1862,9 +1862,12 @@ struct ChatView: View {
         editing = nil
         draft = ""
         guard text != m.body else { return }
+        var ok = false
+        defer { if !ok && draft.isEmpty && editing == nil { draft = text } } // a failed edit keeps what was typed
         do {
             merge([try await APIClient.shared.editMessage(token: token, messageID: m.id, body: text,
                                                           mentions: isGroup ? MentionsBuilder.build(text, members: members) : [])])
+        ok = true
         } catch APIError.refused(let why) {
             flashText(why.isEmpty ? NSLocalizedString("chat.edit.failed", comment: "") : why)
         } catch APIError.server(status: 409) {
@@ -2011,6 +2014,7 @@ struct ChatView: View {
         seenTask = Task {
             try? await Task.sleep(nanoseconds: 800_000_000)
             if Task.isCancelled { return }
+            guard scenePhase == .active else { return } // not looking: no blue ticks
             await markSeen()
         }
     }

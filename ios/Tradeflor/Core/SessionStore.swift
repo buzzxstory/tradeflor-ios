@@ -64,6 +64,15 @@ final class SessionStore: ObservableObject {
         // (sign-out and a revoked session both come through here)
         BiometricPIN.delete()
         APIClient.shared.avatarCache.removeAllObjects()
+        APIClient.shared.forgetUnlock()
+        // what was waiting to be sent (photos, voice notes, videos) and the chats hidden from the list belong to this account
+        if let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent("outbox", isDirectory: true))
+        }
+        if let items = try? FileManager.default.contentsOfDirectory(at: ResumableUploader.folder, includingPropertiesForKeys: nil) {
+            for u in items { try? FileManager.default.removeItem(at: u) }
+        }
+        UserDefaults.standard.removeObject(forKey: "tf.hiddenChats")
         ListCache.clear(); ChatMemo.clear()
         SettingsView.forgetCache()
         TradeFlorView.forgetCache()

@@ -484,7 +484,8 @@ struct CalendarView: View {
     }
 
     private func shift(_ n: Int) {
-        day = cal.date(byAdding: .day, value: n, to: day) ?? day
+        // back to midnight: a zone that changes its clock at midnight (Beirut, Cairo) left the day at 01:00 and hid that hour
+        day = cal.startOfDay(for: cal.date(byAdding: .day, value: n, to: day) ?? day)
         visible = 10
     }
 

@@ -48,6 +48,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     private var peers: [String: String] = [:] // conversation -> the other person's user id (1:1 chats)
     private var loadedGroups: Set<String> = []
     private var notified: [String] = []
+    private var lockedChats: Set<String> = [] // Chat Lock: their notifications carry no name and no text
     private var refreshedAt = Date.distantPast
     /// Chats with unread messages (server count at the last refresh, plus every chat announced since): the icon badge.
     private var unread: Set<String> = []
@@ -124,7 +125,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     func detach() {
         subs.removeAll()
         token = ""
-        unread = []
+        unread = []; settings = [:]; mutedUntil = [:]; titles = [:]; names = [:]; peers = [:]; loadedGroups = []; notified = []; lockedChats = []
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         setIconBadge(0)
@@ -148,6 +149,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             for x in p { if let u = x.muted_until { m[x.conversation_id] = u } }
             mutedUntil = m
         }
+        if let st = try? await APIClient.shared.ctLockState(token: token) { lockedChats = Set((st.locks ?? []).map(.conversation_id)) }
         var fresh: Set<String> = []
         if let list = try? await APIClient.shared.conversations(token: token) {
             for c in list {
@@ -262,7 +264,8 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             if openConversation == nil && !flag("notifications.when_focused") { return }
         }
 
-        let sender = await senderName(m, group: group)
+        let locked = lockedChats.contains(m.conversation_id)
+        let sender = locked ? "" : await senderName(m, group: group)
         let content = UNMutableNotificationContent()
         if group {
             content.title = titles[m.conversation_id] ?? NSLocalizedString("notify.group", comment: "")
@@ -277,6 +280,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             content.title = sender
             content.body = flag("notifications.previews") ? describe(m) : NSLocalizedString("notify.new", comment: "")
         }
+        if locked { content.title = "Tradeflor"; content.body = NSLocalizedString("notify.new", comment: "") }
         if flag("notifications.sound") { content.sound = .default }
         content.threadIdentifier = m.conversation_id
         content.categoryIdentifier = Self.messageCategory
