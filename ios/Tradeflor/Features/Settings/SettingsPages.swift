@@ -27,7 +27,7 @@ struct MyProfilePage: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 18) {
+            VStack(spacing: 12) {
                 hero
                 actionRow
                 statRow
@@ -36,7 +36,7 @@ struct MyProfilePage: View {
                 if let note { Text(note).font(.system(size: 13)).foregroundStyle(Theme.accent) }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 28)
+            .padding(.bottom, 20)
         }
         .background(Starfield())
         .navigationTitle(Text("set.myprofile.title"))
@@ -143,60 +143,60 @@ struct MyProfilePage: View {
 
     /// The picture with its turquoise ring and camera badge, the name, the @handle, "Online" and the bio, on soft curved light lines.
     private var hero: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 5) {
             ZStack {
-                ProfileHeroLines().frame(height: 220)
+                ProfileHeroLines().frame(height: 160)
                 ZStack(alignment: .bottomTrailing) {
                     Avatar(token: token, userID: profile?.user_id ?? "", avatarID: hasPhoto ? profile?.avatar_id : nil,
-                           title: displayName.isEmpty ? "?" : displayName, size: 124)
-                        .padding(5)
-                        .overlay(Circle().strokeBorder(LinearGradient(colors: [Theme.accent, Self.azure], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 3))
-                        .shadow(color: Theme.accent.opacity(0.35), radius: 16)
+                           title: displayName.isEmpty ? "?" : displayName, size: 100)
+                        .padding(4)
+                        .overlay(Circle().strokeBorder(LinearGradient(colors: [Theme.accent, Self.azure], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 2.5))
+                        .shadow(color: Theme.accent.opacity(0.35), radius: 12)
                         .onTapGesture { if hasPhoto { viewing = true } }
                     PhotosPicker(selection: $picked, matching: .images) {
-                        Image(systemName: "camera.fill").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.onAccent)
-                            .frame(width: 38, height: 38)
+                        Image(systemName: "camera.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.onAccent)
+                            .frame(width: 32, height: 32)
                             .background(LinearGradient(colors: [Theme.accent, Theme.hex(0x0AAAB4)], startPoint: .top, endPoint: .bottom), in: Circle())
-                            .overlay(Circle().stroke(Theme.panel, lineWidth: 3))
+                            .overlay(Circle().stroke(Theme.panel, lineWidth: 2.5))
                     }
                     .disabled(busy)
                     .accessibilityLabel(Text(LocalizedStringKey(hasPhoto ? "set.photo.change" : "set.photo.add")))
                     .offset(x: 2, y: 2)
                 }
             }
-            Text(displayName).font(.system(size: 28, weight: .bold)).foregroundStyle(Theme.text)
+            Text(displayName).font(.system(size: 23, weight: .bold)).foregroundStyle(Theme.text)
                 .lineLimit(2).multilineTextAlignment(.center)
             if let u = profile?.username, !u.isEmpty {
-                Text("＠" + u).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.accent)
+                Text("＠" + u).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
             }
             if live.steadyConnected && profile != nil {
                 HStack(spacing: 6) {
-                    Circle().fill(Theme.hex(0x14D99A)).frame(width: 8, height: 8)
-                    Text("pv2.online").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    Circle().fill(Theme.hex(0x14D99A)).frame(width: 7, height: 7)
+                    Text("pv2.online").font(.system(size: 12)).foregroundStyle(Theme.muted)
                 }
             }
             // the bio as it was written (its own line breaks, Arabic and English per line, emoji); a tap edits it
             Button { if profile != nil { editing = true } } label: {
                 let bio = profile?.bio ?? ""
                 Text(bio.isEmpty ? NSLocalizedString("pv2.bio.empty", comment: "") : bio)
-                    .font(.system(size: 15)).lineSpacing(3)
+                    .font(.system(size: 14)).lineSpacing(5)
                     .foregroundStyle(bio.isEmpty ? Theme.faint : Theme.muted)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 8).padding(.top, 6)
+                    .padding(.horizontal, 8).padding(.top, 2)
             }
             .buttonStyle(.plain)
             .disabled(profile == nil)
         }
-        .padding(.top, -6)
+        .padding(.top, -10)
     }
 
     /// Edit Profile (the wide turquoise-to-azure pill), Share and My Identity's QR (square glass buttons).
     private var actionRow: some View {
         HStack(spacing: 10) {
             Button { editing = true } label: {
-                Label("set.edit.profile", systemImage: "pencil").font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 54)
+                Label("set.edit.profile", systemImage: "pencil").font(.system(size: 15.5, weight: .semibold))
+                    .foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 44)
                     .background(LinearGradient(colors: [Theme.hex(0x12D6D8), Theme.hex(0x0AAAB4), Theme.hex(0x0B86C4)],
                                                startPoint: .leading, endPoint: .trailing), in: Capsule())
             }
@@ -212,15 +212,15 @@ struct MyProfilePage: View {
     }
 
     private func squareButton(_ icon: String) -> some View {
-        Image(systemName: icon).font(.system(size: 19)).foregroundStyle(Theme.accent)
-            .frame(width: 54, height: 54)
-            .background(Theme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(edge, lineWidth: 1))
+        Image(systemName: icon).font(.system(size: 20)).foregroundStyle(Theme.accent)
+            .frame(width: 44, height: 44)
+            .background(Theme.card, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(edge, lineWidth: 1))
     }
 
     /// Groups, Chats and Member since (a year): turquoise, azure and gold.
     private var statRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             stat("person.2", groupsCount.map(String.init) ?? "—", "pv2.groups", Theme.accent)
             stat("bubble.left.and.bubble.right", chatsCount.map(String.init) ?? "—", "pv2.chats", Self.azure)
             stat("calendar", memberYear ?? "—", "pv2.since", Theme.gold)
@@ -233,41 +233,42 @@ struct MyProfilePage: View {
     }
 
     private func stat(_ icon: String, _ value: String, _ label: String, _ tint: Color) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 2) {
             Image(systemName: icon).font(.system(size: 19)).foregroundStyle(tint)
-            Text(value).font(.system(size: 30, weight: .heavy)).monospacedDigit().foregroundStyle(Theme.text)
+            Text(value).font(.system(size: 21, weight: .heavy)).monospacedDigit().foregroundStyle(Theme.text)
                 .minimumScaleFactor(0.6).lineLimit(1)
-            Text(LocalizedStringKey(label)).font(.system(size: 13)).foregroundStyle(Theme.muted).lineLimit(1)
+            Text(LocalizedStringKey(label)).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(1)
         }
-        .frame(maxWidth: .infinity, minHeight: 108)
-        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(tint.opacity(0.35), lineWidth: 1))
+        .padding(.vertical, 9).padding(.horizontal, 4)
+        .frame(maxWidth: .infinity)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(tint.opacity(0.35), lineWidth: 1))
     }
 
     private func pinRow(_ pin: String) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: "key.fill").font(.system(size: 19)).foregroundStyle(Theme.accent)
-                .frame(width: 50, height: 50)
-                .background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(edge, lineWidth: 1))
+        HStack(spacing: 10) {
+            Image(systemName: "key.fill").font(.system(size: 20)).foregroundStyle(Theme.accent)
+                .frame(width: 38, height: 38)
+                .background(Theme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(edge, lineWidth: 1))
             VStack(alignment: .leading, spacing: 0) {
-                Text("PIN").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.faint)
-                Text(pin).font(.system(size: 32, weight: .heavy)).monospacedDigit().tracking(2).foregroundStyle(Theme.text)
+                Text("PIN").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.faint)
+                Text(pin).font(.system(size: 24, weight: .heavy)).monospacedDigit().tracking(1.5).foregroundStyle(Theme.text)
                     .minimumScaleFactor(0.6).lineLimit(1)
             }
             Spacer(minLength: 6)
             Button { copy(pin, "set.copied.pin") } label: {
-                Label("set.copy", systemImage: "doc.on.doc").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 16).frame(height: 46)
+                Label("set.copy", systemImage: "doc.on.doc").font(.system(size: 13.5, weight: .semibold)).foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 12).frame(height: 36)
                     .background(Theme.accent.opacity(0.10), in: Capsule())
                     .overlay(Capsule().stroke(edge, lineWidth: 1))
             }
             .buttonStyle(.plain)
         }
-        .padding(16)
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(edge, lineWidth: 1))
+        .padding(.vertical, 8).padding(.horizontal, 10)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(edge, lineWidth: 1))
     }
 
     /// Account & Security, Privacy, Notifications and App Settings: icon tile, title, one line, chevron.
@@ -281,28 +282,28 @@ struct MyProfilePage: View {
             linkDivider
             linkRow("slider.horizontal.3", Theme.accent, "pv2.app", "pv2.app.sub") { AppearancePage() }
         }
-        .background(Theme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(edge, lineWidth: 1))
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(edge, lineWidth: 1))
     }
 
-    private var linkDivider: some View { Rectangle().fill(edge.opacity(0.5)).frame(height: 1).padding(.leading, 78) }
+    private var linkDivider: some View { Rectangle().fill(edge.opacity(0.5)).frame(height: 1).padding(.leading, 62) }
 
     private func linkRow<D: View>(_ icon: String, _ tint: Color, _ title: String, _ sub: String,
                                   @ViewBuilder _ dest: @escaping () -> D) -> some View {
         NavigationLink { dest() } label: {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 Image(systemName: icon).font(.system(size: 19)).foregroundStyle(tint)
-                    .frame(width: 50, height: 50)
-                    .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(tint.opacity(0.35), lineWidth: 1))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(LocalizedStringKey(title)).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.text)
-                    Text(LocalizedStringKey(sub)).font(.system(size: 13.5)).foregroundStyle(Theme.muted).lineLimit(1)
+                    .frame(width: 36, height: 36)
+                    .background(tint.opacity(0.13), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(tint.opacity(0.35), lineWidth: 1))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(LocalizedStringKey(title)).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.text)
+                    Text(LocalizedStringKey(sub)).font(.system(size: 12.5)).foregroundStyle(Theme.muted).lineLimit(1)
                 }
                 Spacer(minLength: 6)
                 Image(systemName: "chevron.forward").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.faint)
             }
-            .padding(.horizontal, 14).padding(.vertical, 12)
+            .padding(.horizontal, 12).frame(minHeight: 56)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
