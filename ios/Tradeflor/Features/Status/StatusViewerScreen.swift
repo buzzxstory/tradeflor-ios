@@ -913,35 +913,40 @@ struct StatusViewersSheet: View {
     let postID: String
     /// The status's view count, shown in the title until the list has loaded.
     var views: Int = 0
+    @Environment(\.dismiss) private var dismiss
     @State private var viewers: [StatusViewerEntry] = []
     @State private var loading = true
     @State private var failed = false
 
+    private var count: Int { loading || failed ? views : viewers.count }
+
+    /// web .status-sheet-card: the deep teal glass sheet with soft curved light lines, an eye tile, "N views" over "Who viewed
+    /// this status", a round close button and one rounded card per viewer (a heart badge on those who liked it, the time on the right).
     var body: some View {
-        NavigationStack {
-            // WhatsApp: "N views", a heart badge on those who liked it, "today 12:31 AM"
-            // web .status-sheet-card: the deep teal card (#06212b), rows split by a faint teal line
-            List(viewers) { v in
-                StatusViewerLine(token: token, viewer: v)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparatorTint(Theme.hex(0x3C8CAA, 0.14))
+        ZStack(alignment: .bottom) {
+            LinearGradient(colors: [Theme.hex(0x062B36), Theme.hex(0x03141C)], startPoint: .top, endPoint: .bottom).ignoresSafeArea()
+            ProfileHeroLines().frame(height: 220).opacity(0.8).ignoresSafeArea().allowsHitTesting(false)
+            VStack(spacing: 0) {
+                header.padding(.horizontal, 18).padding(.top, 22).padding(.bottom, 14)
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        ForEach(viewers) { v in
+                            StatusViewerLine(token: token, viewer: v)
+                        }
+                    }
+                    .padding(.horizontal, 14).padding(.bottom, 24)
+                }
+                .overlay {
+                    if loading { ProgressView().tint(.white) }
+                    else if failed { Text("chat.action.failed").foregroundStyle(.white.opacity(0.7)) }
+                    else if viewers.isEmpty { Text("status.noviews").foregroundStyle(.white.opacity(0.7)) }
+                }
             }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(Theme.hex(0x06212B))
-            .foregroundStyle(Theme.hex(0xE8F2F8))
-            .environment(\.colorScheme, .dark)
-            .overlay {
-                if loading { ProgressView() } else if failed { Text("chat.action.failed").foregroundStyle(.secondary) }
-                else if viewers.isEmpty { Text("status.noviews").foregroundStyle(.secondary) }
-            }
-            .navigationTitle(Text(statusViewsTitle(loading || failed ? views : viewers.count)))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Theme.hex(0x06212B), for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarColorScheme(.dark, for: .navigationBar)
         }
+        .foregroundStyle(Theme.hex(0xE8F2F8))
+        .environment(\.colorScheme, .dark)
         .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
         .task {
             // a failed read says so (it showed "no views yet" before)
             do {
@@ -951,6 +956,29 @@ struct StatusViewersSheet: View {
                 failed = true
             }
             loading = false
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "eye").font(.system(size: 22)).foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+                .background(LinearGradient(colors: [Theme.hex(0x12B9C4), Theme.hex(0x0B6F86)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.18), lineWidth: 1))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(statusViewsTitle(count)).font(.system(size: 24, weight: .bold)).foregroundStyle(.white)
+                Text("stv.who").font(.system(size: 15)).foregroundStyle(Theme.hex(0xA9BCC6))
+            }
+            Spacer(minLength: 8)
+            Button { dismiss() } label: {
+                Image(systemName: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 46, height: 46)
+                    .background(Color.black.opacity(0.28), in: Circle())
+                    .overlay(Circle().stroke(Theme.accent.opacity(0.25), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("chat.close"))
         }
     }
 }

@@ -415,34 +415,34 @@ struct StatusViewerLine: View {
     let viewer: StatusViewerEntry
 
     var body: some View {
-        HStack(spacing: 12) {
-            Avatar(token: token, userID: viewer.user_id, avatarID: nil, title: viewer.username, size: 42)
+        HStack(spacing: 14) {
+            Avatar(token: token, userID: viewer.user_id, avatarID: nil, title: viewer.username, size: 48)
                 .overlay(alignment: .bottomTrailing) {
                     if viewer.reaction == statusLike {
                         Image(systemName: "heart.fill")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(.white)
-                            .frame(width: 18, height: 18)
-                            .background(Color.red, in: Circle())
-                            .overlay(Circle().stroke(Theme.panel, lineWidth: 2))
+                            .frame(width: 20, height: 20)
+                            .background(Color(red: 1, green: 0.27, blue: 0.4), in: Circle())
+                            .overlay(Circle().stroke(Theme.hex(0x062B36), lineWidth: 2))
                             .offset(x: 3, y: 3)
                             .accessibilityLabel(Text("stv.liked"))
                     }
                 }
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(viewer.username).font(.body.weight(.semibold))
-                    if let r = viewer.reaction, !r.isEmpty, r != statusLike {
-                        Text(r).accessibilityLabel(Text(String(format: NSLocalizedString("stx.reacted", comment: ""), r)))
-                    }
-                }
-                if let d = serverDate(viewer.viewed_at) {
-                    Text(StatusSeenAt.text(d)).font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text(viewer.username).font(.system(size: 18, weight: .medium)).foregroundStyle(.white).lineLimit(1)
+                if let r = viewer.reaction, !r.isEmpty, r != statusLike {
+                    Text(r).accessibilityLabel(Text(String(format: NSLocalizedString("stx.reacted", comment: ""), r)))
                 }
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
+            if let d = serverDate(viewer.viewed_at) {
+                Text(StatusSeenAt.text(d)).font(.system(size: 14)).foregroundStyle(Theme.hex(0xA9BCC6)).lineLimit(1)
+            }
         }
-        .padding(.vertical, 2)
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Theme.hex(0x0B3A46, 0.35), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Theme.accent.opacity(0.14), lineWidth: 1))
     }
 }
 
