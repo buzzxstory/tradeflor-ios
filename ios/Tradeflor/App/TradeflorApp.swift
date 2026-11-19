@@ -195,9 +195,10 @@ struct RootView: View {
             if settling { Color.clear.contentShape(Rectangle()).ignoresSafeArea() }
         }
         .onChange(of: scenePhase) { phase in
-            if phase == .active {
-                settling = true
-                Task { try? await Task.sleep(nanoseconds: 450_000_000); settling = false }
+            if phase != .active {
+                settling = true // up before the app is on screen again: the touch that unlocks the phone never reaches a row
+            } else {
+                Task { try? await Task.sleep(nanoseconds: 300_000_000); settling = false }
             }
             // online = the app is in front (server d4d2e77)
             live.setActive(phase != .background) // Control Center or a system sheet (.inactive) is not "offline"

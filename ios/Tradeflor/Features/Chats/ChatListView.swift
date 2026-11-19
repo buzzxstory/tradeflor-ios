@@ -181,6 +181,8 @@ struct ChatListView: View {
         // groups are not in this list: their messages and receipts never reload it
         .onReceive(live.messages) { m in if !m.conversation_id.hasPrefix("grp_") { reloadSoon() } }
         .onReceive(live.changes) { id in if !id.hasPrefix("grp_") { reloadSoon() } }
+        // the socket is back (after a lock, a drop): what arrived meanwhile is read at once, not at the next poll
+        .onReceive(live.opened) { _ in reloadSoon() }
         // a status watched (here or in the status row), posted or deleted: the rings on the rows change at once
         .onReceive(NotificationCenter.default.publisher(for: .tfStatusChanged)) { _ in Task { await loadStatuses() } }
         // the last blocked / locked chat left its tab (its chip is gone): back to All, as the web

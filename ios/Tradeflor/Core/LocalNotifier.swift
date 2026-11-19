@@ -75,6 +75,9 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             .sink { [weak self] _ in self?.enteringForeground() }.store(in: &appSubs)
         // in front, the icon badge follows the tab bar's unread counts
         BadgeStore.shared.$chats.combineLatest(BadgeStore.shared.$groups)
+            .map { $0 + $1 }
+            .removeDuplicates()
+            .map { ($0, 0) }
             .receive(on: RunLoop.main)
             .sink { [weak self] c, g in
                 guard let self, UIApplication.shared.applicationState == .active, !self.token.isEmpty else { return }

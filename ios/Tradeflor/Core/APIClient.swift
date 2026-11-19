@@ -87,6 +87,7 @@ final class APIClient {
     }
 
     func send(_ req: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        if let m = req.httpMethod, m != "GET" { Self.forgetRecentReads() }
         do {
             let (data, resp) = try await session.data(for: req)
             guard let http = resp as? HTTPURLResponse else { throw APIError.network }
@@ -233,9 +234,48 @@ final class APIClient {
 
     /// A plain authenticated GET, for small endpoints defined next to their feature.
     func getJSON(_ path: String, token: String) async throws -> Data {
-        let (data, http) = try await send(request(path, method: "GET", token: token, body: nil, rawQuery: path.contains("?")))
-        try check(http, data)
-        return data
+        let key = token + "|" + path + "|" + (unlockToken ?? "")
+        enum Pick { case fresh(Data), join(Task<Data, Error>), own(Task<Data, Error>) }
+        let pick: Pick = Self.getLock.withLock {
+            if let r = Self.getRecent[key], Date().timeIntervalSince(r.at) < 1.2 { return .fresh(r.data) }
+            if let t = Self.getInflight[key] { return .join(t) }
+            let t = Task { [self] () throws -> Data in
+                let (data, http) = try await self.send(self.request(path, method: "GET", token: token, body: nil, rawQuery: path.contains("?")))
+                try self.check(http, data)
+                return data
+            }
+            Self.getInflight[key] = t
+            return .own(t)
+        }
+        switch pick {
+        case .fresh(let d): return d
+        case .join(let t): return try await t.value
+        case .own(let t):
+            do {
+                let d = try await t.value
+                Self.getLock.withLock {
+                    // not stored when a write happened meanwhile (it cleared the table): the answer may be older than it
+                    if Self.getInflight[key] != nil {
+                        Self.getInflight[key] = nil
+                        let now = Date()
+                        Self.getRecent = Self.getRecent.filter { now.timeIntervalSince($0.value.at) < 5 }
+                        Self.getRecent[key] = (now, d)
+                    }
+                }
+                return d
+            } catch {
+                Self.getLock.withLock { Self.getInflight[key] = nil }
+                throw error
+            }
+        }
+    }
+
+    private static let getLock = NSLock()
+    private static var getInflight: [String: Task<Data, Error>] = [:]
+    private static var getRecent: [String: (at: Date, data: Data)] = [:]
+    /// Any write (POST and the like) makes the next reads go to the server.
+    fileprivate static func forgetRecentReads() {
+        getLock.withLock { getInflight = [:]; getRecent = [:] }
     }
 
     // MARK: profile and devices
