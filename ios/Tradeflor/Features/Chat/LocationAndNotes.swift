@@ -117,12 +117,31 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
     }
 }
 
+/// A live-location share is ONE message (the card). A plain text "Live location" from the same sender within seconds of a card is
+/// its stand-in (a copy made by another client or an older build): it is not drawn next to the card.
+enum LocationCardTwin {
+    private static let labels: Set<String> = ["live location", "📍 live location"]
+
+    static func removing(from rows: [Message]) -> [Message] {
+        guard rows.contains(where: { $0.kind == "location" }) else { return rows }
+        let cards = rows.filter { $0.kind == "location" }
+        return rows.filter { m in
+            guard m.kind == "text", !m.isDeleted,
+                  labels.contains(m.body.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) else { return true }
+            return !cards.contains { $0.sender_id == m.sender_id && abs($0.created_at - m.created_at) <= (m.created_at > 100_000_000_000 ? 10_000 : 10) }
+        }
+    }
+}
+
 /// A live location message: a map while the share runs, "ended" after.
 struct LocationCard: View {
     let token: String
     let message: Message
     let mine: Bool
     @State private var position: LivePosition?
+    /// The first answer about where the share is has arrived. Until then a share that may still run keeps the map's size
+    /// (it showed "ended" first and jumped to the 150 pt map: the list under it misjudged its height and left a gap).
+    @State private var loaded = false
     @State private var region = MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
                                                    span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01))
 
@@ -132,6 +151,7 @@ struct LocationCard: View {
         return Date(timeIntervalSince1970: u)
     }
     private var running: Bool { (until ?? .distantPast) > Date() && position != nil }
+    private var maybeRunning: Bool { (until ?? .distantPast) > Date() && !loaded }
 
     var body: some View {
         HStack {
@@ -153,6 +173,15 @@ struct LocationCard: View {
                     } label: { Label("location.open", systemImage: "map") }
                     .font(.footnote.weight(.semibold))
                     if let until { Text(String(format: NSLocalizedString("location.until", comment: ""), Self.time.string(from: until))).font(.caption2) }
+                } else if maybeRunning {
+                    // same size as the map card, so the row does not change height when the position arrives
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14).fill(Theme.surface)
+                        ProgressView()
+                    }
+                    .frame(width: 240, height: 150)
+                    Label("location.open", systemImage: "map").font(.footnote.weight(.semibold)).opacity(0.35)
+                    if let until { Text(String(format: NSLocalizedString("location.until", comment: ""), Self.time.string(from: until))).font(.caption2) }
                 } else {
                     Label("location.ended", systemImage: "location.slash").font(.subheadline)
                 }
@@ -166,6 +195,7 @@ struct LocationCard: View {
             while !Task.isCancelled {
                 let all = await APIClient.shared.livePositions(token: token, conversationID: message.conversation_id)
                 position = all.first { $0.message_id == message.id && $0.user_id == message.sender_id }
+                loaded = true
                 if (until ?? .distantPast) < Date() { break }
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
             }

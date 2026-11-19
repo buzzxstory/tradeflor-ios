@@ -169,6 +169,9 @@ struct ChatView: View {
     private var focusOn: Bool { isGroup && (focusDoc?.focus.active ?? false) && !focusShowAll }
     /// What the list shows: everything, or (Smart Focus) the server's filtered history plus matching live messages.
     private var shown: [Message] {
+        LocationCardTwin.removing(from: shownAll)
+    }
+    private var shownAll: [Message] {
         guard focusOn, let f = focusDoc?.focus else { return messages }
         var byID: [String: Message] = [:]
         for m in focusPages { byID[m.id] = m }
