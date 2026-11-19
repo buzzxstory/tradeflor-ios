@@ -149,7 +149,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             for x in p { if let u = x.muted_until { m[x.conversation_id] = u } }
             mutedUntil = m
         }
-        if let st = try? await APIClient.shared.ctLockState(token: token) { lockedChats = Set((st.locks ?? []).map(.conversation_id)) }
+        if let st = try? await APIClient.shared.ctLockState(token: token) { lockedChats = Set((st.locks ?? []).map(\.conversation_id)) }
         var fresh: Set<String> = []
         if let list = try? await APIClient.shared.conversations(token: token) {
             for c in list {

@@ -6,7 +6,7 @@ import UIKit
 struct GroupsListView: View {
     @EnvironmentObject private var store: SessionStore
     @EnvironmentObject private var live: LiveConnection
-    @Environment(.scenePhase) private var scenePhase
+    @Environment(\.scenePhase) private var scenePhase
     @State private var groups: [GroupSummary] = []
     @State private var groupStatuses: [String: StatusGroup] = [:]
     @State private var watchGroup: StatusGroup?
