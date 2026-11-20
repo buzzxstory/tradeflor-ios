@@ -99,4 +99,10 @@ final class WhatsAppParityTests: XCTestCase {
             XCTAssertTrue(try source(f).contains(needle), "\(f): \(needle) is not full size")
         }
     }
+
+    /// A short chat sits at the bottom next to the composer, never with an empty band above it (owner, 2026-11-20).
+    func testShortChatSitsAtTheBottom() throws {
+        let s = try source("Tradeflor/Features/Chat/ChatView.swift")
+        XCTAssertTrue(s.contains(".frame(minHeight: viewport.size.height, alignment: .bottom)"))
+    }
 }

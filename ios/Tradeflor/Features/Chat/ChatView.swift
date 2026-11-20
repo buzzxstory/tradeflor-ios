@@ -256,25 +256,30 @@ struct ChatView: View {
     }
 
     private func messageScrollView(_ proxy: ScrollViewProxy) -> some View {
-        ScrollView {
-            messageStack(proxy)
+        // a short chat (a new contact, a few messages) sits at the bottom next to the composer, as WhatsApp: it started at
+        // the top and left an empty band above the composer (owner, 2026-11-20)
+        GeometryReader { viewport in
+            ScrollView {
+                messageStack(proxy)
+                    .frame(minHeight: viewport.size.height, alignment: .bottom)
+            }
+            // a picked chat theme has a dark wallpaper in day mode too: its bubbles and labels take the night colours there
+            .environment(\.colorScheme, (themeID.isEmpty || themeID == "tradeflor") ? appScheme : .dark)
+            .opacity(revealed ? 1 : 0)
+            // while it is hidden (at most 0.7 s) it takes no touch: a tap there opened a photo or a link nobody could see
+            .allowsHitTesting(revealed)
+            .task {
+                // at most 0.7 s hidden, as the web (useHistoryScroll settleOpen): then shown already at the end
+                try? await Task.sleep(nanoseconds: 700_000_000)
+                revealed = true
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })
+            // a scroll by hand: from then on the opening's "settle on the end again" steps leave the list where I put it
+            // (alongside the scroll, never instead of it; a plain flag, so nothing is redrawn). iOS 18+ reads the scroll's own
+            // phase instead of a drag gesture laid on the scroll view.
+            .modifier(UserScrollWatch { if !flags.userScrolledUp { flags.userScrolledUp = true } })
         }
-        // a picked chat theme has a dark wallpaper in day mode too: its bubbles and labels take the night colours there
-        .environment(\.colorScheme, (themeID.isEmpty || themeID == "tradeflor") ? appScheme : .dark)
-        .opacity(revealed ? 1 : 0)
-        // while it is hidden (at most 0.7 s) it takes no touch: a tap there opened a photo or a link nobody could see
-        .allowsHitTesting(revealed)
-        .task {
-            // at most 0.7 s hidden, as the web (useHistoryScroll settleOpen): then shown already at the end
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            revealed = true
-        }
-        .scrollDismissesKeyboard(.interactively)
-        .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })
-        // a scroll by hand: from then on the opening's "settle on the end again" steps leave the list where I put it
-        // (alongside the scroll, never instead of it; a plain flag, so nothing is redrawn). iOS 18+ reads the scroll's own
-        // phase instead of a drag gesture laid on the scroll view.
-        .modifier(UserScrollWatch { if !flags.userScrolledUp { flags.userScrolledUp = true } })
     }
 
     private func messageStack(_ proxy: ScrollViewProxy) -> some View {
