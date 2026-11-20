@@ -24,7 +24,8 @@ final class CallManager: NSObject, ObservableObject {
     enum Role { case caller, callee }
 
     @Published private(set) var phase: Phase = .idle {
-        // while a call is on, the live socket reconnects without backoff (the server keeps the call 20 s for a device away)
+        // while a call is on, the live socket reconnects without backoff (the server keeps a call for a device whose socket
+        // is away: 20 s while it is still connecting, 90 s once it is active; an older server 20 s for both)
         didSet { live?.callInProgress = phase != .idle && phase != .ended }
     }
     @Published private(set) var peerName = ""
@@ -99,6 +100,14 @@ final class CallManager: NSObject, ObservableObject {
     /// The wait before an ICE restart (3.5 s grace for "disconnected", web DISCONNECT_GRACE_MS) and between attempts (9 s,
     /// web RESTART_WAIT_MS).
     private var restartTimer: Task<Void, Never>?
+    /// An ICE restart was due while the app's own live socket was down: its offer could not travel, so no attempt was
+    /// spent. It is made as soon as the socket is back (resumeAfterSocketGap).
+    private var restartWaitingForSocket = false
+    /// How many times that happened since the media last flowed (see restartIce for the limit).
+    private var socketWaits = 0
+    /// The limit of one such wait (90 s, what the server gives an active call whose device is away): after it the call
+    /// ends here as "connection_lost", so it never stays on "Reconnecting..." for good.
+    private var socketWaitTimer: Task<Void, Never>?
     /// "Reconnecting..." only for a disconnection that lasts 2 s (web RECONNECTING_LABEL_MS).
     private var labelTimer: Task<Void, Never>?
     private var safetyTimer: Task<Void, Never>?
@@ -112,6 +121,29 @@ final class CallManager: NSObject, ObservableObject {
     // MARK: VoIP push (PushKit)
     /// Call ids a VoIP push already reported to CallKit, not yet seen on the live socket.
     private var pushCalls = Set<String>()
+    /// The server's own call id of each of them (pushCalls holds CallKit UUID strings), and the newest one: call.sync asks
+    /// the server about it.
+    private var pushCallID: [String: String] = [:]
+    private var lastPushKey: String?
+    /// The call id the last call.sync asked about (the answer's `ended` may not repeat it).
+    private var syncAsked: String?
+
+    /// call.sync, sent every time the socket opens. With the id of the call this phone holds (else of the ring a VoIP push
+    /// started), the server can say what became of exactly that call (`ended`), and a call it restored after a restart is
+    /// claimed back. A server that does not know the field ignores it.
+    private func sendSync() {
+        var data: [String: Any] = [:]
+        if lineInUse, let id = callID {
+            data["call_id"] = id // the call in hand wins over a push ring
+        } else if let key = lastPushKey, pushCalls.contains(key), let id = pushCallID[key] {
+            data["call_id"] = id
+        } else if let key = pushCalls.first(where: { pushCallID[$0] != nil }), let id = pushCallID[key] {
+            data["call_id"] = id
+        }
+        syncAsked = data["call_id"] as? String
+        send("call.sync", data)
+    }
+
     /// The person answered / declined in the system UI before the socket told the app about the call: done when it does.
     private var pendingAnswer: UUID?
     private var pendingEnd: UUID?
@@ -123,7 +155,9 @@ final class CallManager: NSObject, ObservableObject {
         if !callID.isEmpty {
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [callID])
             // the alert and the VoIP push leave the server together: the alert may land after this, so once more
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                // only while this call still rings or runs: once it ended, the same identifier holds its "Missed call" notice
+                guard let self, !self.endedHere.contains(callID) else { return }
                 UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [callID])
             }
         }
@@ -145,6 +179,7 @@ final class CallManager: NSObject, ObservableObject {
                     return
                 }
                 self.pushCalls.insert(key)
+                if !callID.isEmpty { self.pushCallID[key] = callID; self.lastPushKey = key }
                 self.guardPushCall(key: key, uuid: id)
             }
         }
@@ -171,7 +206,9 @@ final class CallManager: NSObject, ObservableObject {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 waited += 1
             }
-            guard let self, self.pushCalls.contains(key) else { return }
+            guard let self else { return }
+            self.pushCallID[key] = nil // the 25 s are over
+            guard self.pushCalls.contains(key) else { return }
             self.pushCalls.remove(key)
             if self.uuid != uuid || self.phase == .idle || self.phase == .ended {
                 self.provider.reportCall(with: uuid, endedAt: Date(), reason: .remoteEnded)
@@ -313,7 +350,7 @@ final class CallManager: NSObject, ObservableObject {
         // scrolls a list an incoming call (and every ICE candidate of a running call) waited until the scroll stopped
         live.calls.receive(on: DispatchQueue.main).sink { [weak self] ev in self?.handle(ev.type, ev.data) }.store(in: &subs)
         live.opened.receive(on: DispatchQueue.main).sink { [weak self] in
-            self?.send("call.sync", [:])
+            self?.sendSync()
             self?.refreshEnabled() // the first request may have failed (offline launch): ask again when the socket opens
         }.store(in: &subs)
         refreshEnabled()
@@ -616,11 +653,40 @@ final class CallManager: NSObject, ObservableObject {
             finish()
         case "call.sync":
             let call = d["call"] as? [String: Any]
+            // a newer server also says what became of the call that was asked about (sendSync): answered on another
+            // device ({reason: "answered_elsewhere"}), or its final summary (the same `reason` words as call.ended, and a
+            // `status`). An older server sends no `ended`: everything below is as before.
+            let asked = syncAsked
+            syncAsked = nil
+            if call == nil, let ended = d["ended"] as? [String: Any], let endedID = (ended["call_id"] as? String) ?? asked {
+                var reason = ended["reason"] as? String
+                if reason == nil, let status = ended["status"] as? String {
+                    // only the statuses that are one of the end reasons this app already shows
+                    let known = ["missed": "no_answer", "declined": "declined", "canceled": "canceled", "busy": "busy",
+                                 "failed": "failed", "completed": "hangup"]
+                    reason = known[status]
+                }
+                let mine = lineInUse && endedID == callID
+                if !mine, let key = CallManager.callUUID(endedID)?.uuidString, pushCalls.contains(key), let u = UUID(uuidString: key) {
+                    // a ring a VoIP push started, not yet known here: it stops with the true reason (answered elsewhere is
+                    // not a missed call in the system's eyes); nothing is posted for it
+                    provider.reportCall(with: u, endedAt: Date(), reason: reason == "answered_elsewhere" ? .answeredElsewhere : .remoteEnded)
+                    pushCalls.remove(key)
+                    pushCallID[key] = nil
+                }
+                if mine, let reason {
+                    // finish() posts no "Missed voice call" and tells CallKit .answeredElsewhere for "answered_elsewhere"
+                    // (and .declinedElsewhere for a decline on another device); other reasons end as call.ended would
+                    endReason = localReason ?? reason
+                    finish()
+                }
+            }
             // a ring a VoIP push started for a call the server does not have (cancelled, answered elsewhere) ends now
             let live = (call?["call_id"] as? String).flatMap { CallManager.callUUID($0)?.uuidString }
             for k in pushCalls where k != live {
                 if let u = UUID(uuidString: k) { provider.reportCall(with: u, endedAt: Date(), reason: .remoteEnded) }
                 pushCalls.remove(k)
+                pushCallID[k] = nil
             }
             if call == nil {
                 // the server knows no call for this device: end ours, unless our invite was not acknowledged yet
@@ -691,6 +757,7 @@ final class CallManager: NSObject, ObservableObject {
         // the server's visible "Incoming call" alert (collapse id = the call id) is not needed while CallKit rings
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
         let ringUUID = uuid, name = peerName, conv = conversationID
+        pushCallID[uuid.uuidString] = nil
         if pushCalls.remove(uuid.uuidString) != nil {
             // a VoIP push already made CallKit ring: it only learns who is calling now
             provider.reportCall(with: uuid, updated: update)
@@ -869,6 +936,9 @@ final class CallManager: NSObject, ObservableObject {
     private func recovered() {
         restartTimer?.cancel(); restartTimer = nil
         labelTimer?.cancel(); labelTimer = nil
+        socketWaitTimer?.cancel(); socketWaitTimer = nil
+        restartWaitingForSocket = false
+        socketWaits = 0
         reconnecting = false
         restarts = 0
         restartPending = false
@@ -924,6 +994,28 @@ final class CallManager: NSObject, ObservableObject {
     private func restartIce() async {
         guard let pc, phase == .connecting || phase == .active else { return }
         if pc.connectionState == .connected { recovered(); return }
+        if !(live?.connected ?? false), restartWaitingForSocket || socketWaits < 5 {
+            // the app's own socket is down: the offer could not leave, so no attempt is spent and no timer runs. The
+            // restart is made the moment the socket is back (resumeAfterSocketGap). Bounded: 90 s per socket outage, then
+            // the call ends (the server has given the call up by then), and at most five such waits before the media is
+            // back (a socket that keeps coming and going): after that the attempts count again, three and it ends.
+            // While still connecting the 45 s connect timer ends it sooner.
+            if !restartWaitingForSocket { socketWaits += 1 }
+            restartWaitingForSocket = true
+            if phase == .active { reconnecting = true }
+            if socketWaitTimer == nil {
+                socketWaitTimer = Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: 90_000_000_000)
+                    guard let self, !Task.isCancelled else { return }
+                    self.socketWaitTimer = nil
+                    guard self.restartWaitingForSocket, self.phase == .connecting || self.phase == .active else { return }
+                    self.endReason = "connection_lost"
+                    self.finish()
+                }
+            }
+            return
+        }
+        restartWaitingForSocket = false
         if restarts >= 3 { fail("ice_failed"); return }
         restarts += 1
         if phase == .active { reconnecting = true }
@@ -936,7 +1028,21 @@ final class CallManager: NSObject, ObservableObject {
         guard self.pc === pc, phase == .connecting || phase == .active else { return }
         if pc.connectionState == .connected { recovered(); return } // came back by itself meanwhile
         restartPending = true
-        pc.restartIce() // fires "negotiation needed": a new offer from this side (perfect negotiation handles collisions)
+        // in the negotiation queue, so it never overlaps an offer or answer that is being applied
+        serially { [weak self] in
+            guard let self, self.pc === pc, self.phase == .connecting || self.phase == .active else { return }
+            if pc.signalingState == .haveLocalOffer {
+                // the previous restart's offer was never answered (lost on the way, or its answer was): makeOffer only
+                // offers from "stable", so every later restart did nothing. Take the old offer back first.
+                do {
+                    try await pc.tfSetLocal(RTCSessionDescription(type: .rollback, sdp: ""))
+                } catch {
+                    print("call: rolling back an unanswered offer failed: \(error)")
+                }
+                guard self.pc === pc else { return }
+            }
+            pc.restartIce() // fires "negotiation needed": a new offer from this side (perfect negotiation handles collisions)
+        }
     }
 
     /// The socket was down and is back (call.sync answered with our call). An offer of ours sent meanwhile never arrived:
@@ -945,8 +1051,15 @@ final class CallManager: NSObject, ObservableObject {
         guard let conn = pc else { return }
         serially { [weak self] in
             guard let self, self.pc === conn else { return }
+            // an ICE restart that waited for the socket (restartIce) is made now, whatever the count says
+            let waited = self.restartWaitingForSocket
+            self.restartWaitingForSocket = false
+            self.socketWaitTimer?.cancel(); self.socketWaitTimer = nil
             if conn.signalingState == .haveLocalOffer, let offer = conn.localDescription {
                 self.sendDescription(offer)
+                // the offer that could not leave is on its way now: it gets one attempt's time (9 s) before the next
+                // restart (which takes it back and makes a new one)
+                if waited && self.restartTimer == nil { self.scheduleRestart(after: 9) }
                 return
             }
             // first connection, our answer may be the frame that got lost: the caller then waited in have-local-offer
@@ -957,7 +1070,7 @@ final class CallManager: NSObject, ObservableObject {
                 self.sendDescription(answer)
             }
             let ice = conn.iceConnectionState
-            if (ice == .disconnected || ice == .failed) && self.restarts == 0 { self.scheduleRestart(after: 0) }
+            if (ice == .disconnected || ice == .failed) && (self.restarts == 0 || waited) { self.scheduleRestart(after: 0) }
         }
     }
 
@@ -1004,17 +1117,21 @@ final class CallManager: NSObject, ObservableObject {
         guard phase != .ended else { return }
         let hadCall = callID != nil
         // rang here and nobody answered on this phone: "Missed voice call" (not when declined or answered elsewhere)
-        if hadCall, phase == .incoming, role == .callee, endReason != "declined", endReason != "answered_elsewhere",
-           endReason != "mic_denied" {
+        let wasMissed = hadCall && phase == .incoming && role == .callee && endReason != "declined"
+            && endReason != "answered_elsewhere" && endReason != "mic_denied"
+        if wasMissed {
             LocalNotifier.shared.missedCall(name: peerName, peerID: peerID, conversationID: conversationID, callID: callID ?? "")
         }
-        if let id = callID { LocalNotifier.shared.clearIncomingCall(callID: id) }
+        if let id = callID { LocalNotifier.shared.clearIncomingCall(callID: id, missed: wasMissed) }
         CallTones.shared.ringback(false)
         CallTones.shared.sessionActive = false
         if hadCall { if endReason == "busy" { CallTones.shared.busy() } else { CallTones.shared.end() } }
         safetyTimer?.cancel()
         restartTimer?.cancel(); restartTimer = nil
         labelTimer?.cancel(); labelTimer = nil
+        socketWaitTimer?.cancel(); socketWaitTimer = nil
+        restartWaitingForSocket = false
+        socketWaits = 0
         negotiation = nil
         restartPending = false
         pc?.close()

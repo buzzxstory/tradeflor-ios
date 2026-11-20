@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 import UIKit
 import UserNotifications
@@ -361,7 +362,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         if flag("notifications.sound") { content.sound = MessageSound.notificationSound(group: true) }
         content.threadIdentifier = conv
         content.userInfo = ["conversation_id": conv]
-        try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "joinreq|\(conv)|\(d["user_id"] ?? "")", content: content, trigger: nil))
+        try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: NoticeID.collapse("joinreq|\(conv)|\(d["user_id"] ?? "")"), content: content, trigger: nil))
     }
 
     // MARK: calls
@@ -379,19 +380,10 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         if let conversationID { info["conversation_id"] = conversationID }
         if let peerID { info["peer_id"] = peerID }
         content.userInfo = info
-        Task {
-            try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "missed|\(callID)", content: content, trigger: nil))
-            // the server sends its own "Missed call" alert for the same call (no name; its identifier is the call id) a moment
-            // later: with the app alive behind, both stayed. The named one is kept, the server's copy is taken away.
-            guard !callID.isEmpty else { return }
-            let bg = BackgroundTaskBox()
-            bg.id = UIApplication.shared.beginBackgroundTask(withName: "tf.missed") { bg.end() }
-            for ms in [1_500, 4_000] as [UInt64] {
-                try? await Task.sleep(nanoseconds: ms * 1_000_000)
-                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [callID])
-            }
-            bg.end()
-        }
+        // the server's own "Missed call" alert has the call id as its identifier (apns-collapse-id): the same one here,
+        // so the two replace each other instead of both staying
+        let ident = callID.isEmpty ? "missed|" + UUID().uuidString : callID
+        Task { try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: ident, content: content, trigger: nil)) }
     }
 
     /// CallKit could not ring (rare): an ordinary notification so the call is not silently lost.
@@ -412,10 +404,22 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     }
 
     /// The call stopped ringing: its fallback notification goes.
-    func clearIncomingCall(callID: String) {
+    func clearIncomingCall(callID: String, missed: Bool = false) {
         let c = UNUserNotificationCenter.current()
-        c.removeDeliveredNotifications(withIdentifiers: ["call|\(callID)", callID])
         c.removePendingNotificationRequests(withIdentifiers: ["call|\(callID)"])
+        // a missed call keeps the call id for its "Missed call" notice (posted just now under that identifier)
+        guard !missed else { c.removeDeliveredNotifications(withIdentifiers: ["call|\(callID)"]); return }
+        c.removeDeliveredNotifications(withIdentifiers: ["call|\(callID)", callID])
+        // the server's "Incoming call" / silent "Call ended" alert for a call handled here can land a moment later
+        Task {
+            let bg = BackgroundTaskBox()
+            bg.id = UIApplication.shared.beginBackgroundTask(withName: "tf.callnotice") { bg.end() }
+            for ms in [2_000, 4_000] as [UInt64] {
+                try? await Task.sleep(nanoseconds: ms * 1_000_000)
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [callID])
+            }
+            bg.end()
+        }
     }
 
     /// Clears a chat's notifications once it is opened.
@@ -530,5 +534,20 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             completionHandler()
             bg.end()
         }
+    }
+}
+
+/// The identifier the server gives a notice (apns-collapse-id, backend apns.go NoticeCollapseID): a short plain tag as it
+/// is, anything else "n-" + the first 16 bytes of its SHA-256 in hex. A local notice with the same identifier and the
+/// server's push replace each other instead of both staying.
+enum NoticeID {
+    static func collapse(_ tag: String) -> String {
+        let plain = !tag.isEmpty && tag.utf8.count <= 64 && tag.unicodeScalars.allSatisfy { c in
+            (c.value >= 48 && c.value <= 57) || (c.value >= 65 && c.value <= 90) || (c.value >= 97 && c.value <= 122)
+                || c == "|" || c == ":" || c == "." || c == "_" || c == "-"
+        }
+        if plain { return tag }
+        let digest = SHA256.hash(data: Data(tag.utf8))
+        return "n-" + digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     }
 }

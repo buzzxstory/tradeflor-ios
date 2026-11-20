@@ -27,7 +27,8 @@ final class LiveConnection: ObservableObject {
     /// The interfaces of the last network path (nil before the first answer): a change (Wi-Fi to mobile data) leaves the
     /// socket on a network that is gone, so it is replaced at once instead of after the heartbeat's 35 s.
     private var lastInterfaces: [NWInterface.InterfaceType]?
-    /// A call is going on (CallManager): reconnect fast, the server keeps a call only 20 s for a device whose socket is gone.
+    /// A call is going on (CallManager): reconnect fast, the server keeps a call only so long for a device whose socket is gone
+    /// (20 s while the call is connecting, 90 s once it is active).
     var callInProgress = false
 
     private func connectedChanged() {
