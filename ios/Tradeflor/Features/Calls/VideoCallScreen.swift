@@ -6,6 +6,8 @@ import WebRTC
 struct VideoTrackView: UIViewRepresentable {
     let track: RTCVideoTrack?
     var mirrored = false
+    /// The view itself, for Picture in Picture (the other person's picture only).
+    var onView: ((UIView) -> Void)? = nil
 
     final class Coordinator { var track: RTCVideoTrack? }
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -25,6 +27,7 @@ struct VideoTrackView: UIViewRepresentable {
             context.coordinator.track = track
         }
         v.transform = mirrored ? CGAffineTransform(scaleX: -1, y: 1) : .identity
+        if let onView { DispatchQueue.main.async { onView(v) } }
     }
 
     static func dismantleUIView(_ v: RTCMTLVideoView, coordinator: Coordinator) {
@@ -57,7 +60,10 @@ struct VideoCallScreen: View {
             ZStack {
                 backdrop
                 if remoteShows {
-                    VideoTrackView(track: video.remoteTrack).ignoresSafeArea()
+                    // the floating window when the app goes to the background (IOS-VIDEO-009)
+                    VideoTrackView(track: video.remoteTrack, onView: { CallPiP.shared.attach(source: $0, track: video.remoteTrack) })
+                        .ignoresSafeArea()
+                        .onDisappear { CallPiP.shared.detach() }
                 } else if selfFullScreen {
                     VideoTrackView(track: video.localTrack, mirrored: video.front).ignoresSafeArea()
                 } else {

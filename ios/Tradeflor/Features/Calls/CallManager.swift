@@ -1440,6 +1440,7 @@ final class CallManager: NSObject, ObservableObject {
         // the microphone first (privacy): no more samples leave, whatever the teardown below takes
         audioTrack?.isEnabled = false
         video.stopCapture() // the camera too: the green dot goes off at once
+        CallPiP.shared.detach() // no floating window for a call that ended
         // what the person sees, before anything slow. The compact notice under the header (RootView) says how a call ended
         // that the other side, the server or the network ended; nothing when this phone's own End did it (website).
         endedByMe = userEnding && localReason == nil
