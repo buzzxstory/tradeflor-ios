@@ -175,6 +175,7 @@ struct MyProfilePage: View {
     private var hero: some View {
         VStack(spacing: 5) {
             noteOverPicture
+                .padding(.top, 18) // clear of the top bar: the page opens with the whole bubble in view
                 .padding(.bottom, -34) // over the top of the picture, like WhatsApp's thought bubble
                 .zIndex(1)
             ZStack {
