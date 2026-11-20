@@ -1269,6 +1269,12 @@ struct ChatView: View {
             .accessibilityIdentifier("chat.info")
             Spacer(minLength: 4)
             if calls.enabled && chat.conversation_id.hasPrefix("dm_") {
+                // a video call (WhatsApp: the camera first, then the phone)
+                Button { calls.start(conversationID: chat.conversation_id, peerName: chat.title, peerID: chat.peer_id, video: true) } label: {
+                    Image(systemName: "video").font(.system(size: 21, weight: .light)).foregroundStyle(Theme.text).frame(width: 40, height: 44)
+                }
+                .disabled(calls.lineInUse)
+                .accessibilityLabel(Text("vc.start"))
                 Button { calls.start(conversationID: chat.conversation_id, peerName: chat.title, peerID: chat.peer_id) } label: {
                     Image(systemName: "phone").font(.system(size: 22, weight: .light)).foregroundStyle(Theme.text).frame(width: 44, height: 44)
                 }

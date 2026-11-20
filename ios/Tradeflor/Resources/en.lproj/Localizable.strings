@@ -2077,3 +2077,15 @@
 "sq.video" = "Video";
 "sq.voice" = "Voice status";
 "shot.unavailable" = "Blocking screenshots is not available yet. Try again after the next update.";
+"vc.start" = "Video call";
+"vc.incoming" = "Incoming video call";
+"vc.accept" = "Accept";
+"vc.accept.audio" = "Answer with sound only";
+"vc.camera" = "Camera";
+"vc.flip" = "Flip";
+"vc.self" = "Your camera";
+"vc.peer.muted" = "%@ is muted";
+"vc.peer.camoff" = "%@'s camera is off";
+"vc.peer.camera.off" = "Camera off";
+"vc.camera.denied" = "Camera access is off for Tradeflor. The call goes on with sound.";
+"vc.too.hot" = "Your phone is too hot: the camera is off. The call goes on with sound.";

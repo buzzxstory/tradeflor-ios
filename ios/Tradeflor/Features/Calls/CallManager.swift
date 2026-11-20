@@ -84,12 +84,14 @@ final class CallManager: NSObject, ObservableObject {
     private var linger: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
 
-    private static let factory: RTCPeerConnectionFactory = {
+    static let factory: RTCPeerConnectionFactory = {
         _ = RTCInitializeSSL()
         return RTCPeerConnectionFactory(encoderFactory: RTCDefaultVideoEncoderFactory(),
                                         decoderFactory: RTCDefaultVideoDecoderFactory())
     }()
     private var pc: RTCPeerConnection?
+    /// The picture of the call (camera, tracks, the other person's camera state): CallVideo.swift.
+    let video = CallVideo(factory: CallManager.factory)
     private var audioTrack: RTCAudioTrack?
     /// The other person's voice. On the loudspeaker the call (voice-chat mode) is quiet: its gain is raised (WebRTC's own
     /// 0...10 volume of a remote track), back to normal on the earpiece and on headsets.
@@ -254,7 +256,7 @@ final class CallManager: NSObject, ObservableObject {
 
     override init() {
         let cfg = CXProviderConfiguration()
-        cfg.supportsVideo = false
+        cfg.supportsVideo = true // video calls ring with the video icon (IOS-VIDEO-007)
         cfg.maximumCallGroups = 1
         cfg.maximumCallsPerCallGroup = 1
         cfg.supportedHandleTypes = [.generic]
@@ -277,6 +279,28 @@ final class CallManager: NSObject, ObservableObject {
             let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
             let began = raw.flatMap { AVAudioSession.InterruptionType(rawValue: $0) } == .began
             Task { @MainActor in self?.interrupted(began: began) }
+        })
+        // a video call in the background: iOS stops the camera; it is stopped here and the other side is told, and it comes
+        // back in front (IOS-VIDEO-008). The sound goes on.
+        observers.append(nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.lineInUse else { return }
+                if self.video.enteredBackground(pc: self.pc) { self.sendMediaState() }
+            }
+        })
+        observers.append(nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.lineInUse else { return }
+                if await self.video.enteredForeground(pc: self.pc) { self.sendMediaState() }
+            }
+        })
+        // the phone is too hot: the camera goes off and the other side is told (IOS-VIDEO-011)
+        observers.append(nc.addObserver(forName: .tfCallCameraOffByHeat, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.lineInUse, self.video.cameraOn else { return }
+                await self.video.setCamera(false, pc: self.pc)
+                self.sendMediaState()
+            }
         })
     }
 
@@ -354,6 +378,8 @@ final class CallManager: NSObject, ObservableObject {
 
     /// Clears what the previous call left (its "Call ended" linger may still be on) before a new call starts.
     private func beginCall() {
+        video.reset()
+        answerWithVideo = false
         linger?.cancel(); linger = nil
         // a previous call's teardown still queued in the background must not switch this call's audio off
         audioGeneration.bump()
@@ -443,14 +469,14 @@ final class CallManager: NSObject, ObservableObject {
 
     // MARK: user actions
 
-    struct PendingCall: Identifiable { let id = UUID(); let conversationID: String; let peerName: String; let peerID: String? }
+    struct PendingCall: Identifiable { let id = UUID(); let conversationID: String; let peerName: String; let peerID: String?; var video = false }
     /// Settings › Calls › Ask Before Starting a Call: the call waiting for "Call" in the confirmation.
     @Published var confirming: PendingCall?
     /// A call button was tapped and the call is being set up (the settings read, the microphone check): a second tap in
     /// that window started a second call.
     private var starting = false
 
-    func start(conversationID: String, peerName: String, peerID: String? = nil, confirmed: Bool = false) {
+    func start(conversationID: String, peerName: String, peerID: String? = nil, confirmed: Bool = false, video wantVideo: Bool = false) {
         // .ended is the 1.8 s "Call ended" linger: calling back at once is allowed (web: busy() is false once ended)
         guard !lineInUse, enabled, !starting else { return }
         starting = true
@@ -460,8 +486,8 @@ final class CallManager: NSObject, ObservableObject {
                 let ask = ((try? await APIClient.shared.stSettings(token: token)) ?? [:])["calls.confirm"] ?? false
                 starting = false
                 guard !lineInUse else { return } // a call rang in while the setting was read
-                if ask { confirming = PendingCall(conversationID: conversationID, peerName: peerName, peerID: peerID) }
-                else { start(conversationID: conversationID, peerName: peerName, peerID: peerID, confirmed: true) }
+                if ask { confirming = PendingCall(conversationID: conversationID, peerName: peerName, peerID: peerID, video: wantVideo) }
+                else { start(conversationID: conversationID, peerName: peerName, peerID: peerID, confirmed: true, video: wantVideo) }
             }
             return
         }
@@ -482,6 +508,13 @@ final class CallManager: NSObject, ObservableObject {
                 finish()
                 return
             }
+            // a video call only when the camera really opened: a refused or failed camera calls with sound (protocol)
+            if wantVideo {
+                video.markVideo()
+                if !(await video.openCamera()) { video.reset() }
+                guard !lineInUse || phase == .idle || phase == .ended else { return }
+                if video.isVideo { wantSpeaker = true; speaker = true }
+            }
             let id = UUID()
             uuid = id
             callID = id.uuidString.lowercased()
@@ -491,7 +524,7 @@ final class CallManager: NSObject, ObservableObject {
             showScreen = true
             let handle = CXHandle(type: .generic, value: peerName)
             let action = CXStartCallAction(call: id, handle: handle)
-            action.isVideo = false
+            action.isVideo = video.isVideo
             callController.request(CXTransaction(action: action)) { [weak self] err in
                 let refused = err != nil
                 Task { @MainActor in
@@ -520,8 +553,17 @@ final class CallManager: NSObject, ObservableObject {
     @discardableResult
     private func sendInvite() -> Bool {
         guard let id = callID, let conv = conversationID else { return false }
-        return send("call.invite", ["call_id": id, "conversation_id": conv])
+        var data: [String: Any] = ["call_id": id, "conversation_id": conv]
+        if video.isVideo && video.cameraOn { data["video"] = true }
+        return send("call.invite", data)
     }
+
+    /// Answer with the camera (a video call) or with sound only (the video line is answered recvonly: I still see them).
+    func accept(withVideo: Bool) {
+        answerWithVideo = withVideo && video.isVideo
+        accept()
+    }
+    private var answerWithVideo = false
 
     func accept() {
         guard phase == .incoming, !answering else { return }
@@ -554,6 +596,11 @@ final class CallManager: NSObject, ObservableObject {
             }
             // the call may have ended while the permission prompt was up
             guard phase == .connecting, callID == id else { return }
+            if answerWithVideo {
+                _ = await video.openCamera()
+                guard phase == .connecting, callID == id else { video.stopCapture(); return }
+            }
+            if video.isVideo { wantSpeaker = true; speaker = true; reapplySpeakerSoon() }
             send("call.accept", ["call_id": id])
             // the server sends this phone's devices a silent "Call ended" alert at this very moment (it replaces the
             // "Incoming call" elsewhere): not on the phone that answered
@@ -629,7 +676,7 @@ final class CallManager: NSObject, ObservableObject {
         u.supportsGrouping = false
         u.supportsUngrouping = false
         u.supportsDTMF = false
-        u.hasVideo = false
+        u.hasVideo = video.isVideo
         return u
     }
 
@@ -638,6 +685,29 @@ final class CallManager: NSObject, ObservableObject {
         muted = value
         audioTrack?.isEnabled = !(muted || held)
         if let id = callID, phase == .connecting || phase == .active { send("call.media", ["call_id": id, "muted": muted]) }
+    }
+
+    /// My microphone and camera states to the other side (after accept, after a socket gap, on every camera change).
+    private func sendMediaState() {
+        guard let id = callID, phase == .connecting || phase == .active else { return }
+        send("call.media", ["call_id": id, "muted": muted, "camera": video.cameraOn])
+    }
+
+    /// The camera button: on or off during the call (a voice call becomes a video call: one renegotiation).
+    func toggleCamera() {
+        let want = !video.cameraOn
+        Task {
+            let renegotiate = await video.setCamera(want, pc: pc)
+            if renegotiate, let conn = pc { serially { [weak self] in await self?.makeOffer(conn) } }
+            if want && video.cameraOn && !speaker && !wantSpeaker { wantSpeaker = true; speaker = true; reapplySpeakerSoon() }
+            if video.isVideo { provider.reportCall(with: uuid, updated: callCapabilities()) }
+            sendMediaState()
+        }
+    }
+
+    /// Front or back camera: the same track, nothing renegotiated.
+    func flipCamera() {
+        Task { await video.flip() }
     }
 
     /// The WebRTC voice-chat audio session (play and record, echo cancellation); CallKit activates it.
@@ -692,6 +762,7 @@ final class CallManager: NSObject, ObservableObject {
             let summary = (d["call"] as? [String: Any]) ?? d
             // only while it rings (web): a late or retried answer must not start the ringback over a connecting call
             guard summary["call_id"] as? String == callID, phase == .outgoing else { return }
+            video.applySummary(summary, iAmCaller: true)
             acknowledged = true
             ringing = (d["ringing"] as? Bool) ?? ringing
             CallTones.shared.ringback(true)
@@ -705,9 +776,13 @@ final class CallManager: NSObject, ObservableObject {
             CallTones.shared.ringback(false)
             if let r = d["role"] as? String { role = r == "caller" ? .caller : .callee }
             peerID = (role == .caller ? d["callee_id"] : d["caller_id"]) as? String ?? peerID
+            video.applySummary(d, iAmCaller: role == .caller)
             phase = .connecting
             arm(seconds: 45) { [weak self] in self?.connectTimedOut() }
-            serially { [weak self] in await self?.setUpPeerConnection() }
+            serially { [weak self] in
+                await self?.setUpPeerConnection()
+                self?.sendMediaState() // my camera (and microphone) once the call is accepted (protocol)
+            }
         case "call.active":
             guard cid == callID else { return }
             markActive()
@@ -718,6 +793,13 @@ final class CallManager: NSObject, ObservableObject {
         case "call.peer_media":
             guard cid == callID else { return }
             peerMuted = (d["muted"] as? Bool) ?? false
+            let wasVideo = video.isVideo
+            video.applyPeerMedia(d)
+            if video.isVideo && !wasVideo {
+                // they turned their camera on: a video call now (the loudspeaker, the video icon in CallKit)
+                if !speaker && !wantSpeaker { wantSpeaker = true; speaker = true; reapplySpeakerSoon() }
+                provider.reportCall(with: uuid, updated: callCapabilities())
+            }
         case "call.ended":
             guard cid == callID else { return }
             endReason = localReason ?? (d["reason"] as? String)
@@ -832,6 +914,7 @@ final class CallManager: NSObject, ObservableObject {
         role = .callee
         peerID = d["caller_id"] as? String
         uuid = CallManager.callUUID(id) ?? UUID()
+        video.applySummary(d, iAmCaller: false) // a video call rings with the video icon
         phase = .incoming
         peerName = NSLocalizedString("call.someone", comment: "")
         if let caller = d["caller_id"] as? String { Task { await lookUpName(caller) } }
@@ -919,6 +1002,7 @@ final class CallManager: NSObject, ObservableObject {
         if role == .caller {
             conn.add(track, streamIds: ["tf"]) // triggers negotiation: we make the first offer
             micAttached = true
+            video.attachForOffer(conn) // a video call: the camera's line in the same first offer
         }
         let queued = pendingSignals
         pendingSignals = []
@@ -1013,6 +1097,7 @@ final class CallManager: NSObject, ObservableObject {
                 try await pc.tfSetRemote(RTCSessionDescription(type: .offer, sdp: sdp))
                 lastRemoteOffer = sdp
                 attachMicIfNeeded()
+                video.attachForAnswer(pc) // my camera on the offered video line, or recvonly (sound only)
                 let answer = try await pc.tfAnswer()
                 try await pc.tfSetLocal(answer)
                 sendDescription(answer)
@@ -1193,6 +1278,7 @@ final class CallManager: NSObject, ObservableObject {
     /// send it again; a connection that is still down gets its ICE restart now instead of at the next step.
     private func resumeAfterSocketGap() {
         guard let conn = pc else { return }
+        sendMediaState() // the server relays both states to the other side again (protocol: after a sync resume)
         serially { [weak self] in
             guard let self, self.pc === conn else { return }
             // an ICE restart that waited for the socket (restartIce) is made now, whatever the count says
@@ -1353,6 +1439,7 @@ final class CallManager: NSObject, ObservableObject {
             && endReason != "answered_elsewhere" && endReason != "mic_denied"
         // the microphone first (privacy): no more samples leave, whatever the teardown below takes
         audioTrack?.isEnabled = false
+        video.stopCapture() // the camera too: the green dot goes off at once
         // what the person sees, before anything slow. The compact notice under the header (RootView) says how a call ended
         // that the other side, the server or the network ended; nothing when this phone's own End did it (website).
         endedByMe = userEnding && localReason == nil
@@ -1453,6 +1540,7 @@ final class CallManager: NSObject, ObservableObject {
                 speaker = false
                 wantSpeaker = false
                 peerMuted = false
+                self.video.reset()
                 ringing = false
                 reconnecting = false
                 peerID = nil
@@ -1468,6 +1556,13 @@ extension CallManager: RTCPeerConnectionDelegate {
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
+        if let v = rtpReceiver.track as? RTCVideoTrack {
+            Task { @MainActor in
+                guard self.pc === peerConnection else { return }
+                self.video.remoteArrived(v)
+            }
+            return
+        }
         guard let t = rtpReceiver.track as? RTCAudioTrack else { return }
         Task { @MainActor in
             // a connection that is not the current one (closing in the background after finish()) is ignored
@@ -1480,7 +1575,8 @@ extension CallManager: RTCPeerConnectionDelegate {
     nonisolated func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {
         Task { @MainActor in
             // the callee only negotiates for an ICE restart; its first answer comes from the caller's offer
-            guard self.pc === peerConnection, self.role == .caller || self.restartPending else { return }
+            guard self.pc === peerConnection, self.role == .caller || self.restartPending || self.video.wantsOffer else { return }
+            self.video.wantsOffer = false
             self.serially { [weak self] in await self?.makeOffer(peerConnection) }
         }
     }

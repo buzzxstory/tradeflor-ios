@@ -14,6 +14,15 @@ struct CallScreen: View {
     private var live: Bool { calls.phase != .ended && calls.phase != .idle }
 
     var body: some View {
+        // a video call (a video invite, or a camera turned on by either side) has its own screen
+        CallKindSwitch(video: calls.video, voice: voiceBody) { VideoCallScreen(calls: calls, video: calls.video, photo: photo) }
+            .task(id: calls.peerID) {
+                let img = await CallPhotoCache.shared.photo(token: token, userID: calls.peerID)
+                withAnimation(.easeIn(duration: 0.3)) { photo = img }
+            }
+    }
+
+    private var voiceBody: some View {
         ZStack {
             CallBackdrop(photo: photo)
             VStack(spacing: 0) {
@@ -29,10 +38,6 @@ struct CallScreen: View {
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .animation(.easeInOut(duration: 0.25), value: calls.phase)
         .animation(.easeInOut(duration: 0.2), value: calls.reconnecting)
-        .task(id: calls.peerID) {
-            let img = await CallPhotoCache.shared.photo(token: token, userID: calls.peerID)
-            withAnimation(.easeIn(duration: 0.3)) { photo = img }
-        }
     }
 
     // MARK: top
@@ -192,7 +197,7 @@ struct CallScreen: View {
     }
 
     /// WhatsApp's dark rounded sheet: Speaker, Message and Mute on the first row, End under them, each with its name.
-    /// Video, More and Share are left out: calls are voice only (server and website), and a button must do something.
+    /// Camera turns the voice call into a video call (IOS-VIDEO-005); More and Share are left out: a button must do something.
     private var panel: some View {
         VStack(spacing: 22) {
             HStack(spacing: 0) {
@@ -211,6 +216,11 @@ struct CallScreen: View {
                 }
                 labelled("call.mute") {
                     CallToggleButton(icon: "mic.slash.fill", label: "call.mute", on: calls.muted) { calls.toggleMute() }
+                }
+                labelled("vc.camera") {
+                    CallToggleButton(icon: "video.fill", label: "vc.camera", on: false) { calls.toggleCamera() }
+                        .opacity(calls.phase == .active ? 1 : 0.4)
+                        .disabled(calls.phase != .active)
                 }
             }
             labelled("call.hangup") {
@@ -404,5 +414,23 @@ private struct CallAura: View {
                 .animation(.linear(duration: 5).repeatForever(autoreverses: false), value: spin)
         }
         .onAppear { go = true; spin = true; breathe = true }
+    }
+}
+
+
+/// The voice screen or the video screen, following the call's video state (an ObservableObject of its own).
+private struct CallKindSwitch<Voice: View, Video: View>: View {
+    @ObservedObject var video: CallVideo
+    let voice: Voice
+    @ViewBuilder let videoScreen: () -> Video
+
+    init(video: CallVideo, voice: Voice, @ViewBuilder _ videoScreen: @escaping () -> Video) {
+        self.video = video
+        self.voice = voice
+        self.videoScreen = videoScreen
+    }
+
+    var body: some View {
+        if video.isVideo { videoScreen() } else { voice }
     }
 }

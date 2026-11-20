@@ -52,7 +52,7 @@ targets:
         TFAPIBase: $(TF_API_BASE)
         TFKeychainGroup: $(AppIdentifierPrefix)com.tradeflor.ios.shared
         # Usage strings (English base; Arabic in ar.lproj/InfoPlist.strings).
-        NSCameraUsageDescription: Tradeflor uses the camera so you can take photos and videos for chats and statuses.
+        NSCameraUsageDescription: Tradeflor uses the camera so you can take photos and videos for chats and statuses, and for video calls.
         NSMicrophoneUsageDescription: Tradeflor uses the microphone for voice messages and calls.
         NSLocalNetworkUsageDescription: Tradeflor uses your local network to connect voice calls directly and with the best sound.
         NSPhotoLibraryUsageDescription: Tradeflor opens your photo library so you can send photos and videos and post statuses.

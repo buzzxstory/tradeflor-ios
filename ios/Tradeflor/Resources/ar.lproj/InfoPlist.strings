@@ -1,5 +1,5 @@
 "CFBundleDisplayName" = "Tradeflor";
-"NSCameraUsageDescription" = "يستخدم Tradeflor الكاميرا لتلتقط صوراً وفيديوهات للمحادثات والحالات.";
+"NSCameraUsageDescription" = "يستخدم Tradeflor الكاميرا لتلتقط صوراً وفيديوهات للمحادثات والحالات، ولمكالمات الفيديو.";
 "NSMicrophoneUsageDescription" = "يستخدم Tradeflor الميكروفون للرسائل الصوتية والمكالمات.";
 "NSPhotoLibraryUsageDescription" = "يفتح Tradeflor مكتبة الصور لترسل صوراً وفيديوهات وتنشر حالات.";
 "NSPhotoLibraryAddUsageDescription" = "يحفظ Tradeflor في مكتبتك الصور والفيديوهات التي تختار الاحتفاظ بها.";
