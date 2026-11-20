@@ -150,8 +150,33 @@ struct MyProfilePage: View {
     private var edge: Color { Theme.accent.opacity(0.28) }
 
     /// The picture with its turquoise ring and camera badge, the name, the @handle, "Online" and the bio, on soft curved light lines.
+    @ObservedObject private var notes = NoteStore.shared
+    @State private var editingNote = false
+
+    /// My note over my picture, as WhatsApp's profile: tap to change it; "+ Add note" when there is none.
+    @ViewBuilder private var noteOverPicture: some View {
+        Button { editingNote = true } label: {
+            if let n = notes.mine, n.isLive() {
+                NoteBubble(note: n)
+            } else {
+                NoteBubble(note: AboutNote(text: NSLocalizedString("note.add.short", comment: ""), emoji: "＋"))
+                    .opacity(0.75)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("note.title"))
+        .fullScreenCover(isPresented: $editingNote) {
+            AboutNoteEditor(token: token, userID: profile?.user_id ?? "", avatarID: hasPhoto ? profile?.avatar_id : nil,
+                            name: displayName)
+        }
+        .task(id: token) { await notes.load(token: token) }
+    }
+
     private var hero: some View {
         VStack(spacing: 5) {
+            noteOverPicture
+                .padding(.bottom, -34) // over the top of the picture, like WhatsApp's thought bubble
+                .zIndex(1)
             ZStack {
                 ProfileHeroLines().frame(height: 160)
                 ZStack(alignment: .bottomTrailing) {
