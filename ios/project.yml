@@ -31,6 +31,9 @@ targets:
         buildPhase: resources
     dependencies:
       - package: WebRTC
+      # the Notification Service Extension (sender and text in alerts, as WhatsApp). The signed CI build drops it when its
+      # profile secret (IOS_NSE_PROFILE_BASE64) is not set yet.
+      - target: TradeflorNotify
     info:
       path: Tradeflor/Resources/Info.plist
       properties:
@@ -47,6 +50,7 @@ targets:
             CFBundleURLSchemes: [tradeflor]
         ITSAppUsesNonExemptEncryption: false
         TFAPIBase: $(TF_API_BASE)
+        TFKeychainGroup: $(AppIdentifierPrefix)com.tradeflor.ios.shared
         # Usage strings (English base; Arabic in ar.lproj/InfoPlist.strings).
         NSCameraUsageDescription: Tradeflor uses the camera so you can take photos and videos for chats and statuses.
         NSMicrophoneUsageDescription: Tradeflor uses the microphone for voice messages and calls.
@@ -58,12 +62,29 @@ targets:
         # audio: a call's sound and voice-note playback with the screen locked; location: a live-location share keeps going
         # for the time picked; voip: PushKit calls. No remote-notification: nothing handles a silent push (audit IOS-APL-4).
         UIBackgroundModes: [audio, location, voip]
+        # Home Screen quick actions (press and hold the icon), as WhatsApp; titles in InfoPlist.strings (App/QuickActions.swift)
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: com.tradeflor.ios.search
+            UIApplicationShortcutItemTitle: QuickSearch
+            UIApplicationShortcutItemIconSymbolName: magnifyingglass
+          - UIApplicationShortcutItemType: com.tradeflor.ios.newchat
+            UIApplicationShortcutItemTitle: QuickNewChat
+            UIApplicationShortcutItemIconSymbolName: square.and.pencil
+          - UIApplicationShortcutItemType: com.tradeflor.ios.camera
+            UIApplicationShortcutItemTitle: QuickCamera
+            UIApplicationShortcutItemIconSymbolName: camera
+          - UIApplicationShortcutItemType: com.tradeflor.ios.myqr
+            UIApplicationShortcutItemTitle: QuickMyQR
+            UIApplicationShortcutItemIconSymbolName: qrcode
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tradeflor.ios
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO
+        # set by the signed CI build only (per target: the app and its extension have their own profile and entitlements)
+        CODE_SIGN_ENTITLEMENTS: $(TF_APP_ENTITLEMENTS)
+        PROVISIONING_PROFILE_SPECIFIER: $(TF_APP_PROFILE)
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: ""
         # Device builds stay unsigned: Sideloadly/AltStore signs the IPA with the owner's own free Apple ID.
@@ -71,6 +92,33 @@ targets:
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGN_IDENTITY: ""
         # Simulator builds are ad-hoc signed ("-", no Apple account), so the Keychain works in the simulator.
+        "CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": YES
+        "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+  TradeflorNotify:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: TradeflorNotify
+    info:
+      path: TradeflorNotify/Info.plist
+      properties:
+        CFBundleDisplayName: Tradeflor Notifications
+        TFAPIBase: $(TF_API_BASE)
+        TFKeychainGroup: $(AppIdentifierPrefix)com.tradeflor.ios.shared
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tradeflor.ios.NotificationService
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: $(TF_NSE_ENTITLEMENTS)
+        PROVISIONING_PROFILE_SPECIFIER: $(TF_NSE_PROFILE)
+        CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGNING_ALLOWED: NO
+        CODE_SIGNING_REQUIRED: NO
+        CODE_SIGN_IDENTITY: ""
         "CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]": YES
         "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
   TradeflorTests:

@@ -18,6 +18,13 @@ struct ChatListView: View {
     @State private var path: [ConversationSummary] = []
     @State private var ciOpened = false
     @State private var showNew = false
+    /// Home Screen quick actions (QuickActions): search, my QR code, camera and the photo it took.
+    @ObservedObject private var quick = QuickActions.shared
+    @State private var searchFocus = 0
+    @State private var showMyQR = false
+    @State private var showQuickCamera = false
+    @State private var quickPhoto: UIImage?
+    @State private var showQuickSend = false
     @State private var showFlash = false
     @State private var showContacts = false
     @State private var folders: [ChatFolder] = []
@@ -48,6 +55,20 @@ struct ChatListView: View {
     /// Live events refresh the list at once; this slow poll only covers a socket that is down.
     private let refreshEvery: UInt64 = 30
     private var token: String { store.session?.token ?? "" }
+
+    /// A Home Screen quick action, taken once (the root switched to this tab first).
+    private func takeQuickAction(_ a: QuickActions.Action?) {
+        guard let a else { return }
+        quick.pending = nil
+        path = []
+        switch a {
+        case .search: searchFocus += 1
+        case .newChat: showNew = true
+        case .myQR: showMyQR = true
+        case .camera:
+            if CameraPicker.isAvailable { quickPhoto = nil; showQuickCamera = true }
+        }
+    }
 
     private var shown: [ConversationSummary] {
         let q = ListSearch.needle(query)
@@ -131,7 +152,7 @@ struct ChatListView: View {
             // conversations scroll; nothing moves up or down by itself, a tap anywhere closes the keyboard and still works
             VStack(spacing: 0) {
                 header
-                ListSearchField(placeholder: "chats.search", text: $query)
+                ListSearchField(placeholder: "chats.search", text: $query, focusRequest: searchFocus)
                 StatusStrip()
                 chipsRow
                 ScrollView {
@@ -210,6 +231,17 @@ struct ChatListView: View {
                 }
                 .tfColorScheme()
             }
+            .sheet(isPresented: $showMyQR) { NavigationStack { MyQRView() }.environmentObject(store).tfColorScheme() }
+            .fullScreenCover(isPresented: $showQuickCamera, onDismiss: { if quickPhoto != nil { showQuickSend = true } }) {
+                CameraPicker { img in quickPhoto = img }.ignoresSafeArea()
+            }
+            .sheet(isPresented: $showQuickSend, onDismiss: { quickPhoto = nil }) {
+                if let photo = quickPhoto {
+                    QuickSendSheet(token: token, chats: shown, photo: photo) { c in path = [c] }
+                }
+            }
+            .onAppear { takeQuickAction(quick.pending) }
+            .onChange(of: quick.pending) { a in takeQuickAction(a) }
         }
         // a burst of new messages (a busy group) is one reload, not one per message: that redrew the list all the time
         // groups are not in this list: their messages and receipts never reload it

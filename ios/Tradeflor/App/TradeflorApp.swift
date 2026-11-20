@@ -201,6 +201,8 @@ struct RootView: View {
             #endif
         }
         .onChange(of: store.session?.token) { _ in syncLive() }
+        // a Home Screen quick action (Search, New Chat, Camera, My QR code): the Chats tab takes it
+        .onReceive(QuickActions.shared.$pending) { a in if a != nil { tab = "chats" } }
         .onReceive(live.sessionInvalid) { _ in if store.session != nil { store.sessionExpired() } }
         // the first moments after unlocking the phone: a touch that was meant for the lock screen or an animation still running
         // is not a tap on a row (it opened a chat by itself)

@@ -6,3 +6,7 @@
 "NSFaceIDUsageDescription" = "Tradeflor uses Face ID to unlock your locked chats.";
 "NSLocationWhenInUseUsageDescription" = "Tradeflor shares your live location in a chat only when you choose to, for the time you pick, also while the app is in the background.";
 "NSLocalNetworkUsageDescription" = "Tradeflor uses your local network to connect voice calls directly and with the best sound.";
+"QuickSearch" = "Search";
+"QuickNewChat" = "New Chat";
+"QuickCamera" = "Camera";
+"QuickMyQR" = "My QR code";

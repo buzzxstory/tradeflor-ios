@@ -71,6 +71,7 @@ final class PushManager: NSObject, ObservableObject {
         bearer = token
         UIApplication.shared.registerForRemoteNotifications()
         prepareRegistry()
+        PushKeys.mirrorShared() // the notification extension reads the alert pair from the shared keychain group
         // the registry outlived a sign-out (it is never dropped): its token is read again here, PushKit does not hand it out twice
         if voipHex.isEmpty, let t = registry?.pushToken(for: .voIP) { voipHex = t.map { String(format: "%02x", $0) }.joined() }
         // tokens that arrived before the session was known (a launch by a push) are sent now
@@ -259,6 +260,40 @@ enum PushKeys {
                     kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
                     kSecValueData as String: data] as CFDictionary, nil)
         remember(id)
+        if kind == "alert" { saveShared(data) }
+    }
+
+    // MARK: shared with the Notification Service Extension (TradeflorNotify)
+
+    /// The keychain group the app and its notification extension share ($(AppIdentifierPrefix)com.tradeflor.ios.shared).
+    /// Empty or refused in an unsigned or simulator build: then the extension simply finds nothing.
+    private static var sharedGroup: String? {
+        let g = (Bundle.main.object(forInfoDictionaryKey: "TFKeychainGroup") as? String) ?? ""
+        return g.isEmpty || g.hasPrefix("$(") ? nil : g
+    }
+    private static let sharedService = "com.tradeflor.ios.push.shared"
+
+    /// The alert subscription's id and secret for the extension, which asks /push/peek for the real text of a notice.
+    private static func saveShared(_ data: Data) {
+        guard let group = sharedGroup else { return }
+        deleteShared()
+        SecItemAdd([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: sharedService,
+                    kSecAttrAccount as String: "alert", kSecAttrAccessGroup as String: group,
+                    kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+                    kSecValueData as String: data] as CFDictionary, nil)
+    }
+
+    private static func deleteShared() {
+        guard let group = sharedGroup else { return }
+        SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: sharedService,
+                       kSecAttrAccount as String: "alert", kSecAttrAccessGroup as String: group] as CFDictionary)
+    }
+
+    /// On every start with a session: the pair kept by an earlier build (or before the extension existed) is copied for it.
+    static func mirrorShared() {
+        guard let pair = load("alert"), let id = pair["id"], let secret = pair["secret"], !id.isEmpty,
+              let data = try? JSONEncoder().encode(["id": id, "secret": secret]) else { return }
+        saveShared(data)
     }
 
     /// Every subscription id this account was given on this phone since it signed in (the older server hands out a new one
@@ -310,7 +345,7 @@ enum PushKeys {
                        kSecAttrAccount as String: kind] as CFDictionary)
     }
 
-    static func clear() { delete("alert"); delete("voip"); delete(historyAccount) }
+    static func clear() { delete("alert"); delete("voip"); delete(historyAccount); deleteShared() }
 }
 
 /// Receives the system's token callbacks and starts push when the app is launched (also in the background by a push).
@@ -324,6 +359,14 @@ final class TradeflorAppDelegate: NSObject, UIApplicationDelegate {
             if let s = Keychain.load() { PushManager.shared.start(token: s.token) }
         }
         return true
+    }
+
+    /// The app's scene uses QuickActionSceneDelegate, which passes Home Screen quick actions on (SwiftUI keeps its own window).
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,
+                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        let c = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        c.delegateClass = QuickActionSceneDelegate.self
+        return c
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

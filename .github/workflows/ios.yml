@@ -88,6 +88,8 @@ jobs:
       #   IOS_P12_BASE64      base64 of the Apple Distribution .p12
       #   IOS_P12_PASSWORD    the .p12 password
       #   IOS_PROFILE_BASE64  base64 of the Ad Hoc .mobileprovision
+      #   IOS_NSE_PROFILE_BASE64  optional: base64 of the Ad Hoc profile of the notification extension
+      #                       (com.tradeflor.ios.NotificationService). Without it the IPA is built without the extension.
       - name: Check signing secrets
         id: signing
         env:
@@ -102,6 +104,7 @@ jobs:
           IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
           IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
           IOS_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+          IOS_NSE_PROFILE_BASE64: ${{ secrets.IOS_NSE_PROFILE_BASE64 }}
           TEAM_ID: Y77J267QX7
           RUNNER_TEMP_DIR: ${{ runner.temp }}
         run: |
@@ -137,6 +140,26 @@ jobs:
           # the profile must be for this app's bundle identifier, else the IPA cannot be installed
           APPID=$(security cms -D -i "$PROF" | plutil -extract Entitlements.application-identifier raw -)
           case "$APPID" in *".com.tradeflor.ios") ;; *) echo "profile is for $APPID, not com.tradeflor.ios"; exit 1;; esac
+          # the notification extension (sender and text in alerts): signed with its own profile, or left out of this IPA
+          NSENAME=""
+          NSE_PLIST=""
+          if [ -n "${IOS_NSE_PROFILE_BASE64:-}" ]; then
+            NSEPROF="$RUNNER_TEMP_DIR/nse.mobileprovision"
+            echo "$IOS_NSE_PROFILE_BASE64" | base64 --decode > "$NSEPROF"
+            NSEUUID=$(security cms -D -i "$NSEPROF" | plutil -extract UUID raw -)
+            NSENAME=$(security cms -D -i "$NSEPROF" | plutil -extract Name raw -)
+            NSEAPPID=$(security cms -D -i "$NSEPROF" | plutil -extract Entitlements.application-identifier raw -)
+            case "$NSEAPPID" in *".com.tradeflor.ios.NotificationService") ;; *) echo "extension profile is for $NSEAPPID, not com.tradeflor.ios.NotificationService"; exit 1;; esac
+            cp "$NSEPROF" "$HOME/Library/MobileDevice/Provisioning Profiles/$NSEUUID.mobileprovision"
+            rm -f "$NSEPROF"
+            NSE_PLIST="<key>com.tradeflor.ios.NotificationService</key><string>$NSENAME</string>"
+            echo "notification extension ON (profile $NSENAME)"
+          else
+            echo "::notice::IOS_NSE_PROFILE_BASE64 not set: the IPA is built without the notification extension (alerts say New message)"
+            command -v yq >/dev/null || brew install yq >/dev/null
+            yq -i 'del(.targets.TradeflorNotify) | .targets.Tradeflor.dependencies |= map(select(has("target") | not))' project.yml
+            xcodegen generate
+          fi
           cat > ExportAdHoc.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -145,19 +168,19 @@ jobs:
             <key>teamID</key><string>$TEAM_ID</string>
             <key>signingStyle</key><string>manual</string>
             <key>signingCertificate</key><string>Apple Distribution</string>
-            <key>provisioningProfiles</key><dict><key>com.tradeflor.ios</key><string>$NAME</string></dict>
+            <key>provisioningProfiles</key><dict><key>com.tradeflor.ios</key><string>$NAME</string>$NSE_PLIST</dict>
             <key>compileBitcode</key><false/>
           </dict></plist>
           PLIST
           # Push Notifications: the app declares aps-environment only when the profile allows it (else the archive is refused)
           ENT_ARG=""
           if security cms -D -i "$PROF" | plutil -extract Entitlements.aps-environment raw - >/dev/null 2>&1; then
-            ENT_ARG="CODE_SIGN_ENTITLEMENTS=Entitlements/Tradeflor.entitlements"
+            ENT_ARG="TF_APP_ENTITLEMENTS=Entitlements/Tradeflor.entitlements"
             echo "push entitlement ON (profile has aps-environment)"
           else
             echo "::notice::the profile has no Push Notifications: signed without remote push"
           fi
-          xcodebuild archive             -project Tradeflor.xcodeproj -scheme Tradeflor -configuration Release             -sdk iphoneos -destination "generic/platform=iOS" -archivePath build/Tradeflor.xcarchive             -derivedDataPath build             CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$TEAM_ID"             PROVISIONING_PROFILE_SPECIFIER="$NAME" CODE_SIGN_IDENTITY="Apple Distribution"             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES $ENT_ARG OTHER_CODE_SIGN_FLAGS="--keychain $KC" | tee build-signed.log | grep -E "error:|\*\* ARCHIVE" || true
+          xcodebuild archive             -project Tradeflor.xcodeproj -scheme Tradeflor -configuration Release             -sdk iphoneos -destination "generic/platform=iOS" -archivePath build/Tradeflor.xcarchive             -derivedDataPath build             CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$TEAM_ID"             TF_APP_PROFILE="$NAME" TF_NSE_PROFILE="$NSENAME" TF_NSE_ENTITLEMENTS=Entitlements/TradeflorNotify.entitlements CODE_SIGN_IDENTITY="Apple Distribution"             CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES $ENT_ARG OTHER_CODE_SIGN_FLAGS="--keychain $KC" | tee build-signed.log | grep -E "error:|\*\* ARCHIVE" || true
           grep -q "\*\* ARCHIVE SUCCEEDED \*\*" build-signed.log
           xcodebuild -exportArchive -archivePath build/Tradeflor.xcarchive -exportPath build/signed             -exportOptionsPlist ExportAdHoc.plist | tee export.log | grep -E "error:|\*\* EXPORT" || true
           grep -q "\*\* EXPORT SUCCEEDED \*\*" export.log
@@ -169,6 +192,11 @@ jobs:
           plutil -extract application-identifier raw Payload/Tradeflor.app/embedded.mobileprovision >/dev/null 2>&1 || true
           security cms -D -i Payload/Tradeflor.app/embedded.mobileprovision | plutil -extract Name raw - | grep -qx "$NAME"
           echo "profile $NAME embedded ok"
+          if [ -n "$NSENAME" ]; then
+            test -d Payload/Tradeflor.app/PlugIns/TradeflorNotify.appex
+            codesign --verify --strict Payload/Tradeflor.app/PlugIns/TradeflorNotify.appex && echo "notification extension signed ok"
+            codesign -d --entitlements - Payload/Tradeflor.app/PlugIns/TradeflorNotify.appex 2>/dev/null | grep -q "com.tradeflor.ios.shared" && echo "extension keychain group ok"
+          fi
           cd ..
           # clean up the signing material
           security delete-keychain "$KC" || true

@@ -6,3 +6,7 @@
 "NSFaceIDUsageDescription" = "يستخدم Tradeflor بصمة الوجه Face ID لفتح المحادثات المقفلة.";
 "NSLocationWhenInUseUsageDescription" = "يشارك Tradeflor موقعك المباشر في محادثة فقط عندما تختار ذلك، وللمدة التي تحددها، حتى والتطبيق في الخلفية.";
 "NSLocalNetworkUsageDescription" = "يستخدم Tradeflor شبكتك المحلية لتوصيل المكالمات الصوتية مباشرة وبأفضل جودة صوت.";
+"QuickSearch" = "بحث";
+"QuickNewChat" = "محادثة جديدة";
+"QuickCamera" = "الكاميرا";
+"QuickMyQR" = "رمز QR الخاص بي";

@@ -8,5 +8,13 @@
 	<!-- The "Incoming call" alert may break through Focus (the server sends interruption-level time-sensitive). The profile has the capability since 2026-11-20. -->
 	<key>com.apple.developer.usernotifications.time-sensitive</key>
 	<true/>
+	<!-- Keychain: the app's own group first (it stays the default for the session and push keys already saved), then the group
+	     shared with the notification extension (TradeflorNotify), which reads the alert subscription's id and secret there.
+	     The Ad Hoc profile allows Y77J267QX7.* -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.tradeflor.ios</string>
+		<string>$(AppIdentifierPrefix)com.tradeflor.ios.shared</string>
+	</array>
 </dict>
 </plist>

@@ -254,6 +254,9 @@ enum ListSearch {
 struct ListSearchField: View {
     let placeholder: LocalizedStringKey
     @Binding var text: String
+    /// Bumped from outside to put the cursor in the field (the Search quick action on the app icon).
+    var focusRequest: Int = 0
+    @FocusState private var focused: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -271,6 +274,8 @@ struct ListSearchField: View {
                     .autocorrectionDisabled()
                     .submitLabel(.search)
                     .accessibilityLabel(Text(placeholder))
+                    .focused($focused)
+                    .onChange(of: focusRequest) { _ in focused = true }
             }
             if !text.isEmpty {
                 Button { text = "" } label: {
