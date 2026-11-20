@@ -186,9 +186,10 @@ struct LinkedDevicesView: View {
                         if let current {
                             sectionTitle("ld.sec.this")
                             VStack(spacing: 0) { row(current) }
-                                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(LD.currentFill))
+                                // the glow is cast by the card's shape only (not worked out again from the row inside it)
+                                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(LD.currentFill)
+                                    .shadow(color: Theme.dyn(0x35E6F2, 0x0B5E68, 0.12, 0.12), radius: 11))
                                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.dyn(0x35E6F2, 0x00A8B5, 0.65, 0.55), lineWidth: 1))
-                                .shadow(color: Theme.dyn(0x35E6F2, 0x0B5E68, 0.12, 0.12), radius: 11)
                         }
                         if !others.isEmpty {
                             sectionTitle("ld.sec.others")

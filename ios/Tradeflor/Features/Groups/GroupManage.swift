@@ -1367,7 +1367,9 @@ struct GroupInfoView: View {
         return HStack(spacing: 11) {
             Avatar(token: token, userID: m.user_id, avatarID: m.avatar_id, title: m.title, size: 36)
                 .frame(width: 38, height: 38)
-                .overlay(Circle().stroke(ring, lineWidth: 2).shadow(color: glow, radius: isOwner ? 6 : 5))
+                // only the owner's and the admins' rings exist: an ordinary member's row no longer draws a clear ring with
+                // a clear glow (still a shadow to work out, for every member while the list scrolls)
+                .overlay { if isOwner || isAdmin { Circle().stroke(ring, lineWidth: 2).shadow(color: glow, radius: isOwner ? 6 : 5) } }
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 5) {
                     (Text(m.title).font(.system(size: 14.5, weight: .semibold)).foregroundColor(Theme.text)

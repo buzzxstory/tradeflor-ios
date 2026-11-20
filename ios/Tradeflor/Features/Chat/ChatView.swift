@@ -256,6 +256,8 @@ struct ChatView: View {
         // a picked chat theme has a dark wallpaper in day mode too: its bubbles and labels take the night colours there
         .environment(\.colorScheme, (themeID.isEmpty || themeID == "tradeflor") ? appScheme : .dark)
         .opacity(revealed ? 1 : 0)
+        // while it is hidden (at most 0.7 s) it takes no touch: a tap there opened a photo or a link nobody could see
+        .allowsHitTesting(revealed)
         .task {
             // at most 0.7 s hidden, as the web (useHistoryScroll settleOpen): then shown already at the end
             try? await Task.sleep(nanoseconds: 700_000_000)
@@ -264,10 +266,9 @@ struct ChatView: View {
         .scrollDismissesKeyboard(.interactively)
         .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })
         // a scroll by hand: from then on the opening's "settle on the end again" steps leave the list where I put it
-        // (alongside the scroll, never instead of it; a plain flag, so nothing is redrawn)
-        .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in
-            if !flags.userScrolledUp { flags.userScrolledUp = true }
-        })
+        // (alongside the scroll, never instead of it; a plain flag, so nothing is redrawn). iOS 18+ reads the scroll's own
+        // phase instead of a drag gesture laid on the scroll view.
+        .modifier(UserScrollWatch { if !flags.userScrolledUp { flags.userScrolledUp = true } })
     }
 
     private func messageStack(_ proxy: ScrollViewProxy) -> some View {
@@ -587,6 +588,7 @@ struct ChatView: View {
             Text(toast).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
                 .padding(.horizontal, 14).padding(.vertical, 8).background(Theme.card, in: Capsule())
                 .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1)).padding(.top, 10)
+                .allowsHitTesting(false) // a note over the messages never takes the touch meant for them
         }
     }
 

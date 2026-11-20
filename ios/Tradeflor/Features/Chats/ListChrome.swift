@@ -537,9 +537,27 @@ struct ListAmbientBackground: View {
 struct ListNoBounce: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 16.4, *) {
-            content.scrollBounceBehavior(.basedOnSize)
+            // always (as WhatsApp): a finger on the names drags the list and it springs back, even when every chat fits on
+            // screen. With .basedOnSize a short list did not move at all, which felt frozen.
+            content.scrollBounceBehavior(.always)
         } else {
             content
+        }
+    }
+}
+
+/// Tells when the person moves a scroll view by hand. iOS 18+: the scroll view's own phase (nothing is laid on top of the
+/// scroll, so it can never hold back a pan); earlier: a drag that runs alongside the scroll, never instead of it.
+struct UserScrollWatch: ViewModifier {
+    let onUserScroll: () -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onScrollPhaseChange { _, phase in
+                if phase == .interacting { onUserScroll() }
+            }
+        } else {
+            content.simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in onUserScroll() })
         }
     }
 }

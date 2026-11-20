@@ -327,12 +327,17 @@ struct SettingsBackground: View {
 
 extension View {
     /// The card look: radius 18, the navy gradient, a thin turquoise-tinted edge, a soft drop shadow.
+    /// The shadow is cast by the card's shape alone, drawn behind it: on the whole card it was worked out again from every
+    /// row, icon and text inside it, for each card, while the page scrolled. The look is the same (the fill is near opaque).
     func sCardChrome(border: Color = SetUI.edge) -> some View {
         self
-            .background(SetUI.fill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(SetUI.fill)
+                    .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.22, 0.12), radius: 12, y: 8)
+            )
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(border, lineWidth: 1))
-            .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.22, 0.12), radius: 12, y: 8)
     }
 }
 

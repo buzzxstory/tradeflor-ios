@@ -184,6 +184,7 @@ struct ChatListView: View {
                 if let toast {
                     Text(toast).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
                         .padding(.horizontal, 14).padding(.vertical, 8).background(Theme.card, in: Capsule()).padding(.bottom, 16)
+                        .allowsHitTesting(false) // over the last rows: a tap or a drag there reaches the list
                 }
             }
             .toolbar(.hidden, for: .navigationBar)

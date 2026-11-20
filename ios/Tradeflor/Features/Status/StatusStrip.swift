@@ -114,12 +114,17 @@ struct StatusStrip: View {
                 avatar()
                     .frame(width: faceSize, height: faceSize)
                     .frame(width: ringSize, height: ringSize)
-                    .overlay(
-                        // 18-status.css: accent with a soft glow = new, grey = watched, dashed blue = nothing yet
-                        Circle().strokeBorder(style: StrokeStyle(lineWidth: 2, dash: ring == .none ? [4, 3] : []))
-                            .foregroundStyle(ring == .unseen ? Theme.accent : (ring == .seen ? Theme.dyn(0xA9B9C5, 0x5F7686, 0.35, 0.35) : Theme.dyn(0x288CAF, 0x00A8B5, 0.55, 0.55)))
-                            .shadow(color: ring == .unseen ? Theme.hex(0x00D4DF, 0.3) : .clear, radius: 5)
-                    )
+                    .overlay {
+                        // 18-status.css: accent with a soft glow = new, grey = watched, dashed blue = nothing yet. The glow
+                        // only where it shows (a clear one was still a shadow to draw for every ring)
+                        if ring == .unseen {
+                            Circle().strokeBorder(lineWidth: 2).foregroundStyle(Theme.accent)
+                                .shadow(color: Theme.hex(0x00D4DF, 0.3), radius: 5)
+                        } else {
+                            Circle().strokeBorder(style: StrokeStyle(lineWidth: 2, dash: ring == .none ? [4, 3] : []))
+                                .foregroundStyle(ring == .seen ? Theme.dyn(0xA9B9C5, 0x5F7686, 0.35, 0.35) : Theme.dyn(0x288CAF, 0x00A8B5, 0.55, 0.55))
+                        }
+                    }
                 Text(name).font(.system(size: 11)).foregroundStyle(Theme.faint)
                     .lineLimit(1)
                     .truncationMode(.tail)

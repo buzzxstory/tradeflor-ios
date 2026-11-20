@@ -308,11 +308,15 @@ struct GroupsListView: View {
                                 Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id, size: 43)
                                     .frame(width: 43, height: 43)
                                     .frame(width: 52, height: 52)
-                                    .overlay(
-                                        Circle().strokeBorder(style: StrokeStyle(lineWidth: 2))
-                                            .foregroundStyle(unread ? Theme.accent : Theme.dyn(0xA9B9C5, 0x5F7686, 0.35, 0.35))
-                                            .shadow(color: unread ? Theme.hex(0x00D4DF, 0.3) : .clear, radius: 5)
-                                    )
+                                    .overlay {
+                                        // the glow only on a lit ring (a clear one was still a shadow to draw)
+                                        if unread {
+                                            Circle().strokeBorder(lineWidth: 2).foregroundStyle(Theme.accent)
+                                                .shadow(color: Theme.hex(0x00D4DF, 0.3), radius: 5)
+                                        } else {
+                                            Circle().strokeBorder(lineWidth: 2).foregroundStyle(Theme.dyn(0xA9B9C5, 0x5F7686, 0.35, 0.35))
+                                        }
+                                    }
                                 Text(g.name).font(.system(size: 11)).foregroundStyle(Theme.faint)
                                     .lineLimit(1).truncationMode(.tail).frame(height: 15).frame(maxWidth: 60)
                             }
