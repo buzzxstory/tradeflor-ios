@@ -64,7 +64,32 @@ struct CallClock: View {
     }
 }
 
-/// The green "Tap to return to call" bar shown above the app while a call runs and its screen is minimized.
+/// The colours of the return-to-call bar: the app's own deep teal with a turquoise edge (the flat green of the system bar
+/// clashed with every screen), the status bar area in the same colour.
+enum CallBarLook {
+    static let ground = LinearGradient(colors: [Theme.dyn(0x06404B, 0xDDF6F7), Theme.dyn(0x032C37, 0xEAF9FA)],
+                                       startPoint: .top, endPoint: .bottom)
+    static let top = Theme.dyn(0x06404B, 0xDDF6F7)
+    static let edge = Theme.dyn(0x08D9D9, 0x0097A5, 0.45, 0.45)
+    static let ink = Theme.dyn(0xFFFFFF, 0x0F2533)
+    static let accent = Theme.dyn(0x2FE6E6, 0x007F8C)
+}
+
+/// A soft turquoise pulse: the call is live.
+private struct CallPulse: View {
+    @State private var on = false
+    var body: some View {
+        ZStack {
+            Circle().fill(CallBarLook.accent.opacity(0.35)).frame(width: 16, height: 16).scaleEffect(on ? 1 : 0.5).opacity(on ? 0 : 1)
+            Circle().fill(CallBarLook.accent).frame(width: 7, height: 7)
+        }
+        .frame(width: 16, height: 16)
+        .onAppear { withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { on = true } }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The "Tap to return to call" bar shown above the app while a call runs and its screen is minimized.
 /// Drop-in for the inline bar in RootView's `.safeAreaInset(edge: .top)`.
 struct CallReturnBar: View {
     @ObservedObject var calls: CallManager
@@ -76,8 +101,10 @@ struct CallReturnBar: View {
                 calls.showScreen = true
             } label: {
                 HStack(spacing: 8) {
+                    CallPulse()
                     Image(systemName: calls.muted ? "mic.slash.fill" : "phone.fill")
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(CallBarLook.accent)
                     Text(calls.peerName).fontWeight(.semibold).lineLimit(1)
                     Spacer(minLength: 8)
                     Group {
@@ -90,12 +117,16 @@ struct CallReturnBar: View {
                         }
                     }
                     .lineLimit(1)
+                    .monospacedDigit()
+                    .foregroundStyle(CallBarLook.accent)
+                    Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold)).foregroundStyle(CallBarLook.accent)
                 }
                 .font(.subheadline)
-                .foregroundStyle(.white)
+                .foregroundStyle(CallBarLook.ink)
                 .padding(.horizontal, 16).padding(.vertical, 9)
                 .frame(maxWidth: .infinity)
-                .background(Theme.hex(0x14C27A))
+                .background(CallBarLook.ground)
+                .overlay(alignment: .bottom) { Rectangle().fill(CallBarLook.edge).frame(height: 1) }
             }
             .buttonStyle(.plain)
             .accessibilityLabel(Text(calls.peerName))
@@ -105,7 +136,7 @@ struct CallReturnBar: View {
     }
 }
 
-/// Puts the app below the green call bar: the bar fills the status bar area and its own row, the screens start under it.
+/// Puts the app below the call bar: the bar fills the status bar area and its own row, the screens start under it.
 struct CallBarSpace: ViewModifier {
     @ObservedObject var calls: CallManager
 
@@ -113,7 +144,7 @@ struct CallBarSpace: ViewModifier {
         VStack(spacing: 0) {
             if !calls.showScreen && calls.lineInUse {
                 CallReturnBar(calls: calls)
-                    .background(Theme.hex(0x14C27A).ignoresSafeArea(edges: .top))
+                    .background(CallBarLook.top.ignoresSafeArea(edges: .top))
             }
             content
         }
