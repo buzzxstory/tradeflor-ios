@@ -38,6 +38,13 @@ struct ChatView: View {
     @State private var peerTypingUntil: Date?
     @State private var lastTypingSent = Date.distantPast
     @State private var confirmBlock = false
+    @State private var confirmClearChat = false
+    /// The next voice note goes as "view once" (the 1 next to the recording bar).
+    @State private var voiceOnce = false
+    @State private var openingOnce: Message?
+    /// Bumped when a view-once viewer closes, so its bubble turns to "Opened" at once.
+    @State private var onceTick = 0
+    @State private var confirmDeleteChat = false
     @State private var showInfo = false
     @State private var showSchedule = false
     @State private var showNoteRecorder = false
@@ -142,7 +149,7 @@ struct ChatView: View {
     /// Photo messages by id (their file), for the small picture in a reply to a photo.
     private var replyPhotoIDs: [String: String] {
         var out: [String: String] = [:]
-        for x in messages where x.kind == "image" && !x.isDeleted { if let f = x.file_id { out[x.id] = f } }
+        for x in messages where x.kind == "image" && !x.isDeleted && !x.isViewOnce { if let f = x.file_id { out[x.id] = f } }
         return out
     }
     @State private var groupStatus: StatusGroup?
@@ -332,7 +339,7 @@ struct ChatView: View {
             : nil
         let handle: String? = lookIDs.contains(m.sender_id) ? members.first(where: { $0.user_id == m.sender_id })?.username : nil
         return MessageRowOptions(
-            isGroup: isGroup, restricted: restricted, canPin: isGroup && isAdmin,
+            isGroup: isGroup, restricted: restricted || m.isViewOnce, canPin: isGroup && isAdmin && !m.isViewOnce, // view once: never forwarded, copied or pinned
             pinned: pins.contains { $0.message_id == m.id },
             selecting: selecting, selected: selected.contains(m.id),
             highlighted: hitID == m.id,
@@ -366,7 +373,7 @@ struct ChatView: View {
             report: { flash("chat.report.soon") },
             moreReactions: { reactTarget = m; showEmoji = true },
             comments: { commentsFor = m },
-            save: m.file_id == nil ? nil : { Task { await saveAttachment(m) } },
+            save: m.file_id == nil || m.isViewOnce ? nil : { Task { await saveAttachment(m) } },
             openSender: !isGroup || asGroup || m.sender_id == me ? nil : {
                 if let u = members.first(where: { $0.user_id == m.sender_id }) {
                     profileFor = MemberProfileRef(userID: u.user_id, username: u.username)
@@ -695,6 +702,31 @@ struct ChatView: View {
                 if let u = peerTypingUntil, u <= now { peerTypingUntil = nil }
             }
         }
+        .confirmationDialog(Text("civ3.clear.confirm"), isPresented: $confirmClearChat, titleVisibility: .visible) {
+            Button("civ3.clear", role: .destructive) {
+                Task {
+                    // every message leaves my view on all my devices (the live "hidden" event drops them); the other person keeps theirs
+                    if (try? await APIClient.shared.civ3ClearChat(token: token, conversationID: chat.conversation_id)) != nil {
+                        flash("chat.cleared")
+                    } else {
+                        flash("chat.action.failed")
+                    }
+                }
+            }
+        } message: {
+            Text(verbatim: String(format: NSLocalizedString("civ3.clear.msg", comment: ""), chat.title))
+        }
+        .confirmationDialog(Text("chats.delete.confirm"), isPresented: $confirmDeleteChat, titleVisibility: .visible) {
+            Button("chats.delete", role: .destructive) {
+                // off the chat list until a newer message comes (this phone only), as the list's own Delete chat
+                let key = BadgeStore.hiddenKey(me)
+                var d = (UserDefaults.standard.dictionary(forKey: key) as? [String: Double]) ?? [:]
+                d[chat.conversation_id] = Date().timeIntervalSince1970
+                UserDefaults.standard.set(d, forKey: key)
+                NotificationCenter.default.post(name: .tfHiddenChatsChanged, object: nil)
+                dismissView()
+            }
+        }
         .confirmationDialog(Text(String(format: NSLocalizedString("chat.block.confirm", comment: ""), chat.title)),
                             isPresented: $confirmBlock, titleVisibility: .visible) {
             Button("chat.block", role: .destructive) {
@@ -945,7 +977,13 @@ struct ChatView: View {
                 unseenBelow.append(m.id)
                 if isGroup && ChatEdit.mentions(m, me: me) { unseenMentions.append(m.id) }
             }
-            if m.sender_id != me { markSeenSoon() }
+            if m.sender_id != me {
+                markSeenSoon()
+                if isNew && m.kind != "notice" && m.kind != "call" && !muted && UIApplication.shared.applicationState == .active
+                    && LocalNotifier.shared.openConversation == chat.conversation_id && LocalNotifier.shared.notificationsOn {
+                    MessageSound.incomingInChat(soundOn: LocalNotifier.shared.soundOn)
+                }
+            }
         }
         .onReceive(live.hidden) { h in
             // hidden for me, or the chat cleared on any of my devices: those messages leave at once
@@ -982,8 +1020,11 @@ struct ChatView: View {
                     // every preview shows at once (in order), then they leave side by side
                     var ready: [PendingMessage] = []
                     for d in drafts {
-                        if let url = d.videoURL { Task { await sendVideo(url, caption: d.caption) } }
-                        else if let img = d.image, let p = await preparePhoto(img, caption: d.caption, hd: hd) { ready.append(p) }
+                        if let url = d.videoURL { Task { await sendVideo(url, caption: d.caption, viewOnce: d.viewOnce) } }
+                        else if let img = d.image, let p = await preparePhoto(img, caption: d.caption, hd: hd) {
+                            if d.viewOnce { ViewOnceSend.mark(p.id) }
+                            ready.append(p)
+                        }
                     }
                     for p in ready { Task { await deliver(p) } }
                 }
@@ -999,6 +1040,7 @@ struct ChatView: View {
         .fullScreenCover(item: $viewing) { v in
             mediaViewer(v)
         }
+        .fullScreenCover(item: $openingOnce, onDismiss: { onceTick += 1 }) { m in ViewOnceViewer(message: m, token: token) }
         .sheet(isPresented: $showUnlock) {
             UnlockSheet(token: token) { Task { await loadNewest() } }
                 .presentationDetents([.large])
@@ -1111,17 +1153,18 @@ struct ChatView: View {
             Spacer(minLength: 4)
             if calls.enabled && chat.conversation_id.hasPrefix("dm_") {
                 Button { calls.start(conversationID: chat.conversation_id, peerName: chat.title, peerID: chat.peer_id) } label: {
-                    Image(systemName: "phone").font(.system(size: 18)).foregroundStyle(Theme.muted).frame(width: 36, height: 44)
+                    Image(systemName: "phone").font(.system(size: 22, weight: .light)).foregroundStyle(Theme.text).frame(width: 44, height: 44)
                 }
                 .disabled(calls.lineInUse)
                 .accessibilityLabel(Text("call.voice"))
             }
             Button { searchOpen.toggle(); searchText = "" } label: {
-                Image(systemName: "magnifyingglass").font(.system(size: 18)).foregroundStyle(Theme.muted).frame(width: 34, height: 44)
+                Image(systemName: "magnifyingglass").font(.system(size: 22, weight: .light)).foregroundStyle(Theme.text).frame(width: 44, height: 44)
             }
             .accessibilityLabel(Text("chat.search"))
             ChatHeaderMenu(items: headerMenuItems) {
-                Image(systemName: "ellipsis").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.muted).frame(width: 36, height: 44)
+                Image(systemName: "ellipsis").font(.system(size: 22, weight: .semibold)).foregroundStyle(Theme.text)
+                    .rotationEffect(.degrees(90)).frame(width: 44, height: 44)
             }
             .accessibilityLabel(Text("chat.more"))
         }
@@ -1136,7 +1179,18 @@ struct ChatView: View {
     private var composerBar: some View {
         Group {
             if recorder.recording && !holdRec {
-                RecordingBar(recorder: recorder, onCancel: { recorder.cancel() }, onSend: { Task { await sendVoice() } })
+                HStack(spacing: 6) {
+                    Button { voiceOnce.toggle() } label: {
+                        ZStack {
+                            Circle().fill(voiceOnce ? Theme.accent : Color.clear)
+                            Circle().stroke(voiceOnce ? Color.clear : Theme.muted, lineWidth: 1.5)
+                            Text(verbatim: "1").font(.system(size: 14, weight: .heavy)).foregroundStyle(voiceOnce ? Theme.onAccent : Theme.muted)
+                        }
+                        .frame(width: 30, height: 30).frame(width: 40, height: 44)
+                    }
+                    .accessibilityLabel(Text(LocalizedStringKey(voiceOnce ? "vo.toggle.on" : "vo.toggle.off")))
+                    RecordingBar(recorder: recorder, onCancel: { voiceOnce = false; recorder.cancel() }, onSend: { Task { await sendVoice() } })
+                }
             } else {
                 typingBar
             }
@@ -1145,27 +1199,41 @@ struct ChatView: View {
 
     private var headerMenuItems: [ChatMenuItem] {
         var items: [ChatMenuItem] = []
-        if isGroup {
-            items.append(ChatMenuItem("group.info", systemImage: "info.circle") { showInfo = true })
-            if groupStatus != nil { items.append(ChatMenuItem("gst.watch", systemImage: "circle.dashed") { watchingGroupStatus = true }) }
-            if isAdmin { items.append(ChatMenuItem("gst.add", systemImage: "plus.circle.dashed") { addingGroupStatus = true }) }
-        }
         let muteItem = muted
             ? ChatMenuItem("chats.unmute", systemImage: "bell") { Task { await mute(seconds: 0) } }
-            : ChatMenuItem("chat.mute.menu", systemImage: "bell.slash") { showMute = true }
+            : ChatMenuItem("menu.mute", systemImage: "bell.slash") { showMute = true }
         let scheduledItem = ChatMenuItem("chat.scheduled", systemImage: "calendar") { showSchedule = true }
+        let searchItem = ChatMenuItem("chat.search", systemImage: "magnifyingglass") { searchOpen = true; searchText = "" }
+        let selectItem = ChatMenuItem("menu.select", systemImage: "checkmark.square") { selecting = true; selected = [] }
         if isGroup {
+            items.append(ChatMenuItem("group.info", systemImage: "info.circle") { showInfo = true })
+            items.append(searchItem)
+            items.append(selectItem)
+            if groupStatus != nil { items.append(ChatMenuItem("gst.watch", systemImage: "circle.dashed") { watchingGroupStatus = true }) }
+            if isAdmin { items.append(ChatMenuItem("gst.add", systemImage: "plus.circle.dashed") { addingGroupStatus = true }) }
             items.append(muteItem)
             items.append(scheduledItem)
             if focusDoc != nil { items.append(ChatMenuItem("focus.title", systemImage: "scope") { showFocus = true }) }
+            items.append(ChatMenuItem("menu.close", systemImage: "xmark.circle") { dismissView() })
             items.append(ChatMenuItem("group.export", systemImage: "arrow.down.to.line") { Task { await exportHistory() } })
             items.append(ChatMenuItem("group.leave", systemImage: "rectangle.portrait.and.arrow.right", destructive: true) { confirmLeave = true })
             if myRole == "owner" { items.append(ChatMenuItem("group.delete", systemImage: "trash", destructive: true) { confirmDeleteGroup = true }) }
         } else {
-            items.append(scheduledItem)
+            // WhatsApp's order: Contact info, Search, Select messages, Mute, Disappearing messages, Chat theme, (this app's
+            // Scheduled messages), Close chat, Report, Block, Clear chat, Delete chat
+            items.append(ChatMenuItem("menu.contact", systemImage: "info.circle") { showInfo = true })
+            items.append(searchItem)
+            items.append(selectItem)
             items.append(muteItem)
+            items.append(ChatMenuItem("info.disappear", systemImage: "timer") { showInfo = true })
+            items.append(ChatMenuItem("ci.theme", systemImage: "paintpalette") { showInfo = true })
+            items.append(scheduledItem)
+            items.append(ChatMenuItem("menu.close", systemImage: "xmark.circle") { dismissView() })
+            items.append(ChatMenuItem("menu.report", systemImage: "hand.thumbsdown") { flash("chat.report.soon") })
             items.append(ChatMenuItem(verbatim: String(format: NSLocalizedString("chat.block.name", comment: ""), chat.title),
-                                      id: "chat.block", systemImage: "nosign", destructive: true) { confirmBlock = true })
+                                      id: "chat.block", systemImage: "nosign") { confirmBlock = true })
+            items.append(ChatMenuItem("menu.clear", systemImage: "minus.circle") { confirmClearChat = true })
+            items.append(ChatMenuItem("menu.delete", systemImage: "trash") { confirmDeleteChat = true })
         }
         return items
     }
@@ -1256,9 +1324,8 @@ struct ChatView: View {
                     holdStrip
                 } else {
                 ChatAttachMenu(items: attachMenuItems) {
-                    Image(systemName: "plus").font(.system(size: 19, weight: .semibold)).foregroundStyle(Theme.text)
-                        .frame(width: 40, height: 40).background(Theme.inputGradient, in: Circle())
-                        .overlay(Circle().stroke(Theme.hex(0x1C8CB2, 0.85), lineWidth: 1.5))
+                    Image(systemName: "plus").font(.system(size: 24, weight: .regular)).foregroundStyle(Theme.muted)
+                        .frame(width: 40, height: 44)
                 }
                 .accessibilityLabel(Text("attach.title"))
                 HStack(alignment: .center, spacing: 0) {
@@ -1285,12 +1352,8 @@ struct ChatView: View {
                     }
                 }
                 .padding(.horizontal, 4)
-                .frame(minHeight: 48)
-                .background(themeID.isEmpty ? AnyShapeStyle(Theme.soulInput) : AnyShapeStyle(Theme.inputGradient),
-                            in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(composerFocused ? Theme.borderActive : Theme.hex(0x1C8CB2, 0.85), lineWidth: 1.5))
-                .shadow(color: Theme.hex(0x00BEDC, 0.12), radius: 6)
+                .frame(minHeight: 44)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 if draftIsEmpty && CameraPicker.isAvailable && (!isGroup || groupCanSendMedia) && !(isGroup && composerFocused) {
                     Button { showCamera = true } label: { composerIcon("camera") }
                         .accessibilityLabel(Text("chat.camera"))
@@ -1300,11 +1363,9 @@ struct ChatView: View {
                     micButton
                 } else {
                 Image(systemName: "paperplane.fill")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(Theme.hex(0xF4FBFD))
-                    .frame(width: 48, height: 48)
-                    .background(Theme.sendGradient, in: Circle())
-                    .shadow(color: Theme.hex(0x00C8DC, 0.28), radius: 9, y: 4)
+                    .font(.system(size: 22, weight: .regular))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 44, height: 44)
                     .contentShape(Circle())
                     .onTapGesture {
                         if draftIsEmpty {
@@ -1349,11 +1410,10 @@ struct ChatView: View {
 
     private var micButton: some View {
         Image(systemName: "mic.fill")
-            .font(.system(size: 20, weight: .semibold))
-            .foregroundStyle(Theme.hex(0xF4FBFD))
-            .frame(width: 48, height: 48)
-            .background(holdRec ? AnyShapeStyle(Color.red) : AnyShapeStyle(Theme.sendGradient), in: Circle())
-            .shadow(color: Theme.hex(0x00C8DC, 0.28), radius: 9, y: 4)
+            .font(.system(size: 22, weight: .regular))
+            .foregroundStyle(holdRec ? Color.white : Theme.muted)
+            .frame(width: 44, height: 44)
+            .background(holdRec ? AnyShapeStyle(Color.red) : AnyShapeStyle(Color.clear), in: Circle())
             .scaleEffect(holdRec ? 1.35 : 1)
             .offset(x: holdRec ? max(-60, holdDrag.width * 0.4) : 0, y: holdRec ? max(-60, holdDrag.height * 0.4) : 0)
             .overlay(alignment: .top) {
@@ -1488,7 +1548,7 @@ struct ChatView: View {
                 selected = []
                 allPicked = false
             } label: { Image(systemName: "arrowshape.turn.up.right").font(.system(size: 21)).frame(width: 44, height: 44) }
-            .disabled(chosen.isEmpty || restricted)
+            .disabled(chosen.isEmpty || restricted || chosen.contains { $0.isViewOnce })
             .accessibilityLabel(Text("chat.forward"))
             Button {
                 UIPasteboard.general.string = chosen.filter { $0.kind == "text" }.map(\.body).joined(separator: "\n")
@@ -1854,7 +1914,7 @@ struct ChatView: View {
     private var barColor: Color { (themeID.isEmpty || themeID == "tradeflor") ? Theme.soul : Theme.header }
 
     private func composerIcon(_ name: String) -> some View {
-        Image(systemName: name).font(.system(size: 19)).foregroundStyle(Theme.muted).frame(width: 34, height: 40)
+        Image(systemName: name).font(.system(size: 22, weight: .light)).foregroundStyle(Theme.muted).frame(width: 36, height: 44)
     }
 
     // MARK: loading
@@ -2017,7 +2077,9 @@ struct ChatView: View {
     // MARK: message actions
 
     @ViewBuilder private func messageContent(_ m: Message) -> some View {
-        if m.kind == "poll" && !m.isDeleted {
+        if m.isViewOnce && !m.isDeleted {
+            ViewOnceBubble(message: m, mine: m.sender_id == me, isGroup: isGroup, tick: onceTick) { openingOnce = m }
+        } else if m.kind == "poll" && !m.isDeleted {
             PollCard(message: m, me: me, canVote: canPost || (isGroup && groupCanReact)) { opts in
                 Task {
                     if let updated = try? await APIClient.shared.chVote(token: token, messageID: m.id, options: opts) { merge([updated]) }
@@ -2064,7 +2126,8 @@ struct ChatView: View {
             }
         } else {
             Bubble(text: displayText(m), mine: m.sender_id == me, date: m.date,
-                   state: m.sender_id == me ? receipt(m) : nil, faded: m.isDeleted, edited: m.edited_at != nil && !m.isDeleted)
+                   state: m.sender_id == me && !m.isDeleted ? receipt(m) : nil, // a deleted message has no ticks (WhatsApp)
+                   faded: m.isDeleted, edited: m.edited_at != nil && !m.isDeleted)
         }
     }
 
@@ -2079,7 +2142,7 @@ struct ChatView: View {
     /// The chat's photos and videos, oldest first, for the full-screen viewer (its strip and its sideways swipe).
     private var viewerItems: [MediaViewerItem] {
         messages.compactMap { m in
-            guard !m.isDeleted, let fid = m.file_id else { return nil }
+            guard !m.isDeleted, !m.isViewOnce, let fid = m.file_id else { return nil }
             let video = (m.kind == "file" && (m.file_mime ?? "").hasPrefix("video/")) || VideoNotePrep.isNote(m)
             guard m.kind == "image" || video else { return nil }
             let mine = m.sender_id == me
@@ -2190,6 +2253,8 @@ struct ChatView: View {
         guard let rec = recorder.finish() else { return }
         let p = PendingMessage(id: UUID().uuidString.lowercased(), body: "", date: Date(),
                                audio: rec.data, durationMs: rec.durationMs, waveform: rec.waveform)
+        if voiceOnce { ViewOnceSend.mark(p.id) }
+        voiceOnce = false
         replyingTo = nil // a voice note carries no reply: the bar goes, the next text does not inherit it
         pending.append(p)
         await deliver(p)
@@ -2226,8 +2291,9 @@ struct ChatView: View {
         return m.body.isEmpty ? NSLocalizedString("notice.changed", comment: "") : m.body
     }
 
-    private func sendVideo(_ url: URL, caption: String = "") async {
+    private func sendVideo(_ url: URL, caption: String = "", viewOnce: Bool = false) async {
         let key = UUID().uuidString.lowercased()
+        if viewOnce { ViewOnceSend.mark(key) }
         // the cover first (mp4 removes the source when done): it shows at once, dimmed, while the video is prepared and sent
         let poster = await VideoPrep.poster(for: url)
         var placeholder = PendingMessage(id: key, body: caption.trimmingCharacters(in: .whitespacesAndNewlines), date: Date(), video: Data())
@@ -2372,7 +2438,7 @@ struct ChatView: View {
                 }
             }
             // a sent photo shows from my own copy at once, at its shape (web seedPhoto)
-            if let fid = m.file_id, let jpeg = p.jpeg {
+            if let fid = m.file_id, let jpeg = p.jpeg, !m.isViewOnce {
                 // the bubble's copy is the small preview, not the full (HD) JPEG
                 APIClient.shared.seedFile(fileID: fid, data: p.image?.jpegData(compressionQuality: 0.8) ?? jpeg)
                 if let img = p.image { MediaDims.shared.set(fid, img.size) }
@@ -2431,7 +2497,7 @@ struct ChatView: View {
     // MARK: display
 
     private func displayText(_ m: Message) -> String {
-        if m.isDeleted { return NSLocalizedString("chat.deleted", comment: "") }
+        if m.isDeleted { return NSLocalizedString(m.sender_id == me ? "chat.deleted.you" : "chat.deleted", comment: "") }
         switch m.kind {
         case "text": return m.body
         case "voice": return "🎤 " + NSLocalizedString("chats.kind.voice", comment: "")
@@ -2705,6 +2771,11 @@ struct Bubble: View {
 
     static func timeString(_ d: Date) -> String { time.string(from: d) }
 
+    /// WhatsApp's deleted message: a circle-with-a-slash before the words ("You deleted this message").
+    private static func withIcon(_ t: AttributedString, _ faded: Bool) -> Text {
+        faded ? Text(Image(systemName: "nosign")) + Text("  ") + Text(t) : Text(t)
+    }
+
     /// Invisible text as wide as the time line, at the end of the message: the time then sits in the last line when it
     /// fits, and on a line of its own when it does not.
     static func metaSpacer(date: Date?, ticks: Bool, edited: Bool) -> String {
@@ -2758,14 +2829,14 @@ struct Bubble: View {
             var more = AttributedString("… " + NSLocalizedString("chat.readmore", comment: ""))
             more.link = URL(string: "tfreadmore://open")
             more.foregroundColor = Theme.accent
-            more.font = .system(size: 15, weight: .semibold)
+            more.font = .system(size: 16, weight: .semibold)
             shown += more
         } else if !faded, ReadMore.cut(text) != nil {
             // opened: "Show less" folds it back (on its own line, so it sits at the reading start in either direction)
             var less = AttributedString("\n" + NSLocalizedString("chat.showless", comment: ""))
             less.link = URL(string: "tfreadmore://close")
             less.foregroundColor = Theme.accent
-            less.font = .system(size: 15, weight: .semibold)
+            less.font = .system(size: 16, weight: .semibold)
             shown += less
         }
         let longText = !faded && ReadMore.cut(text) != nil
@@ -2775,8 +2846,8 @@ struct Bubble: View {
                 // a cut message ("… Read more") or right-to-left text: the time sits on its own line under the text, so the
                 // two never overlap (mixed directions move an inline spacer)
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(shown)
-                        .font(.system(size: 15))
+                    Self.withIcon(shown, faded)
+                        .font(.system(size: 16))
                         .italic(faded)
                         .foregroundStyle(Theme.text)
                         .tint(Theme.accent)
@@ -2804,8 +2875,8 @@ struct Bubble: View {
                 }
             } else {
             ZStack(alignment: .bottomTrailing) {
-                (Text(shown) + Text(Self.metaSpacer(date: date, ticks: state != nil, edited: edited)).font(.system(size: 11)).foregroundColor(.clear))
-                    .font(.system(size: 15))
+                (Self.withIcon(shown, faded) + Text(Self.metaSpacer(date: date, ticks: state != nil, edited: edited)).font(.system(size: 11)).foregroundColor(.clear))
+                    .font(.system(size: 16))
                     .italic(faded)
                     .foregroundStyle(Theme.text)
                     .tint(Theme.accent)

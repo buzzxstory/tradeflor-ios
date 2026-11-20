@@ -595,6 +595,7 @@ final class APIClient {
         }
         field("conversation_id", conversationID)
         if !caption.isEmpty { field("caption", caption) }
+        if ViewOnceSend.has(key) && !mime.hasPrefix("application/") { field("view_once", "1") }
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\nContent-Type: \(mime)\r\n\r\n".utf8))
         body.append(jpeg)
         if let poster, !poster.isEmpty, poster.count <= 512 * 1024, mime.hasPrefix("video/") {
@@ -648,6 +649,7 @@ final class APIClient {
         }
         field("conversation_id", conversationID)
         field("duration_ms", String(durationMs))
+        if ViewOnceSend.has(key) { field("view_once", "1") }
         if let w = try? JSONEncoder().encode(waveform), let s = String(data: w, encoding: .utf8) { field("waveform", s) }
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"recording.m4a\"\r\nContent-Type: audio/mp4\r\n\r\n".utf8))
         body.append(audio)
@@ -661,6 +663,25 @@ final class APIClient {
         let (data, http) = try await send(req)
         try check(http, data)
         do { return try JSONDecoder().decode(Message.self, from: data) } catch { throw APIError.decoding }
+    }
+
+    // MARK: view once: read with no copy kept anywhere (not in memory, not on disk)
+
+    func viewOnceURL(path: [String]) -> URL { path.reduce(base) { $0.appendingPathComponent($1) } }
+
+    func viewOnceHeaders(token: String) -> [String: String] {
+        var h = ["Authorization": "Bearer \(token)", "User-Agent": userAgent]
+        if let u = unlockToken { h["X-Tradeflor-Unlock"] = u }
+        return h
+    }
+
+    func viewOnceData(token: String, path: [String]) async -> (Data?, Int) {
+        var req = URLRequest(url: viewOnceURL(path: path))
+        req.timeoutInterval = 60
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        for (k, v) in viewOnceHeaders(token: token) { req.setValue(v, forHTTPHeaderField: k) }
+        guard let out = try? await send(req) else { return (nil, 0) }
+        return (out.1.statusCode == 200 && !out.0.isEmpty ? out.0 : nil, out.1.statusCode)
     }
 
     /// A voice recording's bytes (memory-only cache).

@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import AVFoundation
 import CallKit
+import UserNotifications
 import UIKit
 import WebRTC
 
@@ -119,6 +120,13 @@ final class CallManager: NSObject, ObservableObject {
     /// name arrives with the call on the socket (ringIncoming). A call the socket never knows (it ended before this phone
     /// woke up) is ended again, so no phantom ring stays.
     func reportPushCall(callID: String) {
+        if !callID.isEmpty {
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [callID])
+            // the alert and the VoIP push leave the server together: the alert may land after this, so once more
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [callID])
+            }
+        }
         let id = UUID(uuidString: callID) ?? UUID()
         let update = callCapabilities()
         let name = (self.callID == callID && !peerName.isEmpty) ? peerName : "Tradeflor"
@@ -137,15 +145,14 @@ final class CallManager: NSObject, ObservableObject {
 
     private func guardPushCall(key: String, uuid: UUID) {
         Task { @MainActor [weak self] in
-            // wait for the socket (up to 45 s: the caller rings that long), then give the server 6 s to name the call
+            // a new socket is on its way (PushManager.ensureConnected): the call comes in with it. Up to 25 s are given before the
+            // ring is taken back (the caller rings 45 s; a call the server does not know any more is not left ringing).
             var waited = 0
-            while waited < 90 {
+            while waited < 50 {
                 guard let self, self.pushCalls.contains(key) else { return } // the socket knows it now
-                if self.live?.connected == true { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 waited += 1
             }
-            try? await Task.sleep(nanoseconds: 6_000_000_000)
             guard let self, self.pushCalls.contains(key) else { return }
             self.pushCalls.remove(key)
             if self.uuid != uuid || self.phase == .idle || self.phase == .ended {
@@ -589,6 +596,12 @@ final class CallManager: NSObject, ObservableObject {
             finish()
         case "call.sync":
             let call = d["call"] as? [String: Any]
+            // a ring a VoIP push started for a call the server does not have (cancelled, answered elsewhere) ends now
+            let live = (call?["call_id"] as? String).flatMap { UUID(uuidString: $0)?.uuidString }
+            for k in pushCalls where k != live {
+                if let u = UUID(uuidString: k) { provider.reportCall(with: u, endedAt: Date(), reason: .remoteEnded) }
+                pushCalls.remove(k)
+            }
             if call == nil {
                 // the server knows no call for this device: end ours, unless our invite was not acknowledged yet
                 if phase != .idle && !(phase == .outgoing && !acknowledged) { endReason = "connection_lost"; finish() }
@@ -654,6 +667,8 @@ final class CallManager: NSObject, ObservableObject {
         let update = callCapabilities()
         update.remoteHandle = CXHandle(type: .generic, value: peerName)
         update.localizedCallerName = peerName
+        // the server's visible "Incoming call" alert (collapse id = the call id) is not needed while CallKit rings
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [id])
         let ringUUID = uuid, name = peerName, conv = conversationID
         if pushCalls.remove(uuid.uuidString) != nil {
             // a VoIP push already made CallKit ring: it only learns who is calling now
@@ -663,7 +678,7 @@ final class CallManager: NSObject, ObservableObject {
                 // CallKit refused to ring (not because of Do Not Disturb or a block): a plain notification instead
                 guard let err else { return }
                 let code = (err as? CXErrorCodeIncomingCallError)?.code
-                guard code != .filteredByDoNotDisturb, code != .filteredByBlockList else { return }
+                guard code != .filteredByDoNotDisturb, code != .filteredByBlockList, code != .callUUIDAlreadyExists else { return }
                 Task { @MainActor in
                     guard self.uuid == ringUUID, self.phase == .incoming else { return }
                     LocalNotifier.shared.incomingCallFallback(name: self.peerName.isEmpty ? name : self.peerName, callID: id, conversationID: conv)

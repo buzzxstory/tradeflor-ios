@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import Network
+import UIKit
 
 /// The app-wide live connection to /ws (same socket the website uses). New messages arrive here the moment the
 /// server sends them; screens subscribe to `messages` and `changes`.
@@ -54,7 +55,7 @@ final class LiveConnection: ObservableObject {
     @Published private(set) var lastSeen: [String: Int64] = [:]
     @Published private(set) var hiddenPresence: Set<String> = []
     /// The app is in front: only then am I "online" to others (sent on every change and after every connect).
-    private(set) var appActive = true
+    private(set) var appActive = UIApplication.shared.applicationState != .background
     /// Fires every time the socket (re)opens, so calls can send call.sync.
     let opened = PassthroughSubject<Void, Never>()
     /// The server refused the ticket (401): this session was ended elsewhere. The root view signs the phone out.

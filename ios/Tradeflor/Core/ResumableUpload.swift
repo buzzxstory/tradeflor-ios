@@ -402,6 +402,7 @@ final class ResumableUploader {
         }
         // fields first, the poster last
         field("upload_finish", uploadID)
+        if ViewOnceSend.has(key) { field("view_once", "1") }
         if !caption.isEmpty { field("caption", caption) }
         if !replyTo.isEmpty { field("reply_to_id", replyTo) }
         if let poster, !poster.isEmpty, poster.count <= 512 * 1024 {

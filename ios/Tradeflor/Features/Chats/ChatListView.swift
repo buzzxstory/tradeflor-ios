@@ -212,6 +212,8 @@ struct ChatListView: View {
         .onReceive(live.changes) { id in if !id.hasPrefix("grp_") { reloadSoon() } }
         // the socket is back (after a lock, a drop): what arrived meanwhile is read at once, not at the next poll
         .onReceive(live.opened) { _ in reloadSoon() }
+        // Delete chat from inside the chat: off the list (and its badge) at once
+        .onReceive(NotificationCenter.default.publisher(for: .tfHiddenChatsChanged)) { _ in loadHidden(); publishBadges() }
         // a status watched (here or in the status row), posted or deleted: the rings on the rows change at once
         .onReceive(NotificationCenter.default.publisher(for: .tfStatusChanged)) { _ in Task { await loadStatuses() } }
         // the last blocked / locked chat left its tab (its chip is gone): back to All, as the web
@@ -450,7 +452,7 @@ struct ChatListView: View {
     private func hide(_ c: ConversationSummary) {
         hiddenAt[c.conversation_id] = Date().timeIntervalSince1970
         UserDefaults.standard.set(hiddenAt, forKey: BadgeStore.hiddenKey(store.session?.userID ?? ""))
-        BadgeStore.shared.chats = badgeNow()
+        publishBadges()
         flash(NSLocalizedString("chats.removed", comment: ""))
     }
 
@@ -534,11 +536,22 @@ struct ChatListView: View {
     private func loadLocks() async {
         if let st = try? await APIClient.shared.ctLockState(token: token) { lockedIDs = Set((st.locks ?? []).map(\.conversation_id)) }
         blockedIDs = Set((try? await APIClient.shared.blocked(token: token)) ?? [])
-        BadgeStore.shared.chats = badgeNow()
+        publishBadges()
     }
 
     /// The tab badge: unread chats the person can see and has not silenced (BadgeStore.counts, the same rule as the app icon).
-    private func badgeNow() -> Int {
+    /// The tab's number (chats) and the icon's (messages), from the same rule.
+    private func publishBadges() {
+        let counted = countedChats()
+        let n = counted.count
+        let m = counted.reduce(0) { $0 + $1.unread_count }
+        if BadgeStore.shared.chats != n { BadgeStore.shared.chats = n }
+        if BadgeStore.shared.chatMessages != m { BadgeStore.shared.chatMessages = m }
+    }
+
+    private func badgeNow() -> Int { countedChats().count }
+
+    private func countedChats() -> [ConversationSummary] {
         let now = Int64(Date().timeIntervalSince1970)
         return chats.filter { c in
             let p = prefs[c.conversation_id]
@@ -548,7 +561,7 @@ struct ChatListView: View {
             }
             return BadgeStore.counts(unread: isUnread(c), archived: p?.archived ?? false, muted: (p?.muted_until ?? 0) > now,
                                      locked: lockedIDs.contains(c.conversation_id), blocked: blockedIDs.contains(c.peer_id), hidden: hidden)
-        }.count
+        }
     }
 
     private func loadPrefs() async {
@@ -575,7 +588,7 @@ struct ChatListView: View {
             await prefsDone; await locksDone // the locked set is known before the rows are shown (a locked chat never flashes)
             let sorted = out.sorted { $0.last_message_at > $1.last_message_at }
             if sorted != chats { chats = sorted }
-            BadgeStore.shared.chats = badgeNow()
+            publishBadges()
             failed = false
             ciOpenFirstChat()
         } catch APIError.badCredentials {

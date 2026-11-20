@@ -35,6 +35,7 @@ struct RootView: View {
     @EnvironmentObject private var live: LiveConnection
     @Environment(\.scenePhase) private var scenePhase
     @State private var settling = false
+    @ObservedObject private var appLock = AppLock.shared
     @ObservedObject private var calls = CallManager.shared
     @ObservedObject private var badges = BadgeStore.shared
     @ObservedObject private var notifier = LocalNotifier.shared
@@ -99,7 +100,7 @@ struct RootView: View {
         .tint(Theme.accent)
         // a chat unlocked with its PIN is hidden in the app switcher and while the app is not in front
         .overlay {
-            if scenePhase != .active, APIClient.shared.unlockToken != nil {
+            if scenePhase != .active, APIClient.shared.unlockToken != nil || appLock.enabled {
                 Rectangle().fill(.regularMaterial).ignoresSafeArea()
             }
         }
@@ -195,7 +196,27 @@ struct RootView: View {
         .overlay {
             if settling { Color.clear.contentShape(Rectangle()).ignoresSafeArea() }
         }
+        // App Lock: the lock screen is its own window above sheets and covers; a plain cover hides the app in the app switcher
+        .onAppear { if appLock.locked && store.session != nil { AppLockWindow.shared.showLock(store: store) } }
+        .onChange(of: calls.phase) { p in if p == .idle || p == .ended { appLock.callEnded() } }
+        .onChange(of: appLock.locked) { l in
+            if l && store.session != nil { AppLockWindow.shared.showLock(store: store) } else { AppLockWindow.shared.hideLock() }
+        }
+        .onChange(of: store.session?.token) { t in
+            if t == nil { AppLockWindow.shared.hideLock(); AppLockWindow.shared.hideCover() }
+            else if appLock.locked { AppLockWindow.shared.showLock(store: store) } // a session that starts while the lock is on
+        }
         .onChange(of: scenePhase) { phase in
+            if phase == .background { appLock.appBackgrounded() }
+            if phase == .active {
+                appLock.appBecameActive()
+                // locked now: the lock window goes up in this very update (no frames of the app in between)
+                if appLock.locked && store.session != nil { AppLockWindow.shared.showLock(store: store) }
+                else { AppLockWindow.shared.hideCover() }
+            } else if appLock.enabled && !appLock.locked && store.session != nil {
+                AppLockWindow.shared.showCover()
+            }
+            if phase == .active { PushManager.shared.retryIfNeeded() }
             if phase != .active {
                 settling = true // up before the app is on screen again: the touch that unlocks the phone never reaches a row
             } else {

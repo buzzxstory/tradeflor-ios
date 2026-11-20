@@ -621,8 +621,16 @@ struct GroupsListView: View {
             if map != groupStatuses { groupStatuses = map }
         }
         // a locked group never shows in the tab's badge either (Chats does the same for locked chats); written once
-        let badge = groups.filter { $0.unread_count > 0 && !isLocked($0) }.count
+        // the same rule as the server's icon number (dd979bc): unread, not locked, not archived, not muted
+        let nowSec = Int64(Date().timeIntervalSince1970)
+        let counted = groups.filter { g in
+            let p = prefs[g.conversation_id]
+            return g.unread_count > 0 && !isLocked(g) && !(p?.archived ?? false) && (p?.muted_until ?? 0) <= nowSec
+        }
+        let badge = counted.count
+        let messages = counted.reduce(0) { $0 + $1.unread_count }
         if BadgeStore.shared.groups != badge { BadgeStore.shared.groups = badge }
+        if BadgeStore.shared.groupMessages != messages { BadgeStore.shared.groupMessages = messages }
         #if DEBUG
         // CI only: TF_CI_OPEN_GROUP=1 opens the first group once, for a screenshot of a group chat
         if ProcessInfo.processInfo.environment["TF_CI_OPEN_GROUP"] == "1", path.isEmpty, let first = groups.first,

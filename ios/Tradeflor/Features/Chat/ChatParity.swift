@@ -143,7 +143,7 @@ enum Albums {
         }
         let cal = Calendar.current
         for m in rows {
-            let ok = m.kind == "image" && !m.isDeleted && m.file_id != nil && (m.reply_to_id ?? "").isEmpty
+            let ok = m.kind == "image" && !m.isDeleted && m.file_id != nil && (m.reply_to_id ?? "").isEmpty && !m.isViewOnce
                 && m.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 && !(isGroup && m.forwarded == true) // groups leave forwarded photos out of an album (web 8f4a9e3)
             guard ok else { close(); continue }

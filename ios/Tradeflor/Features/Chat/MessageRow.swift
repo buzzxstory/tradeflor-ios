@@ -201,7 +201,7 @@ struct MessageRow<Content: View>: View {
 
     /// A photo or a video on its own (no card): reactions hang over its edge, a forward arrow sits beside it.
     private var isMedia: Bool {
-        guard !message.isDeleted, message.file_id != nil else { return false }
+        guard !message.isDeleted, !message.isViewOnce, message.file_id != nil else { return false }
         if message.kind == "image" { return true }
         return message.kind == "file" && (message.file_mime ?? "").hasPrefix("video/")
     }

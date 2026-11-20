@@ -14,7 +14,7 @@ import Security
 /// Without the Push Notifications capability in the signing profile the system refuses the token: nothing breaks, there
 /// is simply no remote push.
 @MainActor
-final class PushManager: NSObject {
+final class PushManager: NSObject, ObservableObject {
     static let shared = PushManager()
 
     private var bearer = ""
@@ -22,11 +22,48 @@ final class PushManager: NSObject {
     private var alertHex = ""
     private var voipHex = ""
 
-    #if DEBUG
-    private static let env = "sandbox"
-    #else
-    private static let env = "production"
-    #endif
+    /// What the phone knows about its own push registration: shown in Settings > Notifications, so a missing notification can be
+    /// told apart at once (iOS refused the token, the server has no Apple key, no connection, or all fine).
+    enum State: Equatable { case waiting, ok, failed(String) }
+    @Published private(set) var alertState = State.waiting
+    @Published private(set) var voipState = State.waiting
+
+    func alertFailed(_ e: Error) { alertState = .failed(e.localizedDescription) }
+
+    private func setState(_ kind: String, _ s: State) {
+        if kind == "alert" { alertState = s } else { voipState = s }
+    }
+
+    private static func describe(_ e: Error) -> String {
+        if let a = e as? APIError {
+            switch a {
+            case .server(let s): return s == 503 ? "the server has no Apple key yet" : "server error \(s)"
+            case .badCredentials: return "session refused"
+            case .rateLimited: return "rate limited"
+            case .refused(let b): return b.isEmpty ? "refused by the server" : b
+            default: return "no connection"
+            }
+        }
+        return "no connection"
+    }
+
+    /// "sandbox" or "production": what the app's own provisioning profile says (aps-environment), else by build type.
+    private static let env: String = {
+        if let path = Bundle.main.path(forResource: "embedded", ofType: "mobileprovision"),
+           let raw = try? Data(contentsOf: URL(fileURLWithPath: path)),
+           let text = String(data: raw, encoding: .isoLatin1),
+           let r = text.range(of: "<key>aps-environment</key>"),
+           let s = text[r.upperBound...].range(of: "<string>"),
+           let e = text[s.upperBound...].range(of: "</string>") {
+            let v = String(text[s.upperBound..<e.lowerBound])
+            return v == "development" ? "sandbox" : "production"
+        }
+        #if DEBUG
+        return "sandbox"
+        #else
+        return "production"
+        #endif
+    }()
 
     /// After sign-in and on every launch with a saved session.
     func start(token: String) {
@@ -44,12 +81,28 @@ final class PushManager: NSObject {
         if !voipHex.isEmpty { send(kind: "voip", hex: voipHex) }
     }
 
+    /// The app came to the front: a registration that did not succeed yet (offline, the server's Apple key came later) is sent again.
+    func retryIfNeeded() {
+        guard !bearer.isEmpty else { return }
+        if voipState != .ok, !voipHex.isEmpty { send(kind: "voip", hex: voipHex) }
+        if alertState != .ok { UIApplication.shared.registerForRemoteNotifications() } // its callback sends the token
+    }
+
+    private var inFlight = Set<String>()
+
     /// A VoIP push woke the app, possibly with no screen: the live socket and the calls are attached from the saved session now,
     /// so the call that is ringing reaches the app (the screens attach the same things again later; both are idempotent).
     func ensureConnected() {
         guard let s = Keychain.load() else { return }
         if bearer.isEmpty { bearer = s.token }
+        // a socket from before the app was suspended looks connected for up to 35 s but is dead: a new one now, whose
+        // opening asks the server for the ringing call (call.sync)
         LiveConnection.shared.start(token: s.token)
+        if UIApplication.shared.applicationState == .background && !CallManager.shared.lineInUse {
+            LiveConnection.shared.reconnectNow()
+        } else {
+            LiveConnection.shared.probe() // a working socket (the app in front, a call on) is only checked, not dropped
+        }
         CallManager.shared.attach(live: LiveConnection.shared, token: s.token, userID: s.userID)
     }
 
@@ -74,8 +127,12 @@ final class PushManager: NSObject {
         bearer = ""
         alertHex = ""
         voipHex = ""
+        alertState = .waiting
+        voipState = .waiting
         PushKeys.clear()
         UIApplication.shared.unregisterForRemoteNotifications()
+        registry?.desiredPushTypes = []
+        registry = nil // start() makes a new one: PushKit then hands out its token again
         guard !token.isEmpty else { return }
         Task {
             for (kind, hex) in pairs {
@@ -94,17 +151,25 @@ final class PushManager: NSObject {
 
     private func send(kind: String, hex: String) {
         let token = bearer
-        guard !token.isEmpty else { return }
+        // one loop per (kind, device token, account): a new token or a new sign-in is never held behind an old loop's wait
+        let job = "\(kind)|\(hex)|\(token.hashValue)"
+        guard !token.isEmpty, !inFlight.contains(job) else { return }
+        inFlight.insert(job)
         Task {
+            defer { self.inFlight.remove(job) }
             // 503 (no Apple key on the server yet) and a dropped connection: again after 30 s, 2 min and 10 min, quietly
             for wait in [0, 30, 120, 600] as [UInt64] {
                 if wait > 0 { try? await Task.sleep(nanoseconds: wait * 1_000_000_000) }
                 if self.bearer != token { return } // signed out or another account meanwhile
-                if let data = try? await APIClient.shared.postJSON("push/apns/register", token: token,
-                                                                    body: ["Token": hex, "Env": Self.env, "Kind": kind]) {
+                do {
+                    let data = try await APIClient.shared.postJSON("push/apns/register", token: token,
+                                                                   body: ["Token": hex, "Env": Self.env, "Kind": kind])
                     struct Keys: Decodable { let id: String; let secret: String }
                     if let k = try? JSONDecoder().decode(Keys.self, from: data) { PushKeys.save(kind, id: k.id, secret: k.secret) }
+                    self.setState(kind, .ok)
                     return
+                } catch {
+                    self.setState(kind, .failed(Self.describe(error)))
                 }
             }
         }
@@ -182,6 +247,7 @@ final class TradeflorAppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        // no Push Notifications in the signing profile (or no network): no remote push, nothing else changes
+        // no Push Notifications in the signing profile (or no network): no remote push, nothing else changes; Settings says why
+        Task { @MainActor in PushManager.shared.alertFailed(error) }
     }
 }

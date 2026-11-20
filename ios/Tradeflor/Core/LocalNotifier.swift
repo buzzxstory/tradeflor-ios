@@ -48,6 +48,8 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     private var peers: [String: String] = [:] // conversation -> the other person's user id (1:1 chats)
     private var loadedGroups: Set<String> = []
     private var notified: [String] = []
+    /// Unread messages per chat (from the lists, plus what arrived on the socket since): the icon counts messages.
+    private var unreadCounts: [String: Int] = [:]
     private var lockedChats: Set<String> = [] // Chat Lock: their notifications carry no name and no text
     private var archivedChats: Set<String> = []
     private var blockedPeers: Set<String> = []
@@ -73,8 +75,14 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             .sink { [weak self] _ in self?.enteredBackground() }.store(in: &appSubs)
         nc.publisher(for: UIApplication.willEnterForegroundNotification)
             .sink { [weak self] _ in self?.enteringForeground() }.store(in: &appSubs)
+        // back in front: the icon shows the lists' number again (they publish only when it changes)
+        nc.publisher(for: UIApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                guard let self, !self.token.isEmpty else { return }
+                self.setIconBadge(BadgeStore.shared.chatMessages + BadgeStore.shared.groupMessages)
+            }.store(in: &appSubs)
         // in front, the icon badge follows the tab bar's unread counts
-        BadgeStore.shared.$chats.combineLatest(BadgeStore.shared.$groups)
+        BadgeStore.shared.$chatMessages.combineLatest(BadgeStore.shared.$groupMessages)
             .map { $0 + $1 }
             .removeDuplicates()
             .map { ($0, 0) }
@@ -131,13 +139,18 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     func detach() {
         subs.removeAll()
         token = ""
-        unread = []; settings = [:]; mutedUntil = [:]; titles = [:]; names = [:]; peers = [:]; loadedGroups = []; notified = []; lockedChats = []; archivedChats = []; blockedPeers = []; hiddenChats = []
+        unread = []; unreadCounts = [:]; settings = [:]; mutedUntil = [:]; titles = [:]; names = [:]; peers = [:]; loadedGroups = []; notified = []; lockedChats = []; archivedChats = []; blockedPeers = []; hiddenChats = []
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         setIconBadge(0)
     }
 
     private func flag(_ k: String) -> Bool { settings[k] ?? Self.defaults[k] ?? false }
+
+    /// The account's "Sound" switch (Settings > Notifications).
+    var soundOn: Bool { flag("notifications.sound") }
+    /// The account's master "Notifications" switch.
+    var notificationsOn: Bool { flag("notifications.enabled") }
 
     /// A switch saved in Settings › Notifications: in force here at once.
     func settingChanged(_ key: String, _ value: Bool) { settings[key] = value }
@@ -161,12 +174,13 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         let hiddenAt = (UserDefaults.standard.dictionary(forKey: BadgeStore.hiddenKey(me)) as? [String: Double]) ?? [:]
         var hidden: Set<String> = []
         var fresh: Set<String> = []
+        var counts: [String: Int] = [:]
         if let list = try? await APIClient.shared.conversations(token: token) {
             for c in list {
                 titles[c.conversation_id] = c.title
                 names[c.peer_id] = c.title
                 peers[c.conversation_id] = c.peer_id
-                if c.unread_count > 0 { fresh.insert(c.conversation_id) }
+                if c.unread_count > 0 { fresh.insert(c.conversation_id); counts[c.conversation_id] = c.unread_count }
                 if let h = hiddenAt[c.conversation_id],
                    !(Double(c.last_message_at > 100_000_000_000 ? c.last_message_at / 1000 : c.last_message_at) > h) { hidden.insert(c.conversation_id) }
             }
@@ -174,11 +188,12 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         if let gs = try? await APIClient.shared.groups(token: token) {
             for g in gs {
                 titles[g.conversation_id] = g.name
-                if g.unread_count > 0 { fresh.insert(g.conversation_id) }
+                if g.unread_count > 0 { fresh.insert(g.conversation_id); counts[g.conversation_id] = g.unread_count }
             }
         }
         hiddenChats = hidden
         unread = fresh
+        unreadCounts = counts
     }
 
     // MARK: app in front / behind
@@ -200,7 +215,8 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
 
     private func enteringForeground() {
         endBackgroundTask()
-        Task { await refresh() } // the counts and mutes as they are now (the socket may have been asleep)
+        // the counts and mutes as they are now (the socket may have been asleep); the icon at once, not after the lists
+        Task { await refresh() }
     }
 
     private func endBackgroundTask() {
@@ -215,10 +231,11 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         unread.filter { id in
             BadgeStore.counts(unread: true, archived: archivedChats.contains(id), muted: isMuted(id), locked: lockedChats.contains(id),
                               blocked: peers[id].map { blockedPeers.contains($0) } ?? false, hidden: hiddenChats.contains(id))
-        }.count
+        }.reduce(0) { $0 + max(1, unreadCounts[$1] ?? 1) } // unread MESSAGES, as WhatsApp's icon
     }
 
     private func setIconBadge(_ n: Int) {
+        guard !token.isEmpty, refreshedAt != .distantPast else { return }
         if #available(iOS 17.0, *) {
             UNUserNotificationCenter.current().setBadgeCount(max(0, n), withCompletionHandler: nil)
         } else {
@@ -271,7 +288,8 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     private func consider(_ m: Message) async {
         guard !token.isEmpty, m.sender_id != me, !m.isDeleted, m.kind != "notice", m.kind != "call" else { return }
         guard !notified.contains(m.id) else { return }
-        if Date().timeIntervalSince(refreshedAt) > 120 { await refresh() }
+        let refreshedNow = Date().timeIntervalSince(refreshedAt) > 120
+        if refreshedNow { await refresh() }
         guard flag("notifications.enabled") else { return }
         let secs = m.created_at > 100_000_000_000 ? Double(m.created_at) / 1000 : Double(m.created_at)
         if Date().timeIntervalSince1970 - secs > 90 { return } // an old message is not news
@@ -302,17 +320,27 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             content.body = flag("notifications.previews") ? describe(m) : NSLocalizedString("notify.new", comment: "")
         }
         if locked { content.title = "Tradeflor"; content.body = NSLocalizedString("notify.new", comment: "") }
-        if flag("notifications.sound") { content.sound = .default }
+        if flag("notifications.sound") { content.sound = UNNotificationSound(named: MessageSound.notificationName) }
         content.threadIdentifier = m.conversation_id
         content.categoryIdentifier = Self.messageCategory
         content.targetContentIdentifier = m.conversation_id
         content.userInfo = ["conversation_id": m.conversation_id, "message_id": m.id]
         hiddenChats.remove(m.conversation_id) // a newer message brings a deleted chat back to the list
         unread.insert(m.conversation_id)
+        if !refreshedNow { unreadCounts[m.conversation_id, default: 0] += 1 } // a fresh read already has it
         content.badge = NSNumber(value: badgeCount())
         notified.append(m.id)
         if notified.count > 300 { notified.removeFirst(100) }
+        let active = UIApplication.shared.applicationState == .active
+        let soundWanted = content.sound != nil
+        // in front the app plays the sound and the buzz itself (the system's would buzz a second time, whatever Vibrate says);
+        // behind, with remote push working, the push (same id) brings the sound: this copy stays silent
+        if active || PushManager.shared.alertState == .ok { content.sound = nil }
         try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: m.id, content: content, trigger: nil))
+        if active {
+            if soundWanted { MessageSound.preview() }
+            MessageSound.haptic()
+        }
     }
 
     /// Someone asked to join a group I own or run (website: one notice per request).
@@ -327,7 +355,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         content.body = flag("notifications.previews")
             ? String(format: NSLocalizedString("join.asked", comment: ""), d["name"] ?? NSLocalizedString("notify.someone", comment: ""))
             : NSLocalizedString("notify.generic", comment: "")
-        if flag("notifications.sound") { content.sound = .default }
+        if flag("notifications.sound") { content.sound = UNNotificationSound(named: MessageSound.notificationName) }
         content.threadIdentifier = conv
         content.userInfo = ["conversation_id": conv]
         try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "joinreq|\(conv)|\(d["user_id"] ?? "")", content: content, trigger: nil))
@@ -341,7 +369,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         let content = UNMutableNotificationContent()
         content.title = name.isEmpty ? NSLocalizedString("notify.someone", comment: "") : name
         content.body = NSLocalizedString("callrow.missed", comment: "")
-        if flag("notifications.sound") { content.sound = .default }
+        if flag("notifications.sound") { content.sound = UNNotificationSound(named: MessageSound.notificationName) }
         content.categoryIdentifier = Self.missedCallCategory
         content.threadIdentifier = conversationID ?? "tf.calls"
         var info: [String: Any] = ["kind": "missed_call", "peer_name": content.title]
@@ -373,16 +401,22 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     /// The call stopped ringing: its fallback notification goes.
     func clearIncomingCall(callID: String) {
         let c = UNUserNotificationCenter.current()
-        c.removeDeliveredNotifications(withIdentifiers: ["call|\(callID)"])
+        c.removeDeliveredNotifications(withIdentifiers: ["call|\(callID)", callID])
         c.removePendingNotificationRequests(withIdentifiers: ["call|\(callID)"])
     }
 
     /// Clears a chat's notifications once it is opened.
     func clear(conversation: String) {
         unread.remove(conversation)
+        unreadCounts[conversation] = nil
+        if UIApplication.shared.applicationState != .active { setIconBadge(badgeCount()) } // read from the lock screen
         let c = UNUserNotificationCenter.current()
         c.getDeliveredNotifications { list in
-            let ids = list.filter { ($0.request.content.userInfo["conversation_id"] as? String) == conversation }.map(\.request.identifier)
+            let ids = list.filter { n in
+                let info = n.request.content.userInfo
+                let id = (info["conversation_id"] as? String) ?? ((info["tf"] as? [String: Any])?["conversation_id"] as? String)
+                return id == conversation
+            }.map(\.request.identifier)
             c.removeDeliveredNotifications(withIdentifiers: ids)
         }
     }

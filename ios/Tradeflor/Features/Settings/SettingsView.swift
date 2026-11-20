@@ -75,6 +75,10 @@ struct SettingsView: View {
                         NavigationLink { PrivacyPage() } label: {
                             SMenuRow(icon: "checkmark.shield", title: NSLocalizedString("settings.privacy", comment: ""), subtitle: NSLocalizedString("settings.privacy.sub", comment: ""))
                         }
+                        SDivider()
+                        NavigationLink { AppLockSettingsPage() } label: {
+                            SMenuRow(icon: "lock.shield", title: NSLocalizedString("lock2.title", comment: ""), subtitle: NSLocalizedString("lock2.sub", comment: ""))
+                        }
                         if calls.enabled {
                             SDivider()
                             NavigationLink { CallsPage() } label: {

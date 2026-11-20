@@ -1028,7 +1028,26 @@ struct NotificationsPage: View {
     @EnvironmentObject private var store: SessionStore
     @StateObject private var sw = AccountSwitches()
     @State private var system: UNAuthorizationStatus?
+    @ObservedObject private var push = PushManager.shared
+    @State private var vibrate = MessageSound.vibrate
+    @State private var inChat = MessageSound.inChat
     private var token: String { store.session?.token ?? "" }
+
+    private func pushText(_ s: PushManager.State) -> String {
+        switch s {
+        case .waiting: return NSLocalizedString("push.waiting", comment: "")
+        case .ok: return NSLocalizedString("push.ok", comment: "")
+        case .failed(let m): return m
+        }
+    }
+
+    private var osText: String {
+        switch system {
+        case .some(.authorized), .some(.provisional), .some(.ephemeral): return NSLocalizedString("push.os.allowed", comment: "")
+        case .some(.denied): return NSLocalizedString("push.os.blocked", comment: "")
+        default: return NSLocalizedString("push.os.notyet", comment: "")
+        }
+    }
 
     var body: some View {
         SettingsPage(title: NSLocalizedString("settings.notifications", comment: ""), subtitle: NSLocalizedString("settings.notifications.sub", comment: ""), icon: "bell") {
@@ -1053,6 +1072,39 @@ struct NotificationsPage: View {
                 SToggleRow(icon: "", title: NSLocalizedString("set.n.mentions", comment: ""), isOn: sw.binding("notifications.mentions", token: token))
                 SDivider()
                 SToggleRow(icon: "", title: NSLocalizedString("set.n.mentions.muted", comment: ""), isOn: sw.binding("notifications.mentions_in_muted", token: token))
+            }
+            // Tradeflor's own sound, the buzz and the soft sound in an open chat (this phone)
+            SSection(text: NSLocalizedString("snd.title", comment: ""))
+            SCard {
+                Button { MessageSound.preview() } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "speaker.wave.2.fill").font(.system(size: 17)).foregroundStyle(SetUI.accent).frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("snd.preview").font(.system(size: 16, weight: .semibold)).foregroundStyle(SetUI.text)
+                            Text("snd.preview.sub").font(.system(size: 12.5)).foregroundStyle(SetUI.sub)
+                        }
+                        Spacer()
+                        Image(systemName: "play.circle.fill").font(.system(size: 26)).foregroundStyle(SetUI.accent)
+                    }
+                    .padding(.horizontal, 14).frame(minHeight: 60).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                SDivider()
+                SToggleRow(icon: "", title: NSLocalizedString("snd.vibrate", comment: ""), isOn: $vibrate)
+                SDivider()
+                SToggleRow(icon: "", title: NSLocalizedString("snd.inchat", comment: ""), isOn: $inChat)
+            }
+            .onChange(of: vibrate) { v in MessageSound.vibrate = v; if v { MessageSound.haptic() } }
+            .onChange(of: inChat) { MessageSound.inChat = $0 }
+            Text("snd.note").font(.system(size: 12.5)).foregroundStyle(SetUI.dim).padding(.horizontal, 4)
+            // what this phone knows about alerts and calls while the app is closed (so a missing one can be explained at once)
+            SSection(text: NSLocalizedString("push.title", comment: ""))
+            SCard {
+                SKeyValue(key: NSLocalizedString("push.os", comment: ""), value: osText)
+                SDivider()
+                SKeyValue(key: NSLocalizedString("push.alert", comment: ""), value: pushText(push.alertState))
+                SDivider()
+                SKeyValue(key: NSLocalizedString("push.voip", comment: ""), value: pushText(push.voipState))
             }
             Text("settings.notifications.text").font(.system(size: 13)).foregroundStyle(SetUI.dim).padding(.horizontal, 4)
             if let p = sw.problem { Text(p).font(.system(size: 12)).foregroundStyle(Theme.danger) }

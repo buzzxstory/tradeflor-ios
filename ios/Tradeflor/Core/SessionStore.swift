@@ -24,6 +24,7 @@ final class SessionStore: ObservableObject {
         if !hasSettings && !hasFiles {
             Keychain.delete()
             BiometricPIN.delete()
+            AppLockStore.delete() // the Keychain survives a reinstall: the old lock must not
         }
     }
 
@@ -83,6 +84,14 @@ final class SessionStore: ObservableObject {
         // the Lock PIN kept behind Face ID belongs to this account: the next one to sign in here must not be offered it
         // (sign-out and a revoked session both come through here)
         BiometricPIN.delete()
+        // the App Lock (PIN or pattern) belongs to this account's use of this phone: gone with it
+        AppLock.shared.reset()
+        ViewOnceSend.clearAll()
+        BadgeStore.shared.chats = 0; BadgeStore.shared.groups = 0
+        BadgeStore.shared.chatMessages = 0; BadgeStore.shared.groupMessages = 0
+        ViewOnceSeen.clearAll()
+        AppLockWindow.shared.hideLock()
+        AppLockWindow.shared.hideCover()
         APIClient.shared.avatarCache.removeAllObjects()
         APIClient.shared.forgetUnlock()
         // what was waiting to be sent (photos, voice notes, videos) and the chats hidden from the list belong to this account

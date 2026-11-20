@@ -15,6 +15,8 @@ struct MediaDraft: Identifiable {
     var thumb: UIImage? = nil
     var videoURL: URL?
     var caption = ""
+    /// Sent as "view once".
+    var viewOnce = false
     var isVideo: Bool { videoURL != nil }
 }
 
@@ -111,6 +113,7 @@ struct MediaSendSheet: View {
     private var room: Int { max(0, Self.maxItems - items.count) }
     @State private var index = 0
     @State private var hd = false
+    @State private var once = false
     @State private var adding: [PhotosPickerItem] = []
     @State private var showAdd = false
     @State private var player: AVPlayer?
@@ -451,6 +454,16 @@ struct MediaSendSheet: View {
                 .tint(Theme.hex(0x08D9D9))
                 .padding(.horizontal, 16).padding(.vertical, 11)
                 .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 22))
+            // view once: the ring with a 1 (filled when on)
+            Button { once.toggle() } label: {
+                ZStack {
+                    Circle().fill(once ? Theme.accent : Color.white.opacity(0.12))
+                    Circle().stroke(Color.white.opacity(once ? 0 : 0.6), lineWidth: 1.5)
+                    Text(verbatim: "1").font(.system(size: 16, weight: .heavy)).foregroundStyle(once ? Theme.onAccent : .white)
+                }
+                .frame(width: 40, height: 40)
+            }
+            .accessibilityLabel(Text(LocalizedStringKey(once ? "vo.toggle.on" : "vo.toggle.off")))
             Button(action: send) {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: "paperplane.fill").font(.system(size: 20, weight: .bold)).foregroundStyle(.white)
@@ -571,7 +584,8 @@ struct MediaSendSheet: View {
         guard !sending, !items.isEmpty else { return }
         player?.pause()
         handedOver = true
-        let snapshot = items
+        var snapshot = items
+        if once { for i in snapshot.indices { snapshot[i].viewOnce = true } }
         let allEdits = edits
         let quality = hd
         let edited = snapshot.contains { !$0.isVideo && !(allEdits[$0.id]?.isEmpty ?? true) }
