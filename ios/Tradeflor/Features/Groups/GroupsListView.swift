@@ -142,6 +142,7 @@ struct GroupsListView: View {
                     }
                 }
                 .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
+                .scrollIndicators(.hidden) // a short list drew a long bar down the whole side; WhatsApp's list shows none of it
                 .modifier(ListNoBounce())
             }
             .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })
