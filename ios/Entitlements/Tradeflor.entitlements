@@ -5,5 +5,8 @@
 	<!-- Used only by the signed Ad Hoc build, and only when its provisioning profile has Push Notifications (see .github/workflows/ios.yml). -->
 	<key>aps-environment</key>
 	<string>production</string>
+	<!-- The "Incoming call" alert may break through Focus (the server sends interruption-level time-sensitive). The profile has the capability since 2026-11-20. -->
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
 </dict>
 </plist>
