@@ -181,9 +181,9 @@ struct MessageRow<Content: View>: View {
                                 .padding(.horizontal, 7)
                                 .padding(.vertical, 3)
                                 // on a photo or video: a solid chip ringed in the chat colour, half below the picture (ac48799)
-                                .background(isMedia ? Theme.hex(r.mine ? 0x0F3A45 : 0x0D2A35) : (r.mine ? Theme.accent.opacity(0.35) : Theme.surface), in: Capsule())
+                                .background(isMedia ? (r.mine ? Theme.dyn(0x0F3A45, 0xDFF2F5) : Theme.dyn(0x0D2A35, 0xFFFFFF)) : (r.mine ? Theme.accent.opacity(0.35) : Theme.surface), in: Capsule())
                                 .overlay(Capsule().stroke(isMedia ? Theme.soul : Theme.ground, lineWidth: isMedia ? 2 : 1.5))
-                                .shadow(color: .black.opacity(isMedia ? 0.3 : 0), radius: 3, y: 1)
+                                .modifier(ReactionChipShadow(on: isMedia))
                         }
                         .buttonStyle(.plain)
                     }
@@ -223,9 +223,9 @@ struct MessageRow<Content: View>: View {
             if let r = options.roleTag, !options.asGroup {
                 // in the card, as on the web: lowercase, 11 pt, medium, lavender (#c3b2ff)
                 Text(NSLocalizedString("group.role." + r, comment: "").lowercased())
-                    .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.hex(0xC3B2FF))
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.dyn(0xC3B2FF, 0x6B4FD0))
                     .padding(.horizontal, 6).padding(.vertical, 1)
-                    .overlay(Capsule().stroke(Theme.hex(0xC3B2FF, 0.45), lineWidth: 1))
+                    .overlay(Capsule().stroke(Theme.dyn(0xC3B2FF, 0x6B4FD0, 0.45, 0.45), lineWidth: 1))
             }
         })
     }
@@ -350,6 +350,20 @@ struct MessageRow<Content: View>: View {
         Button { actions.select() } label: { Label("chat.select", systemImage: "checkmark.circle") }
         Divider()
         Button(role: .destructive) { onDelete(false) } label: { Label("chat.delete", systemImage: "trash") }
+    }
+}
+
+/// The soft shadow under a reaction chip that hangs over a photo or video. Chips under other messages get none at all
+/// (they carried one with a clear colour, which is still a shadow to draw for every chip).
+private struct ReactionChipShadow: ViewModifier {
+    let on: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if on {
+            content.shadow(color: .black.opacity(0.3), radius: 3, y: 1)
+        } else {
+            content
+        }
     }
 }
 

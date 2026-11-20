@@ -82,22 +82,23 @@ struct RemoteImage: View {
     @State private var image: UIImage?
     @State private var failed = false
     @State private var attempt = 0
+    /// The picture is taking a while (not just being read from this phone and decoded): only then the spinner shows.
+    @State private var slow = false
 
-    /// A picture already in memory shows at once (no spinner flash), as on the web.
+    /// A picture already made this app session shows at once (no spinner flash), as on the web.
     init(token: String, fileID: String, thumb: Bool = true, contentMode: ContentMode = .fill) {
         self.token = token
         self.fileID = fileID
         self.thumb = thumb
         self.contentMode = contentMode
-        // a picture decoded before is reused (every chat redraw re-created this view and re-read the bytes)
-        let key = Self.key(fileID, thumb)
-        var hit = Self.decoded.object(forKey: key)
-        if hit == nil, let d = APIClient.shared.cachedFile(fileID: fileID, thumb: thumb), let img = UIImage(data: d) {
-            Self.store(img, key)
-            hit = img
-        }
-        _image = State(initialValue: hit)
+        // Only a picture decoded before is taken here. This runs every time a chat redraw builds the row, on the main
+        // thread: it read the copy kept on this phone from disk and made an undecoded picture (decoded while drawing,
+        // which stalled the scroll). The task below reads and decodes it off the main thread instead.
+        _image = State(initialValue: Self.decoded.object(forKey: Self.key(fileID, thumb)))
     }
+
+    /// The picture as already decoded this app session, if any (the media viewer's first frame).
+    static func cachedDecoded(fileID: String, thumb: Bool) -> UIImage? { decoded.object(forKey: key(fileID, thumb)) }
 
     /// Pictures already made this app session (memory only, as the bytes are), by file id and size.
     private static let decoded: NSCache<NSString, UIImage> = {
@@ -125,12 +126,23 @@ struct RemoteImage: View {
                 .contentShape(Rectangle())
                 .onTapGesture { failed = false; attempt += 1 }
                 .accessibilityAddTraits(.isButton)
-            } else {
+            } else if slow {
                 ProgressView()
+            } else {
+                // the first moment: nothing over the bubble's own surface (a picture kept on this phone is there within it)
+                Color.clear
             }
+        }
+        .task(id: fileID + (thumb ? "t" : "f")) {
+            guard image == nil else { return }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if !Task.isCancelled && image == nil { slow = true }
         }
         .task(id: fileID + (thumb ? "t" : "f") + String(attempt)) {
             if image != nil && attempt == 0 { return }
+            // a bubble's picture is decoded at about the size it is drawn (never a 4096 px photo for a 275 pt bubble);
+            // the full picture (the viewer, zoomed) keeps its own size
+            let drawnPixels = (MediaDims.maxHeight * 2 * UIScreen.main.scale).rounded(.up)
             // by itself first: waits of 1, 2, 4 ... 30 s (a dropped connection, a server restart); only then the tap is offered
             for wait in [0, 1, 2, 4, 8, 16, 30] as [UInt64] {
                 if wait > 0 { try? await Task.sleep(nanoseconds: wait * 1_000_000_000) }
@@ -138,9 +150,12 @@ struct RemoteImage: View {
                 // the server's small picture; one without it answers 404, so the full file is asked for instead
                 var got = await APIClient.shared.file(token: token, fileID: fileID, thumb: thumb)
                 if got == nil && thumb { got = await APIClient.shared.file(token: token, fileID: fileID, thumb: false) }
-                if let d = got, let raw = UIImage(data: d) {
+                if let d = got {
                     // decoded off the main thread (a big picture decoded while drawing stalled the scroll)
-                    let img = await raw.byPreparingForDisplay() ?? raw
+                    var made: UIImage?
+                    if thumb { made = await AvatarImages.decode(d, maxPixels: drawnPixels) }
+                    if made == nil, let raw = UIImage(data: d) { made = await raw.byPreparingForDisplay() ?? raw }
+                    guard let img = made else { continue }
                     if Task.isCancelled { return }
                     Self.store(img, Self.key(fileID, thumb))
                     image = img

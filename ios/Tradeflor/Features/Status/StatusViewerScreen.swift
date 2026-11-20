@@ -593,7 +593,11 @@ struct StatusViewerScreen: View {
             let d = await APIClient.shared.statusMedia(token: token, id: post.id)
             // moved on meanwhile: this picture belongs to the story before (it flashed over the next one)
             if Task.isCancelled { return }
-            if let d, let ui = UIImage(data: d) { image = ui } else { loadFailed = true }
+            // decoded off the main thread, no larger than the screen (UIImage(data:) decodes on the main thread when first drawn)
+            var ui: UIImage?
+            if let d { ui = await AvatarImages.decode(d, maxPixels: max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * UIScreen.main.scale) }
+            if Task.isCancelled { return }
+            if let ui { image = ui } else { loadFailed = true }
         case "video", "voice":
             // heard with the ring / silent switch on silent (the default session kept a voice status mute); never during a call
             StatusAudio.prepare()
@@ -607,8 +611,9 @@ struct StatusViewerScreen: View {
                 // the poster (memory-cached; prefetched while the story before was on screen) shows while it loads
                 let id = post.id
                 Task {
+                    let px = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * UIScreen.main.scale
                     guard let d = await APIClient.shared.statusMedia(token: token, id: id, poster: true),
-                          let img = UIImage(data: d), self.post?.id == id else { return }
+                          let img = await AvatarImages.decode(d, maxPixels: px), self.post?.id == id else { return }
                     poster = img
                 }
             }

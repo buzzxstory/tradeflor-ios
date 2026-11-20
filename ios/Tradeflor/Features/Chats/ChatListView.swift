@@ -6,7 +6,10 @@ import ImageIO
 /// pill, the status row (My status, TRADEFLOR Official, contacts), the filter chips and the conversation rows.
 struct ChatListView: View {
     @EnvironmentObject private var store: SessionStore
-    @EnvironmentObject private var live: LiveConnection
+    /// Not observed: only who is online is shown here, and that is followed below (`online`). Observing the whole
+    /// connection worked this list out again for every "last seen" and connection change of anyone.
+    private let live = LiveConnection.shared
+    @State private var online: Set<String> = LiveConnection.shared.online
     @Environment(\.scenePhase) private var scenePhase
     @State private var chats: [ConversationSummary] = []
     @State private var loading = true
@@ -210,6 +213,8 @@ struct ChatListView: View {
             }
         }
         .onReceive(live.changes) { id in if !id.hasPrefix("grp_") { reloadSoon() } }
+        // the green dots: only a real change is written (a write of the same set would redraw the list for nothing)
+        .onReceive(live.$online) { now in if now != online { online = now } }
         // the socket is back (after a lock, a drop): what arrived meanwhile is read at once, not at the next poll
         .onReceive(live.opened) { _ in reloadSoon() }
         // Delete chat from inside the chat: off the list (and its badge) at once
@@ -360,6 +365,8 @@ struct ChatListView: View {
     }
 
     @ViewBuilder private var list: some View {
+        // worked out once per pass (it filters, sorts and folds every title; it was read twice)
+        let rows = shown
         if loading && chats.isEmpty {
             ProgressView().tint(Theme.accent).padding(.top, 60)
         } else if failed && chats.isEmpty {
@@ -373,7 +380,7 @@ struct ChatListView: View {
             VStack(spacing: 12) {
                 Text("ux1.chats.none").font(.system(size: 13)).foregroundStyle(Theme.faint)
                 Button { showContacts = true } label: {
-                    Text("ux1.chats.start").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.hex(0x03202A))
+                    Text("ux1.chats.start").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.onAccent)
                         .padding(.horizontal, 20)
                         .frame(minWidth: 160, minHeight: 44)
                         .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -385,15 +392,14 @@ struct ChatListView: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 20)
             .padding(.vertical, 28)
-        } else if shown.isEmpty {
+        } else if rows.isEmpty {
             ListEmptyNote(text: emptyNote)
         } else {
-            let rows = shown
             let ringIndex = statusIndexByUser
             LazyVStack(spacing: 0) {
                 ForEach(rows) { c in
                     NavigationLink(value: c) {
-                        ChatRow(chat: c, token: token, online: live.online.contains(c.peer_id),
+                        ChatRow(chat: c, token: token, online: online.contains(c.peer_id),
                                 pinned: prefs[c.conversation_id]?.pinned ?? false, muted: prefs[c.conversation_id]?.muted ?? false,
                                 markedUnread: prefs[c.conversation_id]?.marked_unread ?? false,
                                 first: c.conversation_id == rows.first?.conversation_id,
@@ -574,9 +580,13 @@ struct ChatListView: View {
         guard !token.isEmpty else { return }
         loadHidden()
         if chats.isEmpty {
-            // the last list this phone saw, at once; the server's answer replaces it a moment later
-            let cached = ListCache.conversations(token: token).sorted { $0.last_message_at > $1.last_message_at }
-            if !cached.isEmpty { chats = cached }
+            // the last list this phone saw, at once; the server's answer replaces it a moment later. Read and decoded off
+            // the main thread (a file read and a JSON decode at launch)
+            let tok = token
+            let cached = await Task.detached(priority: .userInitiated) {
+                ListCache.conversations(token: tok).sorted { $0.last_message_at > $1.last_message_at }
+            }.value
+            if chats.isEmpty, !cached.isEmpty { chats = cached }
         }
         if !quiet { loading = true }
         defer { loading = false }
@@ -949,7 +959,9 @@ struct Avatar: View {
             }
             // a picture seen before is on disk (its id changes with the picture): shown at once, no download
             let diskKey = "avatar/\(owner)/\(id)"
-            if let d = FileDiskCache.load(diskKey), let img = await AvatarImages.decode(d, maxPixels: pixels) {
+            // the file is read off the main thread (one read per row while a list scrolls)
+            let kept = await Task.detached(priority: .userInitiated) { FileDiskCache.load(diskKey) }.value
+            if let d = kept, let img = await AvatarImages.decode(d, maxPixels: pixels) {
                 AvatarImages.put(img, key)
                 if !Task.isCancelled { loaded = (owner, key, img) }
                 return
@@ -958,7 +970,7 @@ struct Avatar: View {
                 ? await APIClient.shared.groupAvatar(token: token, groupID: groupID ?? "", avatarID: id)
                 : await APIClient.shared.avatar(token: token, userID: userID, avatarID: id)
             guard let data, !Task.isCancelled else { return }
-            FileDiskCache.save(diskKey, data)
+            Task.detached(priority: .utility) { FileDiskCache.save(diskKey, data) } // the write too
             guard let img = await AvatarImages.decode(data, maxPixels: pixels) else { return }
             AvatarImages.put(img, key)
             if !Task.isCancelled { loaded = (owner, key, img) }

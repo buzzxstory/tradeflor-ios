@@ -656,7 +656,8 @@ struct ZoomablePhoto: View {
     let fileID: String
     @Binding var zoomed: Bool
     let onTap: () -> Void
-    private let preview: UIImage?
+    /// The small picture, kept (it was made again from its bytes on every frame of a swipe: this view is rebuilt for each).
+    @State private var preview: UIImage?
     @State private var scale: CGFloat = 1
     @State private var base: CGFloat = 1
     @State private var offset: CGSize = .zero
@@ -667,7 +668,8 @@ struct ZoomablePhoto: View {
         self.fileID = fileID
         _zoomed = zoomed
         self.onTap = onTap
-        preview = APIClient.shared.cachedFile(fileID: fileID, thumb: true).flatMap { UIImage(data: $0) }
+        // the bubble's own decoded picture when it is still in memory (a look-up, no bytes read); else read below, once
+        _preview = State(initialValue: RemoteImage.cachedDecoded(fileID: fileID, thumb: true))
     }
 
     var body: some View {
@@ -686,6 +688,14 @@ struct ZoomablePhoto: View {
             .onTapGesture { onTap() }
         }
         .ignoresSafeArea()
+        .task(id: fileID) {
+            // only what is already on this phone (no request), read and decoded off the main thread
+            guard preview == nil else { return }
+            let id = fileID
+            let kept = await Task.detached(priority: .userInitiated) { APIClient.shared.cachedFile(fileID: id, thumb: true) }.value
+            guard let kept, let img = await AvatarImages.decode(kept, maxPixels: 1600) else { return }
+            if !Task.isCancelled && preview == nil { preview = img }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("mv.photo"))
         .accessibilityAddTraits(.isImage)

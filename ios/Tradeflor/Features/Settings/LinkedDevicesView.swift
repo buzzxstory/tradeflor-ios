@@ -141,7 +141,10 @@ private struct LDRowAnchor: PreferenceKey {
 
 struct LinkedDevicesView: View {
     @EnvironmentObject private var store: SessionStore
-    @EnvironmentObject private var live: LiveConnection
+    /// Not observed: only "the socket came back" matters here, followed below (`connected`). Observing the whole connection
+    /// redrew the page whenever any contact came online.
+    private let live = LiveConnection.shared
+    @State private var connected = LiveConnection.shared.connected
     @Environment(\.dismiss) private var dismiss
 
     @State private var list: [LinkedDevice]?
@@ -225,7 +228,8 @@ struct LinkedDevicesView: View {
         .task { await load() }
         // live: the server says "sessions changed" (a sign-in, a sign-out, a rename on any device), or the socket came back
         .onReceive(live.sessionsChanged) { _ in Task { await load() } }
-        .onChange(of: live.connected) { c in if c { Task { await load() } } }
+        .onReceive(live.$connected) { c in if c != connected { connected = c } }
+        .onChange(of: connected) { c in if c { Task { await load() } } }
         .onReceive(ticker) { now = $0 }
     }
 

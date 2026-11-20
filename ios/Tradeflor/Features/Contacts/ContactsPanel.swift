@@ -14,7 +14,8 @@ import SwiftUI
 struct ContactsPanel: View {
     let onOpen: (ConversationSummary) -> Void
     @EnvironmentObject private var store: SessionStore
-    @EnvironmentObject private var live: LiveConnection
+    /// Used for its "contact" events only, so it is not observed (a contact coming online redrew the whole panel).
+    private let live = LiveConnection.shared
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var calls = CallManager.shared
     @ObservedObject private var profiles = ContactProfiles.shared
@@ -33,6 +34,9 @@ struct ContactsPanel: View {
     @State private var adding = "" // "" | adding | opening
     @State private var problem: Problem?
     @State private var contacts: [ContactEntry] = []
+    /// `contacts` by name, A-Z. Sorted when the list is read and a moment after profiles (display names) arrive, not on
+    /// every pass: each profile that came in sorted the whole list again.
+    @State private var sortedContacts: [ContactEntry] = []
     @State private var incoming: [ContactRequest] = []
     @State private var loaded = false
     @State private var loadFailed = false
@@ -61,8 +65,12 @@ struct ContactsPanel: View {
         return c.username
     }
 
+    private func resort() {
+        sortedContacts = contacts.sorted { nameOf($0).localizedCaseInsensitiveCompare(nameOf($1)) == .orderedAscending }
+    }
+
     private var shown: [ContactEntry] {
-        let list = contacts.sorted { nameOf($0).localizedCaseInsensitiveCompare(nameOf($1)) == .orderedAscending }
+        let list = sortedContacts
         guard let p = parsed else { return list }
         // the name, nickname or @username; Arabic letter forms, tashkeel, accents and case do not matter
         let needle = ListSearch.needle(p.value)
@@ -135,6 +143,12 @@ struct ContactsPanel: View {
             }
         }
         .task { await load() }
+        // profiles (the display names the order follows) arrive one per row: the list is sorted again once they have
+        // stopped coming for a moment, not once for each
+        .task(id: profiles.byID.count) {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            if !Task.isCancelled { resort() }
+        }
         .onReceive(live.contactsChanged) { _ in Task { await load() } }
         .onChange(of: query) { _ in queryChanged() }
         .onDisappear { lookupTask?.cancel() }
@@ -200,7 +214,8 @@ struct ContactsPanel: View {
                     fieldFocused = true
                 } label: {
                     Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundStyle(CV3.sub)
-                        .frame(width: 30, height: 30).background(Color.white.opacity(0.08), in: Circle())
+                        .frame(width: 30, height: 30).background(Theme.dyn(0xFFFFFF, 0x0F2533, 0.08, 0.07), in: Circle())
+                        .padding(7).contentShape(Rectangle()).padding(-7) // a 44 pt target; the field's layout is unchanged
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("cv3.clear"))
@@ -489,6 +504,7 @@ struct ContactsPanel: View {
         async let i = APIClient.shared.incomingRequests(token: token)
         if let list = try? await c {
             contacts = list
+            resort()
             loadFailed = false
         } else {
             loadFailed = true // said with a retry; it showed "no contacts yet" before

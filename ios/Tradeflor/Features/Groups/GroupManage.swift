@@ -388,6 +388,9 @@ struct GroupInfoView: View {
     @State private var tab = 0
     @State private var group: GrpInfo?
     @State private var members: [GrpMember] = []
+    /// `members` in the Members tab's order (the owner, the admins, then everyone A-Z), sorted once per load instead of on
+    /// every pass of the page.
+    @State private var membersSorted: [GrpMember] = []
     /// Current and former members (names for Recent actions).
     @State private var everyone: [GrpMember] = []
     /// A change on its way to the server: shown at once, and the base for the next one (two quick switches used to send
@@ -434,7 +437,8 @@ struct GroupInfoView: View {
     @State private var inviting = false
     /// Join requests that arrived live while Group Info is open (website freshIds): they keep the cyan edge.
     @State private var freshIDs: Set<String> = []
-    @EnvironmentObject private var live: LiveConnection
+    /// Used for its join-request events only, so it is not observed (a contact coming online redrew Group Info).
+    private let live = LiveConnection.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var token: String { store.session?.token ?? "" }
@@ -1290,13 +1294,8 @@ struct GroupInfoView: View {
         }
         .buttonStyle(.plain)
         // two cards (website .mgroup, 75bbc6f): Admins (the owner first), then Members · N; each A-Z
-        let sorted: [GrpMember] = members.sorted { (a: GrpMember, b: GrpMember) -> Bool in
-            let ra = Self.roleRank(a.role), rb = Self.roleRank(b.role)
-            if ra != rb { return ra < rb }
-            return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
-        }
-        let staff = sorted.filter { $0.role == "owner" || $0.role == "admin" }
-        let plain = sorted.filter { $0.role != "owner" && $0.role != "admin" }
+        let staff = membersSorted.filter { $0.role == "owner" || $0.role == "admin" }
+        let plain = membersSorted.filter { $0.role != "owner" && $0.role != "admin" }
         if !staff.isEmpty { memberGroup(NSLocalizedString("gx.m.admins", comment: ""), staff) }
         if !plain.isEmpty { memberGroup(String(format: NSLocalizedString("gx.m.members", comment: ""), plain.count), plain) }
         if !members.isEmpty {
@@ -1320,9 +1319,19 @@ struct GroupInfoView: View {
 
     private static func roleRank(_ role: String) -> Int { role == "owner" ? 0 : role == "admin" ? 1 : 2 }
 
+    /// The Members tab's order: the owner, the admins, then everyone, each A-Z.
+    private static func memberOrder(_ list: [GrpMember]) -> [GrpMember] {
+        list.sorted { (a: GrpMember, b: GrpMember) -> Bool in
+            let ra = roleRank(a.role), rb = roleRank(b.role)
+            if ra != rb { return ra < rb }
+            return a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending
+        }
+    }
+
     /// One card of the Members tab (website .mgroup): a small uppercase title, then compact rows.
     private func memberGroup(_ title: String, _ list: [GrpMember]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // lazy: a big group's rows (picture, menu, long-press menu each) are built as they scroll into view, not all at once
+        LazyVStack(alignment: .leading, spacing: 0) {
             Text(title.uppercased()).font(.system(size: 11, weight: .bold)).tracking(0.88)
                 .foregroundStyle(Theme.dyn(0x6F93A3, 0x5F7686))
                 .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 6)
@@ -1393,7 +1402,8 @@ struct GroupInfoView: View {
                     Image(systemName: "ellipsis").font(.system(size: 14, weight: .bold)).foregroundStyle(mutedText)
                         .frame(width: 30, height: 30)
                         .background(Theme.dyn(0x78BED2, 0x0097A5, 0.06, 0.07), in: Circle())
-                        .contentShape(Circle())
+                        // a 44 pt target around the 30 pt disc; the row's layout is unchanged
+                        .padding(7).contentShape(Rectangle()).padding(-7)
                 }
                 .accessibilityLabel(Text("grp.more"))
             }
@@ -1628,6 +1638,7 @@ struct GroupInfoView: View {
             members = out
             everyone = out
         }
+        membersSorted = Self.memberOrder(members)
         stats = await APIClient.shared.grpMediaStats(token: token, conversationID: groupID)
         // a failed request leaves the list as it was (it used to turn into an empty list)
         if g.isAdmin || g.can_invite == true, let l = await APIClient.shared.grpInvitesIfOK(token: token, id: groupID) { invites = l }

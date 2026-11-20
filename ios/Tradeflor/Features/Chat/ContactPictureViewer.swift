@@ -75,6 +75,7 @@ struct ContactPictureViewer: View {
                 .allowsHitTesting(false)
         }
         .statusBarHidden(true)
+        .environment(\.colorScheme, .dark) // a dark viewer in day mode too (its frosted buttons)
         .task { await load() }
     }
 

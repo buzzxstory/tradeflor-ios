@@ -5,7 +5,9 @@ struct TradeflorApp: App {
     @UIApplicationDelegateAdaptor(TradeflorAppDelegate.self) private var appDelegate
     @StateObject private var store = SessionStore()
     @AppStorage("tf.night") private var night = true
-    @StateObject private var live = LiveConnection.shared
+    /// The one live connection, handed to every screen. Not observed here: its presence lists change all the time, and the
+    /// app's root would be worked out again for each change.
+    private let live = LiveConnection.shared
 
     init() {
         Theme.applyAppearance()
@@ -32,7 +34,9 @@ struct TradeflorApp: App {
 
 struct RootView: View {
     @EnvironmentObject private var store: SessionStore
-    @EnvironmentObject private var live: LiveConnection
+    /// Used for its events and calls only (nothing it publishes is shown here), so it is not observed: a contact coming
+    /// online no longer works out the whole root again. The App still hands it to every screen (environmentObject).
+    private let live = LiveConnection.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var settling = false
     @ObservedObject private var appLock = AppLock.shared
@@ -86,13 +90,17 @@ struct RootView: View {
                 }
                 // the dock floats over the tabs; each tab keeps room for it (DockSpace), so no row or "Load more" hides
                 // under it (a safe-area inset on a TabView does not reach its pages' scroll views)
+                // the animation belongs to the dock alone: on the whole TabView it also animated every tab's bottom room
+                // (DockSpace) while a chat was being pushed or the keyboard came up
                 .overlay(alignment: .bottom) {
-                    if !chrome.hidden {
-                        MobileTabBar(tab: $tab, chatsBadge: badges.chats, groupsBadge: badges.groups)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    ZStack(alignment: .bottom) {
+                        if !chrome.hidden {
+                            MobileTabBar(tab: $tab, chatsBadge: badges.chats, groupsBadge: badges.groups)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
                     }
+                    .animation(.easeOut(duration: 0.18), value: chrome.hidden)
                 }
-                .animation(.easeOut(duration: 0.18), value: chrome.hidden)
             } else {
                 LoginView()
             }
@@ -218,9 +226,11 @@ struct RootView: View {
                 AppLockWindow.shared.showCover()
             }
             if phase == .active { PushManager.shared.retryIfNeeded() }
-            if phase != .active {
+            // armed only by a real trip to the background (locking the phone always passes through it): Control Center, the
+            // notification shade, Face ID or a system alert (.inactive only) no longer leave the app deaf for 300 ms
+            if phase == .background {
                 settling = true // up before the app is on screen again: the touch that unlocks the phone never reaches a row
-            } else {
+            } else if phase == .active, settling {
                 Task { try? await Task.sleep(nanoseconds: 300_000_000); settling = false }
             }
             // online = the app is in front (server d4d2e77)
@@ -241,14 +251,17 @@ struct RootView: View {
 
     /// Runs `then` once whatever the app presents (sheets, a dialog) is gone: dismissed here first.
     private func afterSheets(_ then: @escaping () -> Void) {
-        let root = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first?.rootViewController
+        // the app's own window, not the key one: while App Lock is up its window is the key window and never has a sheet
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }
+        let root = windows.first(where: { $0.windowLevel == .normal && !$0.isHidden && $0.rootViewController != nil })?.rootViewController
         // the account setup cover is never closed under the person (a call then waits for it, as before)
         guard let root, let presented = root.presentedViewController, !needsSetup else { then(); return }
         if presented.isBeingDismissed {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { afterSheets(then) }
             return
         }
-        root.dismiss(animated: true, completion: then)
+        // an incoming call does not wait for a sheet to slide away
+        root.dismiss(animated: calls.phase != .incoming, completion: then)
     }
 
     private func syncLive() {

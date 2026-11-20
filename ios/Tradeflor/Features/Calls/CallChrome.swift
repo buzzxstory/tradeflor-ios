@@ -125,7 +125,12 @@ struct CallBarSpace: ViewModifier {
 @MainActor
 final class CallPhotoCache {
     static let shared = CallPhotoCache()
-    private var images: [String: UIImage] = [:]
+    /// A few pictures at most (it was a dictionary that only grew, of full-size pictures).
+    private let images: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 8
+        return c
+    }()
     private var avatarIDs: [String: String] = [:]
 
     func photo(token: String, userID: String?) async -> UIImage? {
@@ -137,10 +142,13 @@ final class CallPhotoCache {
         }
         guard let aid = avatarIDs[userID], !aid.isEmpty else { return nil } // no picture (or removed): the letter
         let key = userID + "/" + aid
-        if let i = images[key] { return i }
+        if let i = images.object(forKey: key as NSString) { return i }
+        // decoded off the main thread at the size of the big photo (at most 290 pt): UIImage(data:) decoded the full
+        // picture on the main thread just as the call screen came up. The blurred background needs no more detail.
+        let pixels = 290 * UIScreen.main.scale
         guard let data = await APIClient.shared.avatar(token: token, userID: userID, avatarID: aid),
-              let img = UIImage(data: data) else { return nil }
-        images[key] = img
+              let img = await AvatarImages.decode(data, maxPixels: pixels) else { return nil }
+        images.setObject(img, forKey: key as NSString)
         return img
     }
 }

@@ -163,7 +163,12 @@ enum ListCache {
     private static let lockedLock = NSLock()
     private static var _locked: Set<String>?
     static func noteLocked(_ ids: Set<String>, token: String) {
-        lockedLock.lock(); _locked = ids; lockedLock.unlock()
+        lockedLock.lock()
+        let same = _locked == ids
+        _locked = ids
+        lockedLock.unlock()
+        // the same locks as last time (every list reload asks): nothing on disk changes, so nothing is rewritten
+        if same { return }
         if let d = try? JSONEncoder().encode(Array(ids)) { save("locked", token: token, d) }
         // lists already on disk lose the text of a chat that has just been locked
         for kind in ["conversations", "groups"] { if let d = load(kind, token: token) { save(kind, token: token, d) } }
@@ -184,9 +189,20 @@ enum ListCache {
         return (try? JSONSerialization.data(withJSONObject: arr)) ?? data
     }
 
+    /// What was last written for each file, to skip a save that would write the same bytes again.
+    private static let savedLock = NSLock()
+    private static var lastSaved: [String: Data] = [:]
+
     static func save(_ kind: String, token: String, _ data: Data) {
         guard let dir else { return }
         let data = sealed(kind, token: token, data)
+        // the same bytes as the last save of this list (a reload that changed nothing): no directory scan, no write
+        let name = "\(kind)-\(tag(token)).json"
+        savedLock.lock()
+        let unchanged = lastSaved[name] == data
+        if !unchanged { lastSaved = lastSaved.filter { !$0.key.hasPrefix(kind + "-") }; lastSaved[name] = data }
+        savedLock.unlock()
+        if unchanged { return }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // one copy per kind: an older session's file goes
         if let old = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
@@ -219,6 +235,8 @@ enum ListCache {
 
     static func clear() {
         if let dir { try? FileManager.default.removeItem(at: dir) }
+        savedLock.lock(); lastSaved = [:]; savedLock.unlock()
+        lockedLock.lock(); _locked = nil; lockedLock.unlock() // the next account's locks are written again
         FileDiskCache.clear()
     }
 }

@@ -31,14 +31,36 @@ enum ViewOnceSend {
 /// The view-once messages this phone has opened (a group says "Opened" for me once I opened it).
 enum ViewOnceSeen {
     private static let key = "tf.viewonce.opened"
+    private static let lock = NSLock()
+    /// The saved ids, read once (a view-once bubble asked for the whole saved list several times on every redraw); kept
+    /// in step by `mark` and `clearAll`, the only places that write the list.
+    private static var known: Set<String>?
+
     static func mark(_ id: String) {
-        var all = UserDefaults.standard.stringArray(forKey: key) ?? []
-        if !all.contains(id) { all.append(id) }
-        if all.count > 500 { all.removeFirst(all.count - 500) }
-        UserDefaults.standard.set(all, forKey: key)
+        lock.withLock {
+            var all = UserDefaults.standard.stringArray(forKey: key) ?? []
+            if !all.contains(id) { all.append(id) }
+            if all.count > 500 { all.removeFirst(all.count - 500) }
+            UserDefaults.standard.set(all, forKey: key)
+            known = Set(all)
+        }
     }
-    static func has(_ id: String) -> Bool { (UserDefaults.standard.stringArray(forKey: key) ?? []).contains(id) }
-    static func clearAll() { UserDefaults.standard.removeObject(forKey: key) }
+
+    static func has(_ id: String) -> Bool {
+        lock.withLock { () -> Bool in
+            if let known { return known.contains(id) }
+            let all = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+            known = all
+            return all.contains(id)
+        }
+    }
+
+    static func clearAll() {
+        lock.withLock {
+            UserDefaults.standard.removeObject(forKey: key)
+            known = []
+        }
+    }
 }
 
 extension Message {
@@ -65,9 +87,11 @@ struct ViewOnceBubble: View {
     }
 
     var body: some View {
+        // read once per redraw (it was read again for each use below)
+        let opened = self.opened
         HStack {
             if mine { Spacer(minLength: 48) }
-            Button(action: { if !mine && !opened { onOpen() } }) {
+            Button(action: { if !mine && !self.opened { onOpen() } }) {
                 HStack(spacing: 12) {
                     ZStack {
                         Circle().stroke(style: StrokeStyle(lineWidth: 2, dash: opened ? [3, 3] : []))
@@ -78,7 +102,7 @@ struct ViewOnceBubble: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(LocalizedStringKey("vo." + message.viewOnceKind)).font(.system(size: 16, weight: .semibold))
                             .foregroundStyle(Theme.text)
-                        Text(LocalizedStringKey(stateKey)).font(.system(size: 12.5)).foregroundStyle(Theme.faint)
+                        Text(LocalizedStringKey(stateKey(opened))).font(.system(size: 12.5)).foregroundStyle(Theme.faint)
                     }
                     Spacer(minLength: 6)
                     if let d = message.date {
@@ -95,7 +119,7 @@ struct ViewOnceBubble: View {
         }
     }
 
-    private var stateKey: String {
+    private func stateKey(_ opened: Bool) -> String {
         if mine { return message.viewed_at != nil ? "vo.opened" : "vo.sent" }
         return opened ? "vo.opened" : "vo.tap"
     }

@@ -177,7 +177,8 @@ struct SearchPill: View {
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.faint)
-                        .frame(width: 32, height: 32).contentShape(Rectangle()) // a 16 pt glyph was hard to hit
+                        .frame(width: 32, height: 32)
+                        .padding(6).contentShape(Rectangle()).padding(-6) // a 44 pt target; the field's layout is unchanged
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("cv3.clear"))
@@ -209,6 +210,8 @@ struct FilterChip: View {
             .background(selected ? AnyShapeStyle(LinearGradient(colors: [Theme.hex(0x0AA9B6), Theme.hex(0x06808F)], startPoint: .top, endPoint: .bottom))
                                  : AnyShapeStyle(Theme.chip), in: Capsule())
             .overlay(Capsule().stroke(selected ? Theme.borderActive : Theme.borderStrong, lineWidth: 1))
+            // a 44 pt tall target around the 30 pt pill (the row's layout is unchanged)
+            .padding(.vertical, 7).contentShape(Rectangle()).padding(.vertical, -7)
         }
         .buttonStyle(.plain)
     }

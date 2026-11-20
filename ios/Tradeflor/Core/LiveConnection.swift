@@ -20,6 +20,8 @@ final class LiveConnection: ObservableObject {
     /// refresh, back from the background) never flashes "Reconnecting…" (web 96d0f8b). Sending and calls use `connected`.
     @Published private(set) var steadyConnected = true
     private var steadyTask: Task<Void, Never>?
+    /// The one pending "statuses changed" notice (see the "status" event in handle).
+    private var statusNotice: Task<Void, Never>?
     private let path = NWPathMonitor()
     private var offline = false
     /// The interfaces of the last network path (nil before the first answer): a change (Wi-Fi to mobile data) leaves the
@@ -315,7 +317,15 @@ final class LiveConnection: ObservableObject {
             // goes; every status list reads the feed again at once instead of two minutes later (web preferences.tsx "status")
             let d = ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] as? [String: Any]) ?? [:]
             if (d["action"] as? String) == "deleted", let id = d["id"] as? String { StatusGone.shared.mark(id) }
-            NotificationCenter.default.post(name: .tfStatusChanged, object: nil)
+            // a burst of status events (several posted or deleted together) is one notice: every status list reads the feed
+            // again for each one posted
+            if statusNotice == nil {
+                statusNotice = Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    self?.statusNotice = nil
+                    NotificationCenter.default.post(name: .tfStatusChanged, object: nil)
+                }
+            }
             return
         }
         if env.type == "flash" {

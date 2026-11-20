@@ -421,8 +421,9 @@ struct OfficialViewer: View {
             player = pl
             if !paused { pl.play() }
             Task {
+                let px = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * UIScreen.main.scale
                 guard let d = await APIClient.shared.statusMedia(token: token, id: id, poster: true),
-                      let img = UIImage(data: d), self.post?.id == pid else { return }
+                      let img = await AvatarImages.decode(d, maxPixels: px), self.post?.id == pid else { return }
                 poster = img
             }
             prefetchNext()
@@ -431,7 +432,11 @@ struct OfficialViewer: View {
             let d = await APIClient.shared.statusMedia(token: token, id: id)
             // moved on meanwhile: this picture belongs to the post before (it flashed over the next one)
             if Task.isCancelled { return }
-            if let d, let img = UIImage(data: d) {
+            // decoded off the main thread, no larger than the screen (UIImage(data:) decodes on the main thread when first drawn)
+            var decoded: UIImage?
+            if let d { decoded = await AvatarImages.decode(d, maxPixels: max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * UIScreen.main.scale) }
+            if Task.isCancelled { return }
+            if let img = decoded {
                 image = img
             } else {
                 loadFailed = true

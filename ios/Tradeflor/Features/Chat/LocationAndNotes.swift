@@ -145,10 +145,25 @@ struct LocationCard: View {
     @State private var region = MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 0, longitude: 0),
                                                    span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01))
 
+    /// The end of each share (unix seconds; 0 = the text names none), read once per card text: it was a JSON read
+    /// several times per card on every chat redraw. Used from the views (main thread) only.
+    private static var untilMemo: [String: Double] = [:]
+
     private var until: Date? {
-        guard let s = message.signal, let d = s.data(using: .utf8),
-              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let u = o["until"] as? Double else { return nil }
-        return Date(timeIntervalSince1970: u)
+        guard let s = message.signal else { return nil }
+        let u: Double
+        if let hit = Self.untilMemo[s] {
+            u = hit
+        } else {
+            var read = 0.0
+            if let d = s.data(using: .utf8), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+               let v = o["until"] as? Double { read = v }
+            if Self.untilMemo.count > 300 { Self.untilMemo.removeAll(keepingCapacity: true) }
+            Self.untilMemo[s] = read
+            u = read
+        }
+        // a share with no end named, or one named as 0, was never running: the same answer as before for both
+        return u > 0 ? Date(timeIntervalSince1970: u) : nil
     }
     private var running: Bool { (until ?? .distantPast) > Date() && position != nil }
     private var maybeRunning: Bool { (until ?? .distantPast) > Date() && !loaded }

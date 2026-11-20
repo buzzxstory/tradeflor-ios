@@ -275,7 +275,8 @@ struct ListSearchField: View {
             if !text.isEmpty {
                 Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(Theme.faint)
-                        .frame(width: 32, height: 32).contentShape(Rectangle()) // a finger-sized target
+                        .frame(width: 32, height: 32)
+                        .padding(6).contentShape(Rectangle()).padding(-6) // a 44 pt target; the field's layout is unchanged
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("cal.clear"))
@@ -331,7 +332,8 @@ struct ListChip: View {
                 if selected { Capsule().fill(ListLook.chipActive) } else { Capsule().fill(ListLook.chipFill) }
             }
             .overlay(Capsule().stroke(selected ? ListLook.chipActiveBorder : ListLook.chipBorder, lineWidth: 1))
-            .contentShape(Capsule())
+            // a 44 pt tall target around the 36 pt pill (the row's layout is unchanged; sideways the chips stay apart)
+            .padding(.vertical, 4).contentShape(Rectangle()).padding(.vertical, -4)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -348,7 +350,7 @@ struct ListNewFolderButton: View {
                 .frame(width: 36, height: 36)
                 .background(ListLook.newFolderFill, in: Circle())
                 .overlay(Circle().stroke(ListLook.chipBorder, lineWidth: 1))
-                .contentShape(Circle())
+                .padding(4).contentShape(Rectangle()).padding(-4) // a 44 pt target around the 36 pt disc
         }
         .buttonStyle(.plain)
         .accessibilityLabel(Text("folder.new"))

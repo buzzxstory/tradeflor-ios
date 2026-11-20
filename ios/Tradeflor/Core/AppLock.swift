@@ -148,7 +148,22 @@ final class AppLock: ObservableObject {
     func verify(_ secret: String) -> Bool {
         if let until = lockedUntil, until > Date() { return false }
         guard let r = AppLockStore.load() else { return false }
-        if AppLockRules.derive(secret, salt: r.salt) == r.hash {
+        return settle(AppLockRules.derive(secret, salt: r.salt) == r.hash)
+    }
+
+    /// `verify` for the screens: the 50,000 hash rounds run off the main thread (they held the last key press for a moment);
+    /// the counting of wrong tries and the wait are the same.
+    func verifyOffMain(_ secret: String) async -> Bool {
+        if let until = lockedUntil, until > Date() { return false }
+        guard let r = AppLockStore.load() else { return false }
+        let salt = r.salt, hash = r.hash
+        let right = await Task.detached(priority: .userInitiated) { AppLockRules.derive(secret, salt: salt) == hash }.value
+        return settle(right)
+    }
+
+    /// What follows a try: a right one forgives the wrong ones before it, a wrong one is counted.
+    private func settle(_ right: Bool) -> Bool {
+        if right {
             resetFailures()
             return true
         }

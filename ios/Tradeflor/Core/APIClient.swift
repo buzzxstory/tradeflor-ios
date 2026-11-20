@@ -185,23 +185,19 @@ final class APIClient {
     }
 
     func conversations(token: String) async throws -> [ConversationSummary] {
-        let (data, http) = try await send(request("conversations", method: "GET", token: token, body: nil))
-        switch http.statusCode {
-        case 200:
-            if data.isEmpty || data == Data("null".utf8) { return [] }
-            do {
-                // one entry the app cannot read never hides every chat
-                let out = (try JSONDecoder().decode([LenientItem<ConversationSummary>]?.self, from: data) ?? []).compactMap(\.value)
-                ListCache.save("conversations", token: token, data)
-                // the server's latest picture of every person I chat with: a changed photo shows everywhere
-                AvatarBook.noteLater(Dictionary(out.filter { !$0.peer_id.isEmpty }.map { ($0.peer_id, $0.peer_avatar_id ?? "") },
-                                                uniquingKeysWith: { a, _ in a }))
-                return out
-            } catch { throw APIError.decoding }
-        case 401: throw APIError.badCredentials
-        case 429: throw APIError.rateLimited
-        default: throw APIError.server(status: http.statusCode)
-        }
+        // through getJSON: the chat list and the notifier ask at the same moment (coming back to the app); they share one
+        // request. It throws badCredentials on 401 and rateLimited on 429, as this did.
+        let data = try await getJSON("conversations", token: token, reuseRecent: false)
+        if data.isEmpty || data == Data("null".utf8) { return [] }
+        do {
+            // one entry the app cannot read never hides every chat
+            let out = (try JSONDecoder().decode([LenientItem<ConversationSummary>]?.self, from: data) ?? []).compactMap(\.value)
+            ListCache.save("conversations", token: token, data)
+            // the server's latest picture of every person I chat with: a changed photo shows everywhere
+            AvatarBook.noteLater(Dictionary(out.filter { !$0.peer_id.isEmpty }.map { ($0.peer_id, $0.peer_avatar_id ?? "") },
+                                            uniquingKeysWith: { a, _ in a }))
+            return out
+        } catch { throw APIError.decoding }
     }
 
     /// A user's profile picture (only someone you share a chat with). Kept in memory only: the server marks
@@ -233,11 +229,13 @@ final class APIClient {
     }
 
     /// A plain authenticated GET, for small endpoints defined next to their feature.
-    func getJSON(_ path: String, token: String) async throws -> Data {
+    /// `reuseRecent: false` (the chat list, the status feed): a request already on its way is still shared, but an answer
+    /// that has arrived is never handed out again -- a live event right after it must read the server anew.
+    func getJSON(_ path: String, token: String, reuseRecent: Bool = true) async throws -> Data {
         let key = token + "|" + path + "|" + (unlockToken ?? "")
         enum Pick { case fresh(Data), join(Task<Data, Error>), own(Task<Data, Error>) }
         let pick: Pick = Self.getLock.withLock {
-            if let r = Self.getRecent[key], Date().timeIntervalSince(r.at) < 1.2 { return .fresh(r.data) }
+            if reuseRecent, let r = Self.getRecent[key], Date().timeIntervalSince(r.at) < 1.2 { return .fresh(r.data) }
             if let t = Self.getInflight[key] { return .join(t) }
             let t = Task { [self] () throws -> Data in
                 let (data, http) = try await self.send(self.request(path, method: "GET", token: token, body: nil, rawQuery: path.contains("?")))
@@ -736,8 +734,9 @@ final class APIClient {
     // MARK: status
 
     func statusFeed(token: String) async throws -> [StatusGroup] {
-        let (data, http) = try await send(request("status/feed", method: "GET", token: token, body: nil))
-        try check(http, data)
+        // through getJSON: several screens ask for the feed at the same moment (the status row, the chat rows' rings, Groups,
+        // TradeFlor); they share one request instead of each sending its own
+        let data = try await getJSON("status/feed", token: token, reuseRecent: false)
         return try decodeList(StatusGroup.self, data)
     }
 

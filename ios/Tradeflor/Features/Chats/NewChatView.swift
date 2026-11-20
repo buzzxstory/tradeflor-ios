@@ -61,7 +61,7 @@ struct NewChatView: View {
                                 Text("@\(r.from_username)").foregroundStyle(Theme.text)
                                 Spacer()
                                 Button { Task { await respond(r, accept: false) } } label: {
-                                    Image(systemName: "xmark").frame(width: 34, height: 34).background(Color.white.opacity(0.12), in: Circle())
+                                    Image(systemName: "xmark").foregroundStyle(Theme.muted).frame(width: 34, height: 34).background(Theme.dyn(0xFFFFFF, 0x0F2533, 0.12, 0.07), in: Circle())
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel(Text("new.decline"))

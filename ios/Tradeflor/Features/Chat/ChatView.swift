@@ -8,7 +8,10 @@ struct ChatView: View {
     var canSend = true
 
     @EnvironmentObject private var store: SessionStore
-    @EnvironmentObject private var live: LiveConnection
+    /// The app's one live connection, held but not observed: its presence and connection changes (any contact going online
+    /// or offline) redrew this whole screen. ChatSubtitleLine watches it for the line under the name; the `.onReceive`s
+    /// below listen to its subjects as before.
+    private var live: LiveConnection { LiveConnection.shared }
     @State private var messages: [Message] = []
     @State private var pending: [PendingMessage] = []
     @State private var loading = true
@@ -35,7 +38,6 @@ struct ChatView: View {
     @State private var locked = false
     @State private var replyingTo: Message?
     @State private var forwarding: Message?
-    @State private var peerTypingUntil: Date?
     @State private var lastTypingSent = Date.distantPast
     @State private var confirmBlock = false
     @State private var confirmClearChat = false
@@ -86,19 +88,15 @@ struct ChatView: View {
     @State private var pins: [GroupPinRef] = []
     @State private var pinIndex = 0
     @State private var members: [GroupMember] = []
-    @State private var bottomVisible = true
-    /// Messages from others that came while I was up in the history, not yet scrolled into view (website d454d16).
-    @State private var unseenBelow: [String] = []
-    /// Of those, the ones that mention me: the "@" button above the arrow (groups).
-    @State private var unseenMentions: [String] = []
-    @State private var badgePop = false
+    /// Where the list stands (the end on screen, what came in below, a scroll by hand): a box this screen holds but does
+    /// not watch, so leaving and reaching the end no longer redraws the whole chat. Only the jump arrows watch it.
+    @State private var flags = ChatScrollFlags()
+    /// The albums and reply pictures of the list as last worked out (see ChatDerived).
+    @State private var derived = ChatDerived()
     @State private var editing: Message?
     /// Photos and videos being sent: X cancels (website bcfeb0a).
     @State private var uploads: [String: Task<Message, Error>] = [:]
     @State private var cancelledUploads: Set<String> = []
-    @State private var typingUser: String?
-    /// Refreshed each minute, so "today" becomes "yesterday" at midnight.
-    @State private var presenceNow = Date()
     @State private var unreadMarkID: String?
     @State private var unreadMarkCount = 0
     @State private var unreadMarkSet = false
@@ -106,8 +104,6 @@ struct ChatView: View {
     /// The list stays hidden while it opens at its end, so the pictures it holds take their real size first (a photo or
     /// video never seen has no size yet, and rows grew under the reader: the "jump"). Shown at once after 0.7 s at most.
     @State private var revealed = false
-    /// I scrolled up to read: nothing pulls me back to the end by itself.
-    @State private var userScrolledUp = false
     /// When the chat settled at its end: older pages load by themselves only after this (no jump while opening).
     @State private var openedAtTime = Date.distantFuture
     /// Text and voice waiting to leave, in writing order (one at a time per conversation).
@@ -123,8 +119,6 @@ struct ChatView: View {
     @State private var queueWait: Task<Void, Never>?
     /// Photos / videos / documents: automatic retries on a passing error (web: files keep their own timer).
     @State private var fileRetries: [String: Int] = [:]
-    /// Group typing: everyone typing now, each with their own 3.5 s timer (web 86beee5).
-    @State private var typingUsers: [String: Date] = [:]
     /// "Select all" took the whole chat (every older page loaded first): Delete then also takes the call entries (web b9833d1).
     @State private var allPicked = false
     @State private var pickingAll = false
@@ -156,6 +150,7 @@ struct ChatView: View {
     @State private var watchingGroupStatus = false
     @State private var addingGroupStatus = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var appScheme
     @State private var openingDoc = false
     /// The pending rows last seen: the list follows to the end only when one is added (a sent one leaving must not
     /// pull me down while I read the history).
@@ -252,6 +247,8 @@ struct ChatView: View {
         ScrollView {
             messageStack(proxy)
         }
+        // a picked chat theme has a dark wallpaper in day mode too: its bubbles and labels take the night colours there
+        .environment(\.colorScheme, (themeID.isEmpty || themeID == "tradeflor") ? appScheme : .dark)
         .opacity(revealed ? 1 : 0)
         .task {
             // at most 0.7 s hidden, as the web (useHistoryScroll settleOpen): then shown already at the end
@@ -260,6 +257,11 @@ struct ChatView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })
+        // a scroll by hand: from then on the opening's "settle on the end again" steps leave the list where I put it
+        // (alongside the scroll, never instead of it; a plain flag, so nothing is redrawn)
+        .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in
+            if !flags.userScrolledUp { flags.userScrolledUp = true }
+        })
     }
 
     private func messageStack(_ proxy: ScrollViewProxy) -> some View {
@@ -273,19 +275,20 @@ struct ChatView: View {
                 }
                 .padding(.vertical, 8)
                 .onAppear {
-                    guard openedAtEnd, !loadingOlder, !bottomVisible,
+                    guard openedAtEnd, !loadingOlder, !flags.bottomVisible,
                           Date().timeIntervalSince(openedAtTime) > 1.5 else { return }
-                    userScrolledUp = true
+                    flags.userScrolledUp = true
                     Task { await loadOlder(proxy) }
                 }
             }
             let rows = shown
             let lookIDs = lookAlike
-            let albums = Albums.runs(rows, isGroup: isGroup)
+            // worked out again only when the messages changed, not on every redraw (each is a pass over every message)
+            let albums = derived.albums(rows, isGroup: isGroup)
             // worked out once per redraw, not once per row (each was a pass over every message)
             let hits = searchOpen ? searchHits : []
             let hitID: String? = hits.indices.contains(searchIndex) ? hits[searchIndex].id : nil
-            let replyPhotos = replyPhotoIDs
+            let replyPhotos = derived.replyPhotos(messages) { replyPhotoIDs }
             ForEach(Array(rows.enumerated()), id: \.element.id) { i, m in
                 messageRow(m, i, rows, albums, lookIDs, hitID, replyPhotos)
             }
@@ -293,8 +296,14 @@ struct ChatView: View {
                 pendingRow(p)
             }
             Color.clear.frame(height: 1).id("bottom")
-                .onAppear { bottomVisible = true; userScrolledUp = false; unseenBelow = []; unseenMentions = [] }
-                .onDisappear { bottomVisible = false }
+                .onAppear {
+                    // written only when different: each write redraws the jump arrows
+                    if !flags.bottomVisible { flags.bottomVisible = true }
+                    flags.userScrolledUp = false
+                    if !flags.unseenBelow.isEmpty { flags.unseenBelow = [] }
+                    if !flags.unseenMentions.isEmpty { flags.unseenMentions = [] }
+                }
+                .onDisappear { if flags.bottomVisible { flags.bottomVisible = false } }
         }
         .padding(.horizontal, 10)
         .padding(.top, 8)
@@ -311,7 +320,7 @@ struct ChatView: View {
         }
         if albums.hidden.contains(m.id) {
             // drawn inside its album
-            Color.clear.frame(height: 0).id(m.id).onAppear { if !unseenBelow.isEmpty { seen(m.id) } }
+            Color.clear.frame(height: 0).id(m.id).onAppear { if !flags.unseenBelow.isEmpty { seen(m.id) } }
         } else {
             let asGroup = isGroup && roleOf(m.sender_id) == "owner"
             MessageRow(message: m, mine: m.sender_id == me, myID: me, peerName: chat.title,
@@ -327,7 +336,7 @@ struct ChatView: View {
                 rowContent(m, albums)
             }
             .id(m.id)
-            .onAppear { if !unseenBelow.isEmpty { seen(m.id) } }
+            .onAppear { if !flags.unseenBelow.isEmpty { seen(m.id) } }
         }
     }
 
@@ -507,7 +516,9 @@ struct ChatView: View {
 
     private func scrollChrome<V: View>(_ v: V, _ proxy: ScrollViewProxy) -> some View {
         v
-            .overlay(alignment: .bottomTrailing) { jumpArrows(proxy) }
+            .overlay(alignment: .bottomTrailing) {
+                ChatJumpArrows(flags: flags, isGroup: isGroup, hasMessages: !messages.isEmpty, proxy: proxy)
+            }
             .overlay(alignment: .top) { toastOverlay }
             .onChange(of: jumpTarget) { t in
                 if let t { withAnimation { proxy.scrollTo(t, anchor: .center) }; jumpTarget = nil }
@@ -520,48 +531,6 @@ struct ChatView: View {
                 if let last = searchHits.last { withAnimation { proxy.scrollTo(last.id, anchor: .center) } }
             }
             .overlay { emptyOverlay }
-    }
-
-    /// WhatsApp's jump arrow and, in groups, the "@" for the next mention.
-    private func jumpArrows(_ proxy: ScrollViewProxy) -> some View {
-        // WhatsApp's arrow (website d454d16): dark, light chevron; the count of others' new messages on its upper
-        // left, counting down as they come into view; in groups the "@" (next mention) stands above it
-        VStack(spacing: 10) {
-            if isGroup, let first = unseenMentions.first {
-                Button { withAnimation { proxy.scrollTo(first, anchor: .center) }; unseenMentions.removeFirst() } label: {
-                    Text("@").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
-                        .frame(width: 42, height: 42).background(Theme.hex(0x00C6C4), in: Circle())
-                }
-                .accessibilityLabel(Text("chat.next.mention"))
-            }
-            if !bottomVisible && !messages.isEmpty {
-                Button {
-                    unseenBelow = []
-                    unseenMentions = []
-                    scrollToBottom(proxy)
-                } label: {
-                    Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.hex(0xE9EDEF))
-                        .frame(width: 42, height: 42).background(Theme.hex(0x1B2A30), in: Circle())
-                        .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
-                        .overlay(alignment: .topLeading) {
-                            if !unseenBelow.isEmpty {
-                                Text(unseenBelow.count > 99 ? "99+" : "\(unseenBelow.count)").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
-                                    .padding(.horizontal, 5).frame(minWidth: 20, minHeight: 20)
-                                    .background(Theme.hex(0x00C6C4), in: Capsule())
-                                    .scaleEffect(badgePop ? 1.2 : 1)
-                                    .offset(x: -7, y: -7)
-                            }
-                        }
-                }
-                .accessibilityLabel(Text("chat.jump"))
-                .accessibilityValue(unseenBelow.isEmpty ? Text("") : Text("\(unseenBelow.count)"))
-            }
-        }
-        .padding(14)
-        .onChange(of: unseenBelow.count) { _ in
-            withAnimation(.spring(response: 0.2, dampingFraction: 0.5)) { badgePop = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { withAnimation { badgePop = false } }
-        }
     }
 
     @ViewBuilder private var toastOverlay: some View {
@@ -615,11 +584,17 @@ struct ChatView: View {
                     openedAtTime = Date()
                     let hasMark = unreadMarkID != nil && unreadMarkCount > 0
                     if hasMark { proxy.scrollTo("unread-mark", anchor: .top) } else { proxy.scrollTo("bottom", anchor: .bottom) }
+                    // the list stands where it opens: shown now, not after the full 0.7 s (which stays the upper bound).
+                    // Not while the unread line is still to come (the copy kept on this phone shows first, the server's page
+                    // then moves the list to the line): that move stays hidden, as before.
+                    if chat.unread_count == 0 || unreadMarkSet {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { if !revealed { revealed = true } }
+                    }
                     if !hasMark {
                         for d in [0.35, 0.9, 1.6] {
                             DispatchQueue.main.asyncAfter(deadline: .now() + d) {
                                 // pictures took their room: settle on the end again, but only if I haven't scrolled away
-                                if !userScrolledUp { proxy.scrollTo("bottom", anchor: .bottom) }
+                                if !flags.userScrolledUp { proxy.scrollTo("bottom", anchor: .bottom) }
                             }
                         }
                     }
@@ -627,11 +602,11 @@ struct ChatView: View {
                 }
                 // at the end, new messages are simply followed; up in the history they are counted instead
                 // only while the end is on screen: a message arriving while I read up in the history never moves the list
-                if bottomVisible { scrollToBottom(proxy) }
+                if flags.bottomVisible { scrollToBottom(proxy) }
             }
             // the composer grew a line while I am at the end: keep the end in view, without an animation that fights the typing
             .onChange(of: min(6, draft.components(separatedBy: "\n").count)) { _ in
-                guard bottomVisible else { return }
+                guard flags.bottomVisible else { return }
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -639,7 +614,7 @@ struct ChatView: View {
             // while the chat is still opening, anything added above (the server's page after the copy kept on this
             // phone, the unread line, a day label) must not push the end out of view: settle on it again
             .onChange(of: messages.count) { _ in
-                guard openedAtEnd, !userScrolledUp, unreadMarkID == nil || unreadMarkCount == 0,
+                guard openedAtEnd, !flags.userScrolledUp, unreadMarkID == nil || unreadMarkCount == 0,
                       Date().timeIntervalSince(openedAtTime) < 2.5 else { return }
                 var t = Transaction()
                 t.disablesAnimations = true
@@ -652,10 +627,10 @@ struct ChatView: View {
                 // something I just sent goes to the end; one that left (sent, cancelled) never moves the list
                 let added = n > pendingCountSeen
                 pendingCountSeen = n
-                if added || bottomVisible { scrollToBottom(proxy) }
+                if added || flags.bottomVisible { scrollToBottom(proxy) }
             }
             // focusing the composer moves to the end only when the end is already on screen (never while reading history)
-            .onChange(of: composerFocused) { f in if f && bottomVisible { scrollToBottom(proxy) } }
+            .onChange(of: composerFocused) { f in if f && flags.bottomVisible { scrollToBottom(proxy) } }
     }
 
     @ViewBuilder private var chatFooter: some View {
@@ -683,24 +658,8 @@ struct ChatView: View {
         .toolbar(.hidden, for: .navigationBar)
         .task(id: chat.peer_id) {
             guard !isGroup, !chat.peer_id.isEmpty else { return }
+            // the line itself (online / last seen / typing) and its minute tick are ChatSubtitleLine's
             if let p = await APIClient.shared.presence(token: token, userID: chat.peer_id) { live.applyPresence(p, userID: chat.peer_id) }
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
-                presenceNow = Date()
-            }
-        }
-        .onReceive(live.typing) { t in
-            guard t.conversation == chat.conversation_id, t.user != me else { return }
-            let until = Date().addingTimeInterval(isGroup ? 3.5 : 5)
-            peerTypingUntil = until
-            typingUser = t.user
-            typingUsers[t.user] = until
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64((isGroup ? 3.6 : 5.2) * 1_000_000_000))
-                let now = Date()
-                typingUsers = typingUsers.filter { $0.value > now }
-                if let u = peerTypingUntil, u <= now { peerTypingUntil = nil }
-            }
         }
         .confirmationDialog(Text("civ3.clear.confirm"), isPresented: $confirmClearChat, titleVisibility: .visible) {
             Button("civ3.clear", role: .destructive) {
@@ -974,9 +933,9 @@ struct ChatView: View {
             let isNew = !messages.contains { $0.id == m.id }
             merge([m])
             pending.removeAll { $0.id == m.client_key }
-            if isNew && !bottomVisible && m.sender_id != me && m.kind != "notice" {
-                unseenBelow.append(m.id)
-                if isGroup && ChatEdit.mentions(m, me: me) { unseenMentions.append(m.id) }
+            if isNew && !flags.bottomVisible && m.sender_id != me && m.kind != "notice" {
+                flags.unseenBelow.append(m.id)
+                if isGroup && ChatEdit.mentions(m, me: me) { flags.unseenMentions.append(m.id) }
             }
             if m.sender_id != me {
                 markSeenSoon()
@@ -1142,9 +1101,9 @@ struct ChatView: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(chat.title).font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
                         HStack(spacing: 4) {
-                            Text(subtitle ?? (isGroup ? String(format: NSLocalizedString("groups.members", comment: ""), memberCount) : ""))
-                                .font(.system(size: 13)).foregroundStyle(peerTypingUntil != nil ? Theme.accent : Theme.faint).lineLimit(1)
-                                .minimumScaleFactor(0.8)
+                            ChatSubtitleLine(conversationID: chat.conversation_id, peerID: chat.peer_id, isGroup: isGroup, me: me,
+                                             fallback: isGroup ? String(format: NSLocalizedString("groups.members", comment: ""), memberCount) : "",
+                                             members: members, memberNames: memberNames)
                         }
                     }
                 }
@@ -1982,7 +1941,7 @@ struct ChatView: View {
             reachedStart = page.isEmpty
             merge(page)
             // the page goes above what I was reading: keep that message where it was (no jump)
-            if let proxy, !bottomVisible {
+            if let proxy, !flags.bottomVisible {
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) { proxy.scrollTo(first.id, anchor: .top) }
@@ -2057,7 +2016,7 @@ struct ChatView: View {
 
     /// A counted message came into view: one fewer on the arrow.
     private func seen(_ id: String) {
-        if let i = unseenBelow.firstIndex(of: id) { unseenBelow.remove(at: i) }
+        if let i = flags.unseenBelow.firstIndex(of: id) { flags.unseenBelow.remove(at: i) }
     }
 
     private func sendDraft() async {
@@ -2226,30 +2185,6 @@ struct ChatView: View {
         }
     }
 
-    private var subtitle: String? {
-        if let until = peerTypingUntil, until > Date() {
-            // groups: "<name> is typing…" (website 86beee5)
-            if isGroup {
-                let now = Date()
-                let names = typingUsers.filter { $0.value > now }.keys.sorted()
-                    .map { id in members.first { $0.user_id == id }?.username ?? memberNames[id] ?? "" }.filter { !$0.isEmpty }
-                switch names.count {
-                case 0: break
-                case 1: return String(format: NSLocalizedString("chat.typing.name", comment: ""), names[0])
-                case 2: return String(format: NSLocalizedString("chat.typing.two", comment: ""), names[0], names[1])
-                default: return String(format: NSLocalizedString("chat.typing.many", comment: ""), names.count)
-                }
-                if let u = typingUser, let name = memberNames[u], !name.isEmpty {
-                    return String(format: NSLocalizedString("chat.typing.name", comment: ""), name)
-                }
-            }
-            return NSLocalizedString("chat.typing", comment: "")
-        }
-        if isGroup { return nil }
-        // "online", "last seen today at 4:23 AM" … or nothing; never "Offline" (website lastSeen.ts)
-        return live.presenceLine(chat.peer_id, now: presenceNow)
-    }
-
     private func sendVoice() async {
         guard let rec = recorder.finish() else { return }
         let p = PendingMessage(id: UUID().uuidString.lowercased(), body: "", date: Date(),
@@ -2280,8 +2215,21 @@ struct ChatView: View {
     }
 
     /// "notice" messages: chat setting changes (disappearing messages, restricted chat), shown centred.
+    /// Worked out once per notice (it was a JSON read per notice on every chat redraw); used from the views (main thread) only.
+    private static var noticeMemo: [String: String] = [:]
+
     private func noticeText(_ m: Message) -> String {
-        guard let s = m.signal, let d = s.data(using: .utf8),
+        guard let s = m.signal else { return m.body }
+        let key = s + "\u{1}" + m.body
+        if let hit = Self.noticeMemo[key] { return hit }
+        let out = readNotice(m, s)
+        if Self.noticeMemo.count > 300 { Self.noticeMemo.removeAll(keepingCapacity: true) }
+        Self.noticeMemo[key] = out
+        return out
+    }
+
+    private func readNotice(_ m: Message, _ s: String) -> String {
+        guard let d = s.data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return m.body }
         if (o["event"] as? String) == "disappearing" {
             let secs = (o["secs"] as? Int) ?? 0
@@ -2530,6 +2478,173 @@ struct ChatView: View {
     }
 }
 
+/// Where a conversation's list stands. ChatView holds it without watching it (see ChatView.flags): the end coming into
+/// view or leaving it, and messages counted below, redraw only the jump arrows (ChatJumpArrows), not the whole chat.
+/// Main thread only.
+final class ChatScrollFlags: ObservableObject {
+    /// The end of the list is on screen.
+    @Published var bottomVisible = true
+    /// Messages from others that came while I was up in the history, not yet scrolled into view (website d454d16).
+    @Published var unseenBelow: [String] = []
+    /// Of those, the ones that mention me: the "@" button above the arrow (groups).
+    @Published var unseenMentions: [String] = []
+    /// I scrolled by hand (or reached the top) since the end was last reached: nothing pulls me back to the end by itself.
+    /// Not published: nothing on screen shows it.
+    var userScrolledUp = false
+}
+
+/// What the list works out from its messages (the albums, and the photo behind each reply), kept until the messages
+/// change: both are a pass over every loaded message, and were made again on every redraw of the chat. The answer is
+/// always the one for the rows given (they are compared, never assumed), so nothing here can be out of date. Main thread only.
+final class ChatDerived {
+    private var albumRows: [Message] = []
+    private var albumGroup = false
+    private var albumRuns = Albums.Runs()
+    private var photoRows: [Message] = []
+    private var photos: [String: String] = [:]
+
+    func albums(_ rows: [Message], isGroup: Bool) -> Albums.Runs {
+        if isGroup != albumGroup || rows != albumRows {
+            albumRows = rows
+            albumGroup = isGroup
+            albumRuns = Albums.runs(rows, isGroup: isGroup)
+        }
+        return albumRuns
+    }
+
+    func replyPhotos(_ messages: [Message], _ make: () -> [String: String]) -> [String: String] {
+        if messages != photoRows {
+            photoRows = messages
+            photos = make()
+        }
+        return photos
+    }
+}
+
+/// WhatsApp's jump arrow and, in groups, the "@" for the next mention. The only view that watches ChatScrollFlags.
+private struct ChatJumpArrows: View {
+    @ObservedObject var flags: ChatScrollFlags
+    let isGroup: Bool
+    let hasMessages: Bool
+    let proxy: ScrollViewProxy
+    @State private var badgePop = false
+
+    var body: some View {
+        // WhatsApp's arrow (website d454d16): dark, light chevron; the count of others' new messages on its upper
+        // left, counting down as they come into view; in groups the "@" (next mention) stands above it
+        VStack(spacing: 10) {
+            if isGroup, let first = flags.unseenMentions.first {
+                Button {
+                    withAnimation { proxy.scrollTo(first, anchor: .center) }
+                    if !flags.unseenMentions.isEmpty { flags.unseenMentions.removeFirst() }
+                } label: {
+                    Text("@").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
+                        .frame(width: 42, height: 42).background(Theme.hex(0x00C6C4), in: Circle())
+                }
+                .accessibilityLabel(Text("chat.next.mention"))
+            }
+            if !flags.bottomVisible && hasMessages {
+                Button {
+                    flags.unseenBelow = []
+                    flags.unseenMentions = []
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.dyn(0xE9EDEF, 0x3C5668))
+                        .frame(width: 42, height: 42).background(Theme.dyn(0x1B2A30, 0xFFFFFF), in: Circle())
+                        .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
+                        .overlay(alignment: .topLeading) {
+                            if !flags.unseenBelow.isEmpty {
+                                Text(flags.unseenBelow.count > 99 ? "99+" : "\(flags.unseenBelow.count)").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x04222C))
+                                    .padding(.horizontal, 5).frame(minWidth: 20, minHeight: 20)
+                                    .background(Theme.hex(0x00C6C4), in: Capsule())
+                                    .scaleEffect(badgePop ? 1.2 : 1)
+                                    .offset(x: -7, y: -7)
+                            }
+                        }
+                }
+                .accessibilityLabel(Text("chat.jump"))
+                .accessibilityValue(flags.unseenBelow.isEmpty ? Text("") : Text("\(flags.unseenBelow.count)"))
+            }
+        }
+        .padding(14)
+        .onChange(of: flags.unseenBelow.count) { _ in
+            withAnimation(.spring(response: 0.2, dampingFraction: 0.5)) { badgePop = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { withAnimation { badgePop = false } }
+        }
+    }
+}
+
+/// The line under the chat's name: "typing…" (in groups, who), else "online" / "last seen …" in a private chat, else
+/// `fallback` (a group's member count). It alone watches the live connection's presence, the typing events and the
+/// minute tick, so none of them redraws the conversation.
+private struct ChatSubtitleLine: View {
+    let conversationID: String
+    let peerID: String
+    let isGroup: Bool
+    let me: String
+    let fallback: String
+    let members: [GroupMember]
+    let memberNames: [String: String]
+    @ObservedObject private var live = LiveConnection.shared
+    @State private var peerTypingUntil: Date?
+    @State private var typingUser: String?
+    /// Group typing: everyone typing now, each with their own 3.5 s timer (web 86beee5).
+    @State private var typingUsers: [String: Date] = [:]
+    /// Refreshed each minute, so "today" becomes "yesterday" at midnight.
+    @State private var presenceNow = Date()
+
+    var body: some View {
+        Text(subtitle ?? fallback)
+            .font(.system(size: 13)).foregroundStyle(peerTypingUntil != nil ? Theme.accent : Theme.faint).lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .task(id: peerID) {
+                guard !isGroup, !peerID.isEmpty else { return }
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 60_000_000_000)
+                    if Task.isCancelled { return }
+                    presenceNow = Date()
+                }
+            }
+            .onReceive(live.typing) { t in
+                guard t.conversation == conversationID, t.user != me else { return }
+                let until = Date().addingTimeInterval(isGroup ? 3.5 : 5)
+                peerTypingUntil = until
+                typingUser = t.user
+                typingUsers[t.user] = until
+                Task {
+                    try? await Task.sleep(nanoseconds: UInt64((isGroup ? 3.6 : 5.2) * 1_000_000_000))
+                    let now = Date()
+                    typingUsers = typingUsers.filter { $0.value > now }
+                    if let u = peerTypingUntil, u <= now { peerTypingUntil = nil }
+                }
+            }
+    }
+
+    private var subtitle: String? {
+        if let until = peerTypingUntil, until > Date() {
+            // groups: "<name> is typing…" (website 86beee5)
+            if isGroup {
+                let now = Date()
+                let names = typingUsers.filter { $0.value > now }.keys.sorted()
+                    .map { id in members.first { $0.user_id == id }?.username ?? memberNames[id] ?? "" }.filter { !$0.isEmpty }
+                switch names.count {
+                case 0: break
+                case 1: return String(format: NSLocalizedString("chat.typing.name", comment: ""), names[0])
+                case 2: return String(format: NSLocalizedString("chat.typing.two", comment: ""), names[0], names[1])
+                default: return String(format: NSLocalizedString("chat.typing.many", comment: ""), names.count)
+                }
+                if let u = typingUser, let name = memberNames[u], !name.isEmpty {
+                    return String(format: NSLocalizedString("chat.typing.name", comment: ""), name)
+                }
+            }
+            return NSLocalizedString("chat.typing", comment: "")
+        }
+        if isGroup { return nil }
+        // "online", "last seen today at 4:23 AM" … or nothing; never "Offline" (website lastSeen.ts)
+        return live.presenceLine(peerID, now: presenceNow)
+    }
+}
+
 /// The blinking dot and running time of a hold-to-record note (watches only the recorder's meter).
 private struct HoldClock: View {
     @ObservedObject var meter: VoiceMeter
@@ -2717,7 +2832,7 @@ struct PhotoBubble<Content: View>: View {
         Button(action: f) {
             Image(systemName: "arrowshape.turn.up.right.fill").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 34, height: 34)
-                .background(Color(white: 0.5, opacity: 0.38), in: Circle())
+                .background(Theme.dyn(0x808080, 0x3C5668, 0.38, 0.55), in: Circle())
                 .environment(\.layoutDirection, .leftToRight) // the arrow always points forward
         }
         .buttonStyle(.plain)

@@ -86,7 +86,7 @@ struct ChatThemePicker: View {
                         }
                         HStack {
                             Spacer()
-                            Text("ci.theme.sample2").font(.system(size: 14)).foregroundStyle(Theme.text)
+                            Text("ci.theme.sample2").font(.system(size: 14)).foregroundStyle(Theme.hex(0xF2F7FA))
                                 .padding(.horizontal, 12).padding(.vertical, 8)
                                 .background(ChatThemeStyle.outGradient(selected), in: BubbleShape(mine: true))
                         }

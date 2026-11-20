@@ -9,7 +9,10 @@ import CoreImage.CIFilterBuiltins
 /// and "Tradeflor · Version".
 struct SettingsView: View {
     @EnvironmentObject private var store: SessionStore
-    @EnvironmentObject private var live: LiveConnection
+    /// Not observed: only "Online / Reconnecting" is shown here, followed below (`steady`). Observing the whole connection
+    /// redrew Settings whenever any contact came online.
+    private let live = LiveConnection.shared
+    @State private var steady = LiveConnection.shared.steadyConnected
     /// The last profile answer, kept across a rebuilt tab: the card never starts on the bare username and a letter.
     private static var lastProfile: Profile?
     @State private var profile: Profile? = SettingsView.lastProfile
@@ -141,7 +144,14 @@ struct SettingsView: View {
             .toolbar(.hidden, for: .navigationBar)
             .modifier(StatusBarScrim()) // rows scrolled up pass under a frosted status bar, not through the clock
         }
-        .task { await load() }
+        .task {
+            // a tab entered again within 20 s is not read again (as Chats and Groups); the first read always happens
+            let k = "settings|" + token
+            if FreshGate.isFresh(k) && profile != nil { return }
+            FreshGate.mark(k) // before the read: its admin check may keep retrying for a while
+            await load()
+        }
+        .onReceive(live.$steadyConnected) { s in if s != steady { steady = s } }
         .confirmationDialog(Text("settings.signout.confirm"), isPresented: $confirmSignOut, titleVisibility: .visible) {
             Button("set.signout", role: .destructive) {
                 guard !signingOut else { return }
@@ -183,7 +193,7 @@ struct SettingsView: View {
     /// .s-profile: avatar 62 with a turquoise edge and the green presence dot, name 19, @handle 14, "● Online" 13;
     /// "My Profile ›" pill (36 high); the quiet turquoise sweep on the right.
     private var profileCard: some View {
-        let on = live.steadyConnected
+        let on = steady
         return HStack(spacing: 14) {
             ZStack(alignment: .bottomTrailing) {
                 Avatar(token: token, userID: profile?.user_id ?? (store.session?.userID ?? ""),

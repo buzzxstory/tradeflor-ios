@@ -18,16 +18,13 @@ struct BrandedQR: View {
     var body: some View {
         Group {
             if let layout = Self.layout(for: text) {
-                if beam && !reduceMotion {
-                    TimelineView(.animation) { timeline in
-                        Canvas { ctx, size in
-                            Self.draw(&ctx, size: size, layout: layout, beam: Self.beamPhase(timeline.date))
-                        }
-                    }
-                } else {
-                    Canvas { ctx, size in
-                        Self.draw(&ctx, size: size, layout: layout, beam: nil)
-                    }
+                // the code is drawn once; the beam is its own small layer on top (it was a TimelineView that drew the whole
+                // code again on every display frame)
+                Canvas { ctx, size in
+                    Self.draw(&ctx, size: size, layout: layout)
+                }
+                .overlay {
+                    if beam && !reduceMotion { Beam(side: side, modules: CGFloat(layout.n)) }
                 }
             } else {
                 RoundedRectangle(cornerRadius: side * 0.06).fill(Self.paper)
@@ -78,7 +75,32 @@ struct BrandedQR: View {
     /// The website's /tradeflor-brand-mark.png (byte-identical to the BrandFlower image set).
     private static let markAsset = "BrandFlower"
 
-    private static func draw(_ ctx: inout GraphicsContext, size: CGSize, layout: Layout, beam: Double?) {
+    /// The scan beam: a cyan band sweeping from just above the code to just below it (2.4 s, multiply), clipped to the tile.
+    /// Only this band moves.
+    private struct Beam: View {
+        let side: CGFloat
+        /// The code's side in modules (quiet zone included).
+        let modules: CGFloat
+        @State private var down = false
+
+        var body: some View {
+            let u = side / max(1, modules)
+            let h = side * 0.11
+            LinearGradient(gradient: BrandedQR.beamGradient, startPoint: .top, endPoint: .bottom)
+                .frame(width: side, height: h)
+                .overlay(alignment: .bottom) { BrandedQR.beamEdge.frame(height: 0.55 * u) }
+                // translateY 0 -> 112 % of the code, the band's lower edge leading
+                .offset(y: (down ? side * 1.12 : 0) - h)
+                .animation(.timingCurve(0.45, 0, 0.55, 1, duration: 2.4).repeatForever(autoreverses: false), value: down)
+                .frame(width: side, height: side, alignment: .top)
+                .clipShape(RoundedRectangle(cornerRadius: 2.2 * u))
+                .blendMode(.multiply)
+                .allowsHitTesting(false)
+                .onAppear { down = true }
+        }
+    }
+
+    private static func draw(_ ctx: inout GraphicsContext, size: CGSize, layout: Layout) {
         let n = CGFloat(layout.n)
         let u = min(size.width, size.height) / n
         ctx.scaleBy(x: u, y: u)
@@ -89,31 +111,6 @@ struct BrandedQR: View {
             ctx.fill(Path(roundedRect: r, cornerRadius: r.width * 0.24), with: .color(markGround))
             ctx.draw(Image(markAsset), in: r.insetBy(dx: r.width * 0.14, dy: r.height * 0.14))
         }
-        if let t = beam {
-            // the band starts just above the code and travels to below it (translateY 0 -> n * 1.12), clipped to the tile
-            ctx.clip(to: tile)
-            ctx.blendMode = .multiply
-            let h = n * 0.11
-            let dy = n * 1.12 * CGFloat(t)
-            let band = CGRect(x: 0, y: dy - h, width: n, height: h)
-            ctx.fill(Path(band), with: .linearGradient(beamGradient, startPoint: CGPoint(x: 0, y: band.minY), endPoint: CGPoint(x: 0, y: band.maxY)))
-            ctx.fill(Path(CGRect(x: 0, y: dy - 0.55, width: n, height: 0.55)), with: .color(beamEdge))
-        }
-    }
-
-    /// 0...1 through the 2.4 s sweep, eased like cubic-bezier(.45, 0, .55, 1).
-    private static func beamPhase(_ date: Date) -> Double {
-        let x = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.4) / 2.4
-        func bez(_ s: Double, _ p1: Double, _ p2: Double) -> Double {
-            let m = 1 - s
-            return 3 * m * m * s * p1 + 3 * m * s * s * p2 + s * s * s
-        }
-        var lo = 0.0, hi = 1.0, s = x
-        for _ in 0..<24 {
-            s = (lo + hi) / 2
-            if bez(s, 0.45, 0.55) < x { lo = s } else { hi = s }
-        }
-        return bez(s, 0, 1)
     }
 
     // MARK: - layout (brandedQrLayout)

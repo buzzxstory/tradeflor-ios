@@ -9,14 +9,28 @@ struct PollCard: View {
     let canVote: Bool
     let onVote: ([Int]) -> Void
 
+    /// Read once per poll text and once per state of its votes (each was a JSON read per poll on every chat redraw);
+    /// used from the views (main thread) only.
+    private static var defMemo: [String: (q: String, o: [String], multiple: Bool)] = [:]
+    private static var votesMemo: [String: [String: [String]]] = [:]
+
     private var def: (q: String, o: [String], multiple: Bool)? {
-        guard let s = message.signal, let d = s.data(using: .utf8),
+        guard let s = message.signal else { return nil }
+        if let hit = Self.defMemo[s] { return hit }
+        guard let d = s.data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let opts = o["o"] as? [String] else { return nil }
-        return ((o["q"] as? String) ?? "", opts, (o["multiple"] as? Bool) ?? false)
+        let out = (q: (o["q"] as? String) ?? "", o: opts, multiple: (o["multiple"] as? Bool) ?? false)
+        if Self.defMemo.count > 300 { Self.defMemo.removeAll(keepingCapacity: true) }
+        Self.defMemo[s] = out
+        return out
     }
     private var votes: [String: [String]] {
-        guard let r = message.reactions, let d = r.data(using: .utf8),
+        guard let r = message.reactions else { return [:] }
+        if let hit = Self.votesMemo[r] { return hit }
+        guard let d = r.data(using: .utf8),
               let m = try? JSONDecoder().decode([String: [String]].self, from: d) else { return [:] }
+        if Self.votesMemo.count > 300 { Self.votesMemo.removeAll(keepingCapacity: true) }
+        Self.votesMemo[r] = m
         return m
     }
 
@@ -941,6 +955,7 @@ struct CallEntryRow: View {
     }
 
     var body: some View {
+        let entry = self.entry // read once per redraw (it was a JSON read for each use below)
         let outgoing = (entry["caller_id"] as? String) == me
         let status = (entry["status"] as? String) ?? ""
         let duration = Int64((entry["duration_ms"] as? Double) ?? Double((entry["duration_ms"] as? Int) ?? 0))
@@ -1014,7 +1029,11 @@ struct LinkPreviewCard: View {
         .task(id: url) {
             if Self.memo[url] != nil { return }
             data = await APIClient.shared.chLinkPreview(token: token, url: url)
-            if let p = data?.image, !p.isEmpty, let d = await APIClient.shared.chLinkImage(token: token, path: p) { image = UIImage(data: d) }
+            if let p = data?.image, !p.isEmpty, let d = await APIClient.shared.chLinkImage(token: token, path: p) {
+                // decoded off the main thread, at about the size of the card (it was decoded while drawing)
+                let made = await AvatarImages.decode(d, maxPixels: 900)
+                image = made ?? UIImage(data: d)
+            }
             if Task.isCancelled { return } // left before the answer came: asked again next time
             if Self.memo.count > 300 { Self.memo.removeAll() }
             Self.memo[url] = (data, image)

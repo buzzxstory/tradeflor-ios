@@ -42,7 +42,11 @@ enum RemoteMedia {
     static func cover(token: String, fileID: String) async -> UIImage? {
         if let hit = cachedCover(fileID) { return hit }
         var image: UIImage?
-        if let data = await APIClient.shared.file(token: token, fileID: fileID, thumb: true) { image = UIImage(data: data) }
+        if let data = await APIClient.shared.file(token: token, fileID: fileID, thumb: true) {
+            // decoded off the main thread, at about the size a bubble draws it (it was decoded while drawing)
+            image = await AvatarImages.decode(data, maxPixels: 1280)
+            if image == nil { image = UIImage(data: data) }
+        }
         if image == nil { image = await poster(token: token, fileID: fileID) }
         if let image { covers.setObject(image, forKey: fileID as NSString) }
         return image

@@ -207,6 +207,8 @@ struct AppLockScreen: View {
     @State private var shake: CGFloat = 0
     @State private var confirmForgot = false
     @State private var bioAutoTried = false
+    /// A PIN or pattern is being checked (off the main thread): a second one waits.
+    @State private var checking = false
 
     @State private var now = Date()
     private var waiting: Bool { (lock.lockedUntil ?? .distantPast) > now }
@@ -233,7 +235,14 @@ struct AppLockScreen: View {
             .padding(.horizontal, 24).padding(.bottom, 12)
         }
         .tfColorScheme()
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now = $0 }
+        // the clock ticks only while a wait runs (a one-second timer made in the body redrew the whole screen all the time)
+        .task(id: lock.lockedUntil) {
+            while !Task.isCancelled, let until = lock.lockedUntil, until > Date() {
+                now = Date()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            if !Task.isCancelled { now = Date() }
+        }
         .task { await autoBiometrics() }
         // Face ID once the app is really in front (a cold launch asks while the scene is still becoming active); only once
         // per return: cancelling it to type the PIN does not bring it back
@@ -289,17 +298,24 @@ struct AppLockScreen: View {
             entry = ""
             return
         }
-        if lock.verify(secret) {
-            lockNotify(.success)
-            lock.unlock()
-        } else {
-            lockNotify(.error)
-            note = NSLocalizedString("lock2.wrong", comment: "")
-            failed = true
-            entry = ""
-            withAnimation(.linear(duration: 0.06).repeatCount(5, autoreverses: true)) { shake = 9 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { shake = 0 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { failed = false }
+        // the hash rounds run off the main thread; one check at a time
+        guard !checking else { return }
+        checking = true
+        Task {
+            let right = await lock.verifyOffMain(secret)
+            checking = false
+            if right {
+                lockNotify(.success)
+                lock.unlock()
+            } else {
+                lockNotify(.error)
+                note = NSLocalizedString("lock2.wrong", comment: "")
+                failed = true
+                entry = ""
+                withAnimation(.linear(duration: 0.06).repeatCount(5, autoreverses: true)) { shake = 9 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { shake = 0 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { failed = false }
+            }
         }
     }
 
@@ -406,6 +422,8 @@ struct AppLockVerifyView: View {
     @State private var note: String?
     @State private var shake: CGFloat = 0
     @State private var now = Date()
+    /// A PIN or pattern is being checked (off the main thread): a second one waits.
+    @State private var checking = false
 
     private var waiting: Bool { (lock.lockedUntil ?? .distantPast) > now }
     private var line: String {
@@ -450,13 +468,29 @@ struct AppLockVerifyView: View {
             .padding(.horizontal, 20).padding(.vertical, 12)
         }
         .tfColorScheme()
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now = $0 }
+        // the clock ticks only while a wait runs
+        .task(id: lock.lockedUntil) {
+            while !Task.isCancelled, let until = lock.lockedUntil, until > Date() {
+                now = Date()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            if !Task.isCancelled { now = Date() }
+        }
     }
 
     private func check(_ secret: String, valid: Bool) {
         guard !waiting else { return }
         guard valid else { note = NSLocalizedString("lock2.short", comment: ""); entry = ""; return }
-        if lock.verify(secret) {
+        // the hash rounds run off the main thread; one check at a time
+        guard !checking else { return }
+        checking = true
+        Task { await finishCheck(secret) }
+    }
+
+    private func finishCheck(_ secret: String) async {
+        let right = await lock.verifyOffMain(secret)
+        checking = false
+        if right {
             lockNotify(.success)
             dismiss()
             onVerified()

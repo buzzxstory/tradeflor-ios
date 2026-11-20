@@ -101,7 +101,13 @@ struct TradeFlorView: View {
             .toolbar(.hidden, for: .navigationBar)
             .modifier(StatusBarScrim()) // rows scrolled up pass under a frosted status bar, not through the clock
         }
-        .task { await load() }
+        .task {
+            // a tab entered again within 20 s is not read again (as Chats and Groups); the first read always happens
+            let k = "tradeflor|" + token
+            if FreshGate.isFresh(k) && events != nil { return }
+            await load()
+            FreshGate.mark(k)
+        }
         .task {
             while !Task.isCancelled {
                 // the page itself only needs the minute (released events, sessions, "5m ago"); the seconds of the

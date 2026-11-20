@@ -29,6 +29,7 @@ struct CalendarView: View {
     /// The open day's high/medium/low events, sorted, worked out once per answer (not on every read during a redraw).
     @State private var dayList: [CalendarEvent] = []
     @Environment(\.scenePhase) private var scenePhase
+    @State private var wasBackground = false
 
     init() {
         // today in the saved zone (web S.day = todayIn())
@@ -217,8 +218,12 @@ struct CalendarView: View {
         }
         .onChange(of: scenePhase) { phase in
             // web: visibilitychange refreshes at once (the 60 s timer may have slept in the background)
+            if phase == .background { wasBackground = true }
             guard phase == .active else { return }
             now = Date()
+            // the reads only after the app really left the front (not after Control Center or a system sheet)
+            guard wasBackground else { return }
+            wasBackground = false
             Task {
                 await load(manual: false)
                 await loadNext()

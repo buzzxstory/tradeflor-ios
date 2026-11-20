@@ -157,7 +157,7 @@ struct FolderEditorView: View {
                     HStack {
                         ForEach(FolderStore.colors, id: \.self) { c in
                             Circle().fill(FolderStore.color(c)).frame(width: 26, height: 26)
-                                .overlay(Circle().stroke(.white, lineWidth: f.color == c ? 2 : 0))
+                                .overlay(Circle().stroke(Theme.dyn(0xFFFFFF, 0x0F2533), lineWidth: f.color == c ? 2 : 0))
                                 .onTapGesture { f.color = c }
                         }
                     }

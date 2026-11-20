@@ -5,8 +5,12 @@ import UIKit
 /// (which also finds public groups), the folder chips, Archived, and the group rows with their long-press menu.
 struct GroupsListView: View {
     @EnvironmentObject private var store: SessionStore
-    @EnvironmentObject private var live: LiveConnection
+    /// Used for its events only (nothing it publishes is shown here), so it is not observed: a contact coming online no
+    /// longer works this list out again.
+    private let live = LiveConnection.shared
     @Environment(\.scenePhase) private var scenePhase
+    /// The app really left the front (not just Control Center or a system sheet): only then is the list read again on return.
+    @State private var wasBackground = false
     @State private var groups: [GroupSummary] = []
     @State private var groupStatuses: [String: StatusGroup] = [:]
     @State private var watchGroup: StatusGroup?
@@ -58,7 +62,9 @@ struct GroupsListView: View {
     private func isUnread(_ g: GroupSummary) -> Bool { g.unread_count > 0 || (prefs[g.conversation_id]?.marked_unread ?? false) }
     /// Groups I locked (Chat Lock; GET /groups says so per group): kept out of the list and its circles, under the Locked chip
     /// (website: groups.filter(!locks.has), groupTab "locked").
-    private var lockedIDs: Set<String> { Set(extras.values.filter { $0.locked == true }.map(\.conversation_id)) }
+    /// Kept as state, written with `extras` in load(): as a computed set it was built again for every group asked about
+    /// (several times per group on every pass).
+    @State private var lockedIDs: Set<String> = []
     private func isLocked(_ g: GroupSummary) -> Bool { lockedIDs.contains(g.conversation_id) }
     private var archivedCount: Int { groups.filter { !isLocked($0) && (prefs[$0.conversation_id]?.archived ?? false) }.count }
 
@@ -212,7 +218,10 @@ struct GroupsListView: View {
         .onReceive(live.groupChanged) { _ in reloadSoon() }
         // after a socket gap or coming back to the app the list is fetched again (it only listened to live events before)
         .onReceive(live.opened) { _ in reloadSoon() }
-        .onChange(of: scenePhase) { if $0 == .active { reloadSoon() } }
+        .onChange(of: scenePhase) { phase in
+            if phase == .background { wasBackground = true }
+            else if phase == .active, wasBackground { wasBackground = false; reloadSoon() }
+        }
         .onChange(of: path.count) { n in if n == 0 { reloadAfterReturn() } }
     }
 
@@ -361,9 +370,11 @@ struct GroupsListView: View {
     }
 
     @ViewBuilder private var content: some View {
+        // worked out once per pass (it filters and sorts; it was read twice)
+        let rows = shown
         if loading && groups.isEmpty {
             ProgressView().tint(Theme.accent).padding(.top, 60)
-        } else if shown.isEmpty {
+        } else if rows.isEmpty {
             if !groups.isEmpty, !ListSearch.needle(query).isEmpty, pastedInvite == nil {
                 // searching: "no match", not "you have no groups"
                 ListEmptyNote(text: String(format: NSLocalizedString("ux1.chats.nomatch", comment: ""), query.trimmingCharacters(in: .whitespaces)))
@@ -372,7 +383,6 @@ struct GroupsListView: View {
                                                       : (showArchived ? "grp.archived.none" : (filter == "unread" ? "grp.unread.none" : "groups.empty")), comment: ""))
             }
         } else {
-            let rows = shown
             LazyVStack(spacing: 0) {
                 ForEach(rows) { g in
                     NavigationLink(value: g) { row(g, first: g.conversation_id == rows.first?.conversation_id) }
@@ -588,8 +598,10 @@ struct GroupsListView: View {
 
     private func load() async {
         if groups.isEmpty {
-            let cached = ListCache.groups(token: token)
-            if !cached.isEmpty { groups = cached }
+            // read and decoded off the main thread (a file read and a JSON decode when the tab is first shown)
+            let tok = token
+            let cached = await Task.detached(priority: .userInitiated) { ListCache.groups(token: tok) }.value
+            if groups.isEmpty, !cached.isEmpty { groups = cached }
         }
         // the spinner only shows with no groups on screen; flipping it on every quiet reload redrew the whole list
         if groups.isEmpty { loading = true }
@@ -615,6 +627,8 @@ struct GroupsListView: View {
             prefs = p
         }
         extras = ex
+        let locked = Set(ex.values.filter { $0.locked == true }.map(\.conversation_id))
+        if locked != lockedIDs { lockedIDs = locked }
         if let feed {
             var map: [String: StatusGroup] = [:]
             for s in feed { if let gid = s.group_id, !s.posts.isEmpty { map[gid] = s } }
@@ -625,7 +639,7 @@ struct GroupsListView: View {
         let nowSec = Int64(Date().timeIntervalSince1970)
         let counted = groups.filter { g in
             let p = prefs[g.conversation_id]
-            return g.unread_count > 0 && !isLocked(g) && !(p?.archived ?? false) && (p?.muted_until ?? 0) <= nowSec
+            return g.unread_count > 0 && !locked.contains(g.conversation_id) && !(p?.archived ?? false) && (p?.muted_until ?? 0) <= nowSec
         }
         let badge = counted.count
         let messages = counted.reduce(0) { $0 + $1.unread_count }

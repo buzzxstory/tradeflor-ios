@@ -15,6 +15,7 @@ struct StatusStrip: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.layoutDirection) private var layoutDirection
     @State private var officialRetry = 0
+    @State private var wasBackground = false
     /// Counts the reads of the feed: an older answer that arrives late never replaces a newer one (a ring flipped back to new).
     @State private var loadGen = 0
     @State private var myAvatar: String?
@@ -76,7 +77,18 @@ struct StatusStrip: View {
                 await load()
             }
         }
-        .onChange(of: scenePhase) { p in if p == .active { Task { await load() } } }
+        // only after the app really left the front: Control Center, the notification shade or a system sheet (.inactive)
+        // are not a reason to ask for the feed, the Official channel and my profile again
+        .onChange(of: scenePhase) { p in
+            if p == .background { wasBackground = true }
+            else if p == .active, wasBackground {
+                wasBackground = false
+                Task {
+                    await load()
+                    FreshGate.mark("strip|" + token)
+                }
+            }
+        }
         // a status watched, posted or deleted anywhere (the viewers post this once their "seen" calls have arrived): the
         // rings change at once, not two minutes later
         .onReceive(NotificationCenter.default.publisher(for: .tfStatusChanged)) { _ in Task { await load() } }
@@ -126,7 +138,9 @@ struct StatusStrip: View {
                         .frame(width: 21, height: 21).background(Theme.accent, in: Circle())
                         .overlay(Circle().stroke(Theme.panel, lineWidth: 2))
                         .padding(4.5)
-                        .contentShape(Rectangle())
+                        // a 38 pt target around the 21 pt disc (it was 30); where it is drawn is unchanged. Not the full 44:
+                        // it sits on the "My status" ring, whose own tap (watch my status) must keep most of the ring
+                        .padding(4).contentShape(Rectangle()).padding(-4)
                 }
                 .buttonStyle(.plain)
                 .offset(x: layoutDirection == .rightToLeft ? 0.5 : -0.5, y: 32.5)
