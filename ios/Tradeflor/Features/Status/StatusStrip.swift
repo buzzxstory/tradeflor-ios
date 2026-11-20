@@ -105,7 +105,7 @@ struct StatusStrip: View {
                     .overlay(
                         // 18-status.css: accent with a soft glow = new, grey = watched, dashed blue = nothing yet
                         Circle().strokeBorder(style: StrokeStyle(lineWidth: 2, dash: ring == .none ? [4, 3] : []))
-                            .foregroundStyle(ring == .unseen ? Theme.accent : (ring == .seen ? Theme.hex(0xA9B9C5, 0.35) : Theme.hex(0x288CAF, 0.55)))
+                            .foregroundStyle(ring == .unseen ? Theme.accent : (ring == .seen ? Theme.dyn(0xA9B9C5, 0x5F7686, 0.35, 0.35) : Theme.dyn(0x288CAF, 0x00A8B5, 0.55, 0.55)))
                             .shadow(color: ring == .unseen ? Theme.hex(0x00D4DF, 0.3) : .clear, radius: 5)
                     )
                 Text(name).font(.system(size: 11)).foregroundStyle(Theme.faint)
@@ -147,14 +147,14 @@ struct StatusStrip: View {
         } label: {
             VStack(spacing: 4) {
                 ZStack {
-                    Circle().fill(RadialGradient(colors: [Theme.hex(0x0F3340), Theme.hex(0x04141B)],
+                    Circle().fill(RadialGradient(colors: [Theme.dyn(0x0F3340, 0xEFFBFC), Theme.dyn(0x04141B, 0xC4EEF1)],
                                                  center: UnitPoint(x: 0.35, y: 0.3), startRadius: 0, endRadius: 30))
                     Image("OfficialOrb").resizable().scaledToFit().frame(width: 42 * 0.68, height: 42 * 0.68)
                 }
                 .frame(width: 42, height: 42)
                 .clipShape(Circle())
                 .frame(width: ringSize, height: ringSize)
-                .overlay(Circle().strokeBorder(fresh ? Theme.hex(0x2FD9DC) : Theme.hex(0x44606C), lineWidth: 2))
+                .overlay(Circle().strokeBorder(fresh ? Theme.dyn(0x2FD9DC, 0x00A8B5) : Theme.dyn(0x44606C, 0xB9CAD1), lineWidth: 2))
                 .overlay(alignment: .topTrailing) {
                     if fresh {
                         Text("ux1.status.new")

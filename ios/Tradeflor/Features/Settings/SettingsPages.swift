@@ -179,7 +179,7 @@ struct MyProfilePage: View {
             }
             if live.steadyConnected && profile != nil {
                 HStack(spacing: 6) {
-                    Circle().fill(Theme.hex(0x14D99A)).frame(width: 7, height: 7)
+                    Circle().fill(Theme.dyn(0x14D99A, 0x0FB57F)).frame(width: 7, height: 7)
                     Text("pv2.online").font(.system(size: 12)).foregroundStyle(Theme.muted)
                 }
             }
@@ -205,7 +205,7 @@ struct MyProfilePage: View {
             Button { editing = true } label: {
                 Label("set.edit.profile", systemImage: "pencil").font(.system(size: 15.5, weight: .semibold))
                     .foregroundStyle(Theme.onAccent).frame(maxWidth: .infinity, minHeight: 44)
-                    .background(LinearGradient(colors: [Theme.hex(0x12D6D8), Theme.hex(0x0AAAB4), Theme.hex(0x0B86C4)],
+                    .background(LinearGradient(colors: [Theme.dyn(0x12D6D8, 0x00A8B5), Theme.dyn(0x0AAAB4, 0x0097A5), Theme.dyn(0x0B86C4, 0x0B7FBA)],
                                                startPoint: .leading, endPoint: .trailing), in: Capsule())
             }
             .disabled(profile == nil)
@@ -383,7 +383,7 @@ struct ProfileHeroLines: View {
                            control1: CGPoint(x: size.width * 0.28, y: y0 - 80),
                            control2: CGPoint(x: size.width * 0.66, y: y0 + 70))
                 ctx.stroke(p, with: .linearGradient(Gradient(colors: [Theme.accent.opacity(0.0), Theme.accent.opacity(0.45),
-                                                                      Theme.hex(0x5AA8FF, 0.32), Theme.accent.opacity(0.0)]),
+                                                                      Theme.dyn(0x5AA8FF, 0x3D8FD6, 0.32, 0.26), Theme.accent.opacity(0.0)]),
                                                     startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0)),
                            lineWidth: 1.3)
             }
@@ -586,13 +586,13 @@ struct AccountPage: View {
             Text("settings.connection").font(.system(size: 16, weight: .semibold)).foregroundStyle(SetUI.text)
             Spacer(minLength: 6)
             HStack(spacing: 8) {
-                Circle().frame(width: 9, height: 9).shadow(color: on ? Theme.hex(0x14D99A, 0.6) : .clear, radius: 4)
+                Circle().frame(width: 9, height: 9).shadow(color: on ? Theme.dyn(0x14D99A, 0x0C8564, 0.6, 0.35) : .clear, radius: 4)
                 Text(LocalizedStringKey(on ? "settings.live" : "set.reconnecting")).font(.system(size: 14, weight: .semibold))
             }
-            .foregroundStyle(on ? Theme.hex(0x14D99A) : Theme.hex(0xF0B46A))
+            .foregroundStyle(on ? Theme.dyn(0x14D99A, 0x0C8564) : Theme.dyn(0xF0B46A, 0xB86E12))
             .padding(.horizontal, 12).frame(height: 30)
-            .background(on ? Theme.dyn(0x012F36, 0xE3F7EE) : Theme.hex(0xF0B46A, 0.1), in: Capsule())
-            .overlay(Capsule().stroke(on ? Theme.hex(0x00CC83, 0.25) : Theme.hex(0xF0B46A, 0.3), lineWidth: 1))
+            .background(on ? Theme.dyn(0x012F36, 0xE3F7EE) : Theme.dyn(0xF0B46A, 0xF0B46A, 0.1, 0.14), in: Capsule())
+            .overlay(Capsule().stroke(on ? Theme.dyn(0x00CC83, 0x0C8564, 0.25, 0.3) : Theme.dyn(0xF0B46A, 0xB86E12, 0.3, 0.35), lineWidth: 1))
         }
         .padding(.horizontal, 14).padding(.vertical, 10).frame(minHeight: 64)
     }
@@ -1090,6 +1090,20 @@ struct NotificationsPage: View {
                 }
                 .buttonStyle(.plain)
                 SDivider()
+                Button { MessageSound.preview(group: true) } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "person.3.fill").font(.system(size: 15)).foregroundStyle(SetUI.accent).frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("snd.group").font(.system(size: 16, weight: .semibold)).foregroundStyle(SetUI.text)
+                            Text("snd.preview.sub").font(.system(size: 12.5)).foregroundStyle(SetUI.sub)
+                        }
+                        Spacer()
+                        Image(systemName: "play.circle.fill").font(.system(size: 26)).foregroundStyle(SetUI.accent)
+                    }
+                    .padding(.horizontal, 14).frame(minHeight: 60).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                SDivider()
                 SToggleRow(icon: "", title: NSLocalizedString("snd.vibrate", comment: ""), isOn: $vibrate)
                 SDivider()
                 SToggleRow(icon: "", title: NSLocalizedString("snd.inchat", comment: ""), isOn: $inChat)
@@ -1370,7 +1384,7 @@ struct CallsPage: View {
                 HStack(spacing: 6) {
                     Image(systemName: c.direction == "outgoing" ? "arrow.up.right" : "arrow.down.left")
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(ok ? Theme.hex(0x14D99A) : (bad ? Theme.hex(0xFF5E6E) : Theme.hex(0x8FA8B3)))
+                        .foregroundStyle(ok ? Theme.dyn(0x14D99A, 0x0C8564) : (bad ? Theme.dyn(0xFF5E6E, 0xD8404A) : Theme.dyn(0x8FA8B3, 0x6E8792)))
                     Text(Self.label(c)).font(.system(size: 13.5))
                         .foregroundStyle(bad ? Theme.dyn(0xC9A0A6, 0xA4505C) : Theme.dyn(0xA9BCC6, 0x46657A)).lineLimit(1)
                 }

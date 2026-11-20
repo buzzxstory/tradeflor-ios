@@ -85,8 +85,8 @@ struct GlassIconButton: View {
                                                        startPoint: UnitPoint(x: 0.3, y: 0), endPoint: UnitPoint(x: 0.7, y: 1)))
                         : AnyShapeStyle(Color.white),
                     in: Circle())
-                .overlay(Circle().stroke(scheme == .dark ? Theme.hex(0x40E2EC, 0.5) : Theme.borderStrong, lineWidth: 1))
-                .shadow(color: .black.opacity(scheme == .dark ? 0.28 : 0.08), radius: 5, y: 3)
+                .overlay(Circle().stroke(scheme == .dark ? Theme.hex(0x40E2EC, 0.5) : Theme.hex(0xA6E3E7), lineWidth: 1))
+                .shadow(color: scheme == .dark ? Color.black.opacity(0.28) : Theme.hex(0x0B5E68, 0.12), radius: 5, y: 3)
         }
         .buttonStyle(.plain)
     }

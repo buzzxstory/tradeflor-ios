@@ -141,10 +141,11 @@ struct RootView: View {
             if id == nil { askCall = false } else { afterSheets { askCall = calls.confirming != nil } }
         }
         .onChange(of: askCall) { shown in if !shown && calls.confirming != nil { calls.confirming = nil } }
+        // the green "return to call" bar sits above the app, which moves down under it (a safe-area inset did not reach the
+        // screens inside the tab bar and navigation stacks: the chat header was hidden under the bar)
+        .modifier(CallBarSpace(calls: calls))
         .safeAreaInset(edge: .top, spacing: 0) {
-            if !calls.showScreen && calls.lineInUse {
-                CallReturnBar(calls: calls)
-            } else if !calls.showScreen && calls.phase == .ended {
+            if !calls.showScreen && !calls.lineInUse && calls.phase == .ended {
                 // end-of-call notice (website CallOverlay): a compact card with the person's picture, name and outcome
                 HStack(spacing: 10) {
                     if let pid = calls.peerID {

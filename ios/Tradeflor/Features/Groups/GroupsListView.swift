@@ -269,11 +269,11 @@ struct GroupsListView: View {
                     // ring inside it, a 60 pt item, the name 11 pt on a 15 pt line
                     Button { showCreate = true } label: {
                         VStack(spacing: 4) {
-                            GroupPlusGlyph().frame(width: 22, height: 22).foregroundStyle(Theme.hex(0x8FF6F8))
+                            GroupPlusGlyph().frame(width: 22, height: 22).foregroundStyle(Theme.dyn(0x8FF6F8, 0x0097A5))
                                 .frame(width: 43, height: 43)
-                                .background(Theme.hex(0x0A3440), in: Circle())
+                                .background(Theme.dyn(0x0A3440, 0xDDF7F8), in: Circle())
                                 .frame(width: 52, height: 52)
-                                .overlay(Circle().strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [4, 3])).foregroundStyle(Theme.hex(0x288CAF, 0.55)))
+                                .overlay(Circle().strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [4, 3])).foregroundStyle(Theme.dyn(0x288CAF, 0x00A8B5, 0.55, 0.55)))
                             Text("grp.new").font(.system(size: 11)).foregroundStyle(Theme.faint)
                                 .lineLimit(1).truncationMode(.tail).frame(height: 15).frame(maxWidth: 60)
                         }
@@ -297,7 +297,7 @@ struct GroupsListView: View {
                                     .frame(width: 52, height: 52)
                                     .overlay(
                                         Circle().strokeBorder(style: StrokeStyle(lineWidth: 2))
-                                            .foregroundStyle(unread ? Theme.accent : Theme.hex(0xA9B9C5, 0.35))
+                                            .foregroundStyle(unread ? Theme.accent : Theme.dyn(0xA9B9C5, 0x5F7686, 0.35, 0.35))
                                             .shadow(color: unread ? Theme.hex(0x00D4DF, 0.3) : .clear, radius: 5)
                                     )
                                 Text(g.name).font(.system(size: 11)).foregroundStyle(Theme.faint)

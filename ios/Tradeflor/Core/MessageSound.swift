@@ -1,6 +1,7 @@
 import UIKit
 import AudioToolbox
 import UserNotifications
+import AVFoundation
 
 /// Tradeflor's own message sound (Resources/tf_message.wav: a rising glassy C6, G6, E7 figure) for notifications, and a
 /// soft one-note tick (tf_inchat.wav) for a message that arrives in the chat on screen. System sounds follow the ring /
@@ -8,6 +9,12 @@ import UserNotifications
 @MainActor
 enum MessageSound {
     static let notificationName = UNNotificationSoundName("tf_message.wav")
+    /// Groups have their own sound (a wooden two-note "ba-dum"), so a group can be told from a person without looking.
+    static let groupNotificationName = UNNotificationSoundName("tf_group.wav")
+
+    static func notificationSound(group: Bool) -> UNNotificationSound {
+        UNNotificationSound(named: group ? groupNotificationName : notificationName)
+    }
 
     private static let vibrateKey = "tf.sound.vibrate"
     private static let inChatKey = "tf.sound.inchat"
@@ -34,9 +41,12 @@ enum MessageSound {
         if let id = ids[name] { AudioServicesPlaySystemSound(id) }
     }
 
+    private static let buzz = UINotificationFeedbackGenerator()
+
     static func haptic() {
-        guard vibrate, !CallManager.shared.lineInUse else { return }
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        guard vibrate, !CallManager.shared.lineInUse, UIApplication.shared.applicationState == .active else { return }
+        buzz.prepare()
+        buzz.notificationOccurred(.success)
     }
 
     /// A message for the chat on screen: the soft tick and a light buzz.
@@ -45,8 +55,27 @@ enum MessageSound {
         haptic()
     }
 
-    /// Settings: hear the message sound.
-    static func preview() { play("tf_message") }
+    /// A message notification while the app is open: the sound (the ring / silent switch decides, as for any alert)
+    /// and the buzz.
+    static func incomingAlert(group: Bool, sound: Bool) {
+        if sound { play(group ? "tf_group" : "tf_message") }
+        haptic()
+    }
+
+    private static var previewPlayer: AVAudioPlayer?
+
+    /// Settings: hear a sound. It plays even with the phone on silent (a button that seems to do nothing looks broken),
+    /// over other audio, never during a call.
+    static func preview(group: Bool = false) {
+        guard !CallManager.shared.lineInUse,
+              let url = Bundle.main.url(forResource: group ? "tf_group" : "tf_message", withExtension: "wav") else { return }
+        let s = AVAudioSession.sharedInstance()
+        if s.category != .playback { try? s.setCategory(.playback, mode: .default, options: [.mixWithOthers]) }
+        try? s.setActive(true)
+        previewPlayer?.stop()
+        previewPlayer = try? AVAudioPlayer(contentsOf: url)
+        previewPlayer?.play()
+    }
 
     static func forget() {
         UserDefaults.standard.removeObject(forKey: vibrateKey)

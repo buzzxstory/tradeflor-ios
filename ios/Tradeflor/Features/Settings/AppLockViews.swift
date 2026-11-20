@@ -3,7 +3,7 @@ import UIKit
 
 extension AppLockKind: Identifiable { var id: String { rawValue } }
 
-private let lockRed = Color(red: 1, green: 0.3, blue: 0.35)
+private let lockRed = Theme.dyn(0xFF4D59, 0xD8404A)
 
 private func lockHaptic(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light) {
     UIImpactFeedbackGenerator(style: style).impactOccurred()
@@ -17,7 +17,7 @@ private func lockNotify(_ type: UINotificationFeedbackGenerator.FeedbackType) {
 struct AppLockBackdrop: View {
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Theme.hex(0x02242F), Theme.hex(0x00131B), Theme.hex(0x000F16)], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [Theme.dyn(0x02242F, 0xF4FBFC), Theme.dyn(0x00131B, 0xEAF6F8), Theme.dyn(0x000F16, 0xE2F1F4)], startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
             ProfileHeroLines().frame(height: 280).frame(maxHeight: .infinity, alignment: .top).opacity(0.85).ignoresSafeArea()
             ProfileHeroLines().frame(height: 240).frame(maxHeight: .infinity, alignment: .bottom).opacity(0.7).ignoresSafeArea()
@@ -102,9 +102,10 @@ struct AppLockPinPad: View {
             lockHaptic()
             if entry.count == AppLockRules.pinLength { onComplete(entry) }
         } label: {
-            Text(d).font(.system(size: 32, weight: .light)).foregroundStyle(.white)
+            Text(d).font(.system(size: 32, weight: .light)).foregroundStyle(Theme.text)
                 .frame(width: AppLockPinPad.keySize, height: AppLockPinPad.keySize)
-                .background(Circle().fill(Theme.hex(0x0A3440, 0.55)))
+                .background(Circle().fill(Theme.dyn(0x0A3440, 0xFFFFFF, 0.55, 0.92)))
+                .shadow(color: Theme.dyn(0x000000, 0x0097A5, 0, 0.10), radius: 8, y: 3)
                 .overlay(Circle().stroke(Theme.accent.opacity(0.35), lineWidth: 1))
                 .contentShape(Circle())
         }
@@ -157,8 +158,8 @@ struct AppLockPatternPad: View {
         let on = path.contains(n)
         return ZStack {
             Circle().stroke(tint.opacity(on ? 0.95 : 0.35), lineWidth: 2).frame(width: size * 0.5, height: size * 0.5)
-            Circle().fill(on ? tint : Theme.hex(0x0A3440, 0.6)).frame(width: size * (on ? 0.38 : 0.34), height: size * (on ? 0.38 : 0.34))
-            Text(verbatim: "\(n)").font(.system(size: size * 0.16, weight: .semibold)).foregroundStyle(on ? Theme.onAccent : Color.white.opacity(0.75))
+            Circle().fill(on ? tint : Theme.dyn(0x0A3440, 0xFFFFFF, 0.6, 0.95)).frame(width: size * (on ? 0.38 : 0.34), height: size * (on ? 0.38 : 0.34))
+            Text(verbatim: "\(n)").font(.system(size: size * 0.16, weight: .semibold)).foregroundStyle(on ? Theme.onAccent : Theme.muted)
         }
         .shadow(color: on ? tint.opacity(0.7) : .clear, radius: 10)
         .scaleEffect(on ? 1.1 : 1)
@@ -218,7 +219,7 @@ struct AppLockScreen: View {
                 Image("BrandFlower").resizable().scaledToFit().frame(width: 64).shadow(color: Theme.accent.opacity(0.5), radius: 14)
                 VStack(spacing: 6) {
                     Text(LocalizedStringKey(lock.kind == .pattern ? "lock2.enter.pattern" : "lock2.enter.pin"))
-                        .font(.system(size: 22, weight: .bold)).foregroundStyle(.white)
+                        .font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
                     Text(statusLine).font(.system(size: 14)).foregroundStyle(failed ? lockRed : Theme.muted)
                         .multilineTextAlignment(.center).frame(minHeight: 20)
                 }
@@ -231,7 +232,7 @@ struct AppLockScreen: View {
             }
             .padding(.horizontal, 24).padding(.bottom, 12)
         }
-        .preferredColorScheme(.dark)
+        .tfColorScheme()
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now = $0 }
         .task { await autoBiometrics() }
         // Face ID once the app is really in front (a cold launch asks while the scene is still becoming active); only once
@@ -341,7 +342,7 @@ struct AppLockSetupView: View {
                 }
                 Spacer(minLength: 8)
                 VStack(spacing: 6) {
-                    Text(LocalizedStringKey(title)).font(.system(size: 24, weight: .bold)).foregroundStyle(.white)
+                    Text(LocalizedStringKey(title)).font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
                     Text(note ?? " ").font(.system(size: 14)).foregroundStyle(failed ? lockRed : Theme.muted).frame(minHeight: 20)
                 }
                 Group {
@@ -357,7 +358,7 @@ struct AppLockSetupView: View {
             }
             .padding(.horizontal, 20).padding(.vertical, 12)
         }
-        .preferredColorScheme(.dark)
+        .tfColorScheme()
     }
 
     private var title: String {
@@ -432,7 +433,7 @@ struct AppLockVerifyView: View {
                 }
                 Spacer(minLength: 8)
                 VStack(spacing: 6) {
-                    Text("lock2.verify").font(.system(size: 24, weight: .bold)).foregroundStyle(.white)
+                    Text("lock2.verify").font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
                     Text(line).font(.system(size: 14)).foregroundStyle(failed ? lockRed : Theme.muted).frame(minHeight: 20)
                 }
                 Group {
@@ -448,7 +449,7 @@ struct AppLockVerifyView: View {
             }
             .padding(.horizontal, 20).padding(.vertical, 12)
         }
-        .preferredColorScheme(.dark)
+        .tfColorScheme()
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now = $0 }
     }
 

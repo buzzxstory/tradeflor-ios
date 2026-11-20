@@ -34,7 +34,7 @@ struct InviteFriendsSheet: View {
     private var publicLink: String? { !handle.isEmpty && isPublic ? "https://app.tradeflor.com/g/\(handle)" : nil }
     private var canShareLink: Bool { publicLink != nil || canInvite }
 
-    private static let cyan = Theme.hex(0x2FF0F3)
+    private static let cyan = Theme.dyn(0x2FF0F3, 0x0097A5)
     private static let primary = LinearGradient(colors: [Theme.hex(0x2FF0F3), Theme.hex(0x08A8B8)], startPoint: .topLeading, endPoint: .bottomTrailing)
     private static let onPrimary = Theme.hex(0x032229)
     private static let muted = Theme.dyn(0x7F9AA7, 0x5F7686)
@@ -81,7 +81,7 @@ struct InviteFriendsSheet: View {
         HStack(spacing: 12) {
             Image(systemName: "paperplane").font(.system(size: 18, weight: .semibold)).foregroundStyle(Self.cyan)
                 .frame(width: 40, height: 40)
-                .background(Theme.hex(0x2FF0F3, 0.1), in: RoundedRectangle(cornerRadius: 12))
+                .background(Theme.dyn(0x2FF0F3, 0x0097A5, 0.1, 0.1), in: RoundedRectangle(cornerRadius: 12))
             VStack(alignment: .leading, spacing: 1) {
                 Text("gx.inv.title").font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.text)
                 Text(String(format: NSLocalizedString("ams.to", comment: ""), groupName)).font(.system(size: 12.5))
@@ -105,7 +105,7 @@ struct InviteFriendsSheet: View {
             HStack(spacing: 10) {
                 Image(systemName: "link").font(.system(size: 16, weight: .semibold)).foregroundStyle(Self.cyan)
                     .frame(width: 34, height: 34)
-                    .background(Theme.hex(0x2FF0F3, 0.1), in: RoundedRectangle(cornerRadius: 10))
+                    .background(Theme.dyn(0x2FF0F3, 0x0097A5, 0.1, 0.1), in: RoundedRectangle(cornerRadius: 10))
                 if let shown {
                     Text(shown.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "http://", with: ""))
                         .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.dyn(0x5FE6EE, 0x0097A5))
@@ -133,8 +133,8 @@ struct InviteFriendsSheet: View {
             .opacity(linkBusy ? 0.55 : 1)
         }
         .padding(12)
-        .background(Theme.hex(0x00CAD1, 0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.hex(0x00CAD1, 0.28), lineWidth: 1))
+        .background(Theme.dyn(0x00CAD1, 0x0097A5, 0.06, 0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.dyn(0x00CAD1, 0x00A8B5, 0.28, 0.35), lineWidth: 1))
     }
 
     private func pillButton(_ key: LocalizedStringKey, primary: Bool, height: CGFloat = 36, action: @escaping () -> Void) -> some View {
@@ -146,7 +146,7 @@ struct InviteFriendsSheet: View {
                 .background {
                     if primary { Capsule().fill(Self.primary) } else { Capsule().fill(Theme.dyn(0x01141B, 0xFFFFFF, 0.6, 1)) }
                 }
-                .overlay { if !primary { Capsule().stroke(Theme.hex(0x50AAC8, 0.4), lineWidth: 1) } }
+                .overlay { if !primary { Capsule().stroke(Theme.dyn(0x50AAC8, 0xA6E3E7, 0.4, 1), lineWidth: 1) } }
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -161,7 +161,7 @@ struct InviteFriendsSheet: View {
         }
         .padding(.horizontal, 14).frame(height: 42)
         .background(Theme.soulInput, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.hex(0x00C8D7, 0.35), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.dyn(0x00C8D7, 0x00A8B5, 0.35, 0.45), lineWidth: 1))
     }
 
     private var filtered: [ContactEntry] {
@@ -213,7 +213,7 @@ struct InviteFriendsSheet: View {
             if inGroup {
                 Text("ams.in").font(.system(size: 12.5, weight: .bold)).foregroundStyle(Self.muted)
             } else if sent {
-                Text("gx.inv.sent").font(.system(size: 12.5, weight: .bold)).foregroundStyle(Theme.hex(0x3EE6A0))
+                Text("gx.inv.sent").font(.system(size: 12.5, weight: .bold)).foregroundStyle(Theme.dyn(0x3EE6A0, 0x0C8564))
             } else {
                 if canInvite {
                     smallButton("ams.add", primary: false) { Task { await add(c) } }
@@ -233,7 +233,7 @@ struct InviteFriendsSheet: View {
                 .background {
                     if primary { Capsule().fill(Self.primary) } else { Capsule().fill(Theme.dyn(0x01141B, 0xFFFFFF, 0.6, 1)) }
                 }
-                .overlay { if !primary { Capsule().stroke(Theme.hex(0x50AAC8, 0.4), lineWidth: 1) } }
+                .overlay { if !primary { Capsule().stroke(Theme.dyn(0x50AAC8, 0xA6E3E7, 0.4, 1), lineWidth: 1) } }
         }
         .buttonStyle(.plain)
         .fixedSize()

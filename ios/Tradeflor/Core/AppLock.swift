@@ -224,13 +224,19 @@ final class AppLockWindow {
         UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState != .unattached }
     }
 
+    /// Settings › Appearance › Night Mode (on by default) for the lock and cover windows.
+    static var nightStyle: UIUserInterfaceStyle {
+        (UserDefaults.standard.object(forKey: "tf.night") as? Bool ?? true) ? .dark : .light
+    }
+
     func showLock(store: SessionStore) {
         guard lockWindow == nil, let scene = scene() else { return }
         TabChrome.dismissKeyboard() // a keyboard of the app underneath must not stay or come back over the lock
         previousKey = scene.windows.first { $0.isKeyWindow }
         let w = UIWindow(windowScene: scene)
         w.windowLevel = .alert + 2
-        let host = UIHostingController(rootView: AppLockScreen().environmentObject(store).preferredColorScheme(.dark))
+        let host = UIHostingController(rootView: AppLockScreen().environmentObject(store).tfColorScheme())
+        w.overrideUserInterfaceStyle = Self.nightStyle
         host.view.backgroundColor = .clear
         host.view.accessibilityViewIsModal = true // VoiceOver stays on the lock, not on the app under it
         w.rootViewController = host
@@ -252,9 +258,10 @@ final class AppLockWindow {
         let w = UIWindow(windowScene: scene)
         w.windowLevel = .alert + 1
         let host = UIHostingController(rootView: ZStack {
-            Theme.hex(0x00131B).ignoresSafeArea()
+            Theme.dyn(0x00131B, 0xEEF7F9).ignoresSafeArea()
             Image("BrandFlower").resizable().scaledToFit().frame(width: 84)
-        }.preferredColorScheme(.dark))
+        }.tfColorScheme())
+        w.overrideUserInterfaceStyle = Self.nightStyle
         w.rootViewController = host
         w.isHidden = false
         coverWindow = w

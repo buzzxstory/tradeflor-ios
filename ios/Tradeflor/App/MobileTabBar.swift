@@ -67,9 +67,9 @@ struct MobileTabBar: View {
             item("settings", "gearshape", "settings.title", 0)
         }
         .padding(6)
-        .background(Theme.hex(0x04252F, 0.97), in: RoundedRectangle(cornerRadius: 30, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous).stroke(Theme.hex(0x28636C), lineWidth: 1))
-        .shadow(color: .black.opacity(0.45), radius: 15, y: 10)
+        .background(Theme.dyn(0x04252F, 0xFFFFFF, 0.97, 0.96), in: RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous).stroke(Theme.dyn(0x28636C, 0xA6E3E7), lineWidth: 1))
+        .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.45, 0.16), radius: 15, y: 10)
         .padding(.horizontal, 10)
         .padding(.top, 4)
         .padding(.bottom, 4)
@@ -80,17 +80,17 @@ struct MobileTabBar: View {
         return Button { if tab != id { tab = id } } label: {
             VStack(spacing: 4) {
                 Image(systemName: on && icon != "calendar" ? icon + ".fill" : icon).font(.system(size: 19, weight: .medium))
-                    .foregroundStyle(on ? Theme.hex(0x08D9D9) : Theme.hex(0xE7F2F4))
+                    .foregroundStyle(on ? Theme.dyn(0x08D9D9, 0x00939F) : Theme.dyn(0xE7F2F4, 0x4E6873))
                     .frame(height: 22)
                 Text(LocalizedStringKey(key)).font(.system(size: 10.5, weight: on ? .semibold : .regular))
-                    .foregroundStyle(on ? .white : Theme.hex(0xE7F2F4)).lineLimit(1).minimumScaleFactor(0.8)
+                    .foregroundStyle(on ? Theme.dyn(0xFFFFFF, 0x0B3B45) : Theme.dyn(0xE7F2F4, 0x4E6873)).lineLimit(1).minimumScaleFactor(0.8)
             }
             .frame(maxWidth: .infinity).frame(height: 52)
             .background {
                 if on {
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(LinearGradient(colors: [Theme.hex(0x00646F), Theme.hex(0x052D36)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Theme.hex(0x00AAB1), lineWidth: 1))
+                        .fill(LinearGradient(colors: [Theme.dyn(0x00646F, 0xDDF7F8), Theme.dyn(0x052D36, 0xC4EEF1)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Theme.dyn(0x00AAB1, 0x4FCBD2), lineWidth: 1))
                 }
             }
             .overlay(alignment: .top) {
@@ -116,19 +116,19 @@ struct MobileTabBar: View {
                 ZStack {
                     Circle().fill(AngularGradient(colors: [Theme.hex(0x3CF0EE), Theme.hex(0x08B6C0), Theme.hex(0xF3C95C), Theme.hex(0x3CF0EE)],
                                                   center: .center, startAngle: .degrees(200), endAngle: .degrees(560)))
-                    Circle().fill(RadialGradient(colors: [Theme.hex(0x123C47), Theme.hex(0x04151C)], center: UnitPoint(x: 0.35, y: 0.3),
+                    Circle().fill(RadialGradient(colors: [Theme.dyn(0x123C47, 0xFFFFFF), Theme.dyn(0x04151C, 0xE3F5F7)], center: UnitPoint(x: 0.35, y: 0.3),
                                                  startRadius: 0, endRadius: 30))
                         .padding(3)
                     Image("BrandFlower").resizable().scaledToFit().frame(width: 36, height: 36)
                         .shadow(color: Theme.hex(0x3CF0EE, 0.45), radius: 6)
                 }
                 .frame(width: 58, height: 58)
-                .shadow(color: .black.opacity(0.5), radius: 11, y: 8)
+                .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.5, 0.22), radius: 11, y: 8)
                 .shadow(color: Theme.hex(0x3CF0EE, on ? 0.6 : 0.3), radius: on ? 13 : 10)
                 .offset(y: -22)
                 .padding(.bottom, -22)
                 Text("TradeFlor").font(.system(size: 10.5, weight: .heavy))
-                    .foregroundStyle(LinearGradient(colors: [Theme.hex(0x3CF0EE), Theme.hex(0xF3C95C)], startPoint: .leading, endPoint: .trailing))
+                    .foregroundStyle(LinearGradient(colors: [Theme.dyn(0x3CF0EE, 0x0097A5), Theme.dyn(0xF3C95C, 0xC08A12)], startPoint: .leading, endPoint: .trailing))
             }
             .frame(maxWidth: .infinity).frame(height: 52)
             .contentShape(Rectangle())

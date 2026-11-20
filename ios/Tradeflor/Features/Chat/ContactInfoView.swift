@@ -149,8 +149,8 @@ struct ContactInfoView: View {
             } label: {
                 Avatar(token: token, userID: chat.peer_id, avatarID: avatarID.isEmpty ? nil : avatarID, title: name, size: 132)
                     .padding(4)
-                    .overlay(Circle().stroke(Theme.hex(0x35E6F2, 0.75), lineWidth: 2))
-                    .shadow(color: Theme.hex(0x35E6F2, 0.18), radius: 9)
+                    .overlay(Circle().stroke(Theme.dyn(0x35E6F2, 0x00A8B5, 0.75, 0.7), lineWidth: 2))
+                    .shadow(color: Theme.dyn(0x35E6F2, 0x0B5E68, 0.18, 0.14), radius: 9)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(Text(verbatim: String(format: tr("civ3.picture.view"), name)))
@@ -184,7 +184,7 @@ struct ContactInfoView: View {
 
     private func aboutLine(_ text: String, online: Bool) -> some View {
         HStack(spacing: 8) {
-            if online { Circle().fill(Theme.hex(0x22D68A)).frame(width: 9, height: 9) }
+            if online { Circle().fill(Theme.dyn(0x22D68A, 0x0FB57F)).frame(width: 9, height: 9) }
             Text(verbatim: text).font(.system(size: 16)).foregroundStyle(CIV3.about).multilineTextAlignment(.center)
         }
     }
@@ -208,7 +208,7 @@ struct ContactInfoView: View {
             .padding(.trailing, 16)
             .frame(height: 48)
             .background(CIV3.tile, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.hex(0x35E6F2, 0.4), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.dyn(0x35E6F2, 0xA6E3E7, 0.4, 1), lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)

@@ -7,10 +7,13 @@ import SwiftUI
 /// same for the same person.
 enum NameColour {
     private static let colours: [UInt32] = [0x53BDEB, 0xF7A26B, 0xA5D86E, 0xE88BD0, 0xFFD166, 0x7EE0C4, 0xB59CFF, 0xFF8A8A, 0x6FD3FF, 0xE9C46A]
+    /// the same hues, deeper, so they read on the light bubbles of day mode
+    private static let dayColours: [UInt32] = [0x1F7FB0, 0xC0602A, 0x4E8A1E, 0xB0438F, 0x9A7410, 0x17866C, 0x6B4FD0, 0xC43848, 0x1C82B4, 0x8F6E12]
     static func of(_ id: String) -> Color {
         var h: UInt32 = 0
         for u in id.utf16 { h = h &* 31 &+ UInt32(u) }
-        return Theme.hex(colours[Int(h % UInt32(colours.count))])
+        let i = Int(h % UInt32(colours.count))
+        return Theme.dyn(colours[i], dayColours[i])
     }
 }
 
@@ -294,7 +297,7 @@ struct AlbumGrid: View {
                     ForEach(rs, id: \.emoji) { r in
                         Text(r.count > 1 ? "\(r.emoji) \(r.count)" : r.emoji).font(.caption2)
                             .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Theme.hex(r.mine ? 0x0F3A45 : 0x0D2A35), in: Capsule())
+                            .background(r.mine ? Theme.dyn(0x0F3A45, 0xDDF7F8) : Theme.dyn(0x0D2A35, 0xFFFFFF), in: Capsule())
                             .overlay(Capsule().stroke(Theme.soul, lineWidth: 1.5))
                             .onTapGesture { actions.react(m, r.emoji) }
                     }

@@ -202,9 +202,9 @@ struct PollComposer: View {
                 ZStack(alignment: multiple ? .trailing : .leading) {
                     Capsule().fill(multiple ? AnyShapeStyle(LinearGradient(colors: [Theme.hex(0x10D8DE), Theme.hex(0x03909B)],
                                                                             startPoint: .topLeading, endPoint: .bottomTrailing))
-                                            : AnyShapeStyle(Theme.hex(0x1C3A45)))
-                    Circle().fill(multiple ? Color.white : Theme.hex(0xCFE7EE)).frame(width: 20, height: 20)
-                        .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
+                                            : AnyShapeStyle(Theme.dyn(0x1C3A45, 0xC7D6E0)))
+                    Circle().fill(multiple ? Color.white : Theme.dyn(0xCFE7EE, 0xFFFFFF)).frame(width: 20, height: 20)
+                        .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.35, 0.18), radius: 3, y: 2)
                         .padding(3)
                 }
                 .frame(width: 44, height: 26)
@@ -514,8 +514,8 @@ private enum CPS {
     static let title = Theme.dyn(0xEFBE33, 0xA87C06)
     static let fieldBG = Theme.dyn(0x0D252F, 0xF3F7F9)                 // --bg-input
     static let fieldBorder = Theme.dyn(0x288CAF, 0x145A78, 0.22, 0.22) // --border-c
-    static let placeholder = Theme.hex(0xA9B9C5, 0.55)
-    static let error = Theme.hex(0xFF9A9F)
+    static let placeholder = Theme.dyn(0xA9B9C5, 0x5F7686, 0.55, 0.7)
+    static let error = Theme.dyn(0xFF9A9F, 0xC43848)
     static let shadow = Theme.dyn(0x000000, 0x14324B, 0.38, 0.16)
 }
 
@@ -1006,7 +1006,7 @@ struct LinkPreviewCard: View {
                     }
                     .padding(8)
                     .frame(maxWidth: 260, alignment: .leading)
-                    .background(Color.black.opacity(0.2), in: RoundedRectangle(cornerRadius: 10))
+                    .background(Theme.dyn(0x000000, 0x0097A5, 0.2, 0.07), in: RoundedRectangle(cornerRadius: 10))
                     .overlay(alignment: .leading) { Rectangle().fill(Theme.accent).frame(width: 3) }
                 }
             }
@@ -1091,10 +1091,10 @@ struct EmojiPanel: View {
                                 .onAppear { if current.isEmpty { current = sec.id } }
                             } header: {
                                 Text(LocalizedStringKey(sec.key)).font(.system(size: 12.5, weight: .bold))
-                                    .foregroundStyle(sec.gold ? Theme.hex(0xF3C95C) : Theme.muted)
+                                    .foregroundStyle(sec.gold ? Theme.dyn(0xF3C95C, 0xA87C06) : Theme.muted)
                                     .padding(.horizontal, 6).padding(.top, 10).padding(.bottom, 6)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Theme.hex(0x0A252F))
+                                    .background(Theme.dyn(0x0A252F, 0xFFFFFF))
                                     .id(sec.id)
                                     .onAppear { current = sec.id }
                             }
@@ -1115,7 +1115,7 @@ struct EmojiPanel: View {
                                 Text(sec.icon).font(.system(size: 19))
                                     .grayscale(on ? 0 : 0.85).opacity(on ? 1 : 0.7)
                                     .frame(minWidth: 36, minHeight: 34)
-                                    .background(on ? Theme.hex(0x00D4DF, 0.16) : .clear, in: RoundedRectangle(cornerRadius: 10))
+                                    .background(on ? Theme.dyn(0x00D4DF, 0x0097A5, 0.16, 0.14) : .clear, in: RoundedRectangle(cornerRadius: 10))
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -1126,15 +1126,14 @@ struct EmojiPanel: View {
                     .padding(.horizontal, 8).padding(.vertical, 6)
                     .frame(minWidth: 0)
                 }
-                .background(Theme.hex(0x071E27))
-                .overlay(alignment: .top) { Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1) }
+                .background(Theme.dyn(0x071E27, 0xF3FAFB))
+                .overlay(alignment: .top) { Rectangle().fill(Theme.dyn(0xFFFFFF, 0xC4EEF1, 0.06, 1)).frame(height: 1) }
             }
         }
-        .background(LinearGradient(colors: [Theme.hex(0x0B2833), Theme.hex(0x071F28)], startPoint: .top, endPoint: .bottom))
+        .background(LinearGradient(colors: [Theme.dyn(0x0B2833, 0xFFFFFF), Theme.dyn(0x071F28, 0xF8FCFD)], startPoint: .top, endPoint: .bottom))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.hex(0x00D4DF, 0.18), lineWidth: 1))
-        .shadow(color: .black.opacity(0.55), radius: 22, y: 18)
-        .environment(\.colorScheme, .dark)
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.dyn(0x00D4DF, 0xA6E3E7, 0.18, 1), lineWidth: 1))
+        .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.55, 0.18), radius: 22, y: 18)
         .onAppear { current = recent.isEmpty ? (EmojiData.categories.first?.id ?? "") : "recent" }
     }
 
@@ -1152,7 +1151,7 @@ struct EmojiPanel: View {
 private struct EmojiKeyStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(configuration.isPressed ? Theme.hex(0x00D4DF, 0.12) : .clear, in: RoundedRectangle(cornerRadius: 10))
+            .background(configuration.isPressed ? Theme.dyn(0x00D4DF, 0x0097A5, 0.12, 0.1) : .clear, in: RoundedRectangle(cornerRadius: 10))
             .scaleEffect(configuration.isPressed ? 0.95 : 1)
     }
 }
@@ -1167,7 +1166,7 @@ struct EmojiFloating: View {
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                Theme.hex(0x000B10, 0.55).ignoresSafeArea().onTapGesture(perform: onClose)
+                Theme.dyn(0x000B10, 0x0F2533, 0.55, 0.25).ignoresSafeArea().onTapGesture(perform: onClose)
                 EmojiPanel(single: single, bodyHeight: max(160, min(330, geo.size.height * 0.7 - 100)), onPick: onPick, onClose: onClose)
                     .frame(width: min(geo.size.width * 0.94, 380))
             }
@@ -1189,6 +1188,7 @@ struct EmojiPickerSheet: View {
             .presentationDetents([.height(400)])
             .presentationDragIndicator(.hidden)
             .background(Theme.hex(0x02121A).ignoresSafeArea())
+            .environment(\.colorScheme, .dark)
     }
 }
 

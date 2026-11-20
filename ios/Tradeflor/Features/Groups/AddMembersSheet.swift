@@ -43,7 +43,7 @@ struct AddMembersSheet: View {
                     }
                     .padding(.horizontal, 14).frame(height: 48)
                     .background(Theme.soulInput, in: RoundedRectangle(cornerRadius: 14))
-                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.hex(0x00C8D7, 0.35), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.dyn(0x00C8D7, 0x00A8B5, 0.35, 0.45), lineWidth: 1))
                     .environment(\.layoutDirection, .leftToRight)
                     Text("ams.hint").font(.system(size: 12.5)).foregroundStyle(Theme.faint)
 

@@ -1997,3 +1997,4 @@
 "snd.vibrate" = "Vibrate for new messages";
 "snd.inchat" = "Sounds in the open chat";
 "snd.note" = "The sound plays with every message notification (turn it off with Sound above). With the app closed, iPhone decides the vibration from Settings > Sounds & Haptics and the Ring / Silent switch.";
+"snd.group" = "Group message sound";

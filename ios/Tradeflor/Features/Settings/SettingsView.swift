@@ -139,6 +139,7 @@ struct SettingsView: View {
             .refreshable { await load(retryAdmin: false) }
             .background(SettingsBackground())
             .toolbar(.hidden, for: .navigationBar)
+            .modifier(StatusBarScrim()) // rows scrolled up pass under a frosted status bar, not through the clock
         }
         .task { await load() }
         .confirmationDialog(Text("settings.signout.confirm"), isPresented: $confirmSignOut, titleVisibility: .visible) {
@@ -163,9 +164,9 @@ struct SettingsView: View {
             Spacer(minLength: 8)
             Image(systemName: "gearshape").font(.system(size: 21, weight: .regular)).foregroundStyle(SetUI.accent)
                 .frame(width: 46, height: 46)
-                .background(RadialGradient(colors: [Theme.hex(0x08D9D9, 0.14), Theme.hex(0x08D9D9, 0.03)], center: .center, startRadius: 0, endRadius: 23),
+                .background(RadialGradient(colors: [Theme.dyn(0x08D9D9, 0x0097A5, 0.14, 0.12), Theme.dyn(0x08D9D9, 0x0097A5, 0.03, 0.03)], center: .center, startRadius: 0, endRadius: 23),
                             in: Circle())
-                .overlay(Circle().stroke(Theme.hex(0x08D9D9, 0.25), lineWidth: 1))
+                .overlay(Circle().stroke(Theme.dyn(0x08D9D9, 0x00939F, 0.25, 0.3), lineWidth: 1))
                 .accessibilityHidden(true)
         }
         .padding(.top, 2)
@@ -187,9 +188,9 @@ struct SettingsView: View {
             ZStack(alignment: .bottomTrailing) {
                 Avatar(token: token, userID: profile?.user_id ?? (store.session?.userID ?? ""),
                        avatarID: (profile?.avatar_id.isEmpty ?? true) ? nil : profile?.avatar_id, title: name, size: 62)
-                    .overlay(Circle().strokeBorder(Theme.hex(0x08D9D9, 0.45), lineWidth: 2))
+                    .overlay(Circle().strokeBorder(Theme.dyn(0x08D9D9, 0x00939F, 0.45, 0.5), lineWidth: 2))
                 if on {
-                    Circle().fill(Theme.hex(0x14D99A)).frame(width: 13, height: 13)
+                    Circle().fill(Theme.dyn(0x14D99A, 0x0FB57F)).frame(width: 13, height: 13)
                         .overlay(Circle().stroke(Theme.dyn(0x03202B, 0xEAF3F7), lineWidth: 3))
                         .offset(x: -1, y: -2)
                 }
@@ -201,7 +202,7 @@ struct SettingsView: View {
                     Circle().frame(width: 7, height: 7)
                     Text(LocalizedStringKey(on ? "settings.online" : "set.reconnecting")).font(.system(size: 13, weight: .semibold))
                 }
-                .foregroundStyle(on ? Theme.dyn(0x14D99A, 0x0C8564) : Theme.hex(0xF0B46A))
+                .foregroundStyle(on ? Theme.dyn(0x14D99A, 0x0C8564) : Theme.dyn(0xF0B46A, 0xB86E12))
                 .padding(.top, 3)
             }
             Spacer(minLength: 6)
@@ -296,7 +297,7 @@ enum SetUI {
     static let edge = Theme.dyn(0x288CAA, 0x0A8FA0, 0.34, 0.3)
     static let dangerEdge = Theme.dyn(0xFF5E6E, 0xDC3C4B, 0.3, 0.3)
     static let rule = Theme.dyn(0x286E91, 0x286E91, 0.35, 0.22)
-    static let fill = LinearGradient(colors: [Theme.dyn(0x042A38, 0xEAF3F7, 0.95, 1), Theme.dyn(0x021C26, 0xE4EFF4, 0.95, 1)],
+    static let fill = LinearGradient(colors: [Theme.dyn(0x042A38, 0xFFFFFF, 0.95, 1), Theme.dyn(0x021C26, 0xF5FBFC, 0.95, 1)],
                                      startPoint: UnitPoint(x: 0.4, y: 0), endPoint: UnitPoint(x: 0.6, y: 1))
     static let tileFill = Theme.dyn(0x08D9D9, 0x0A8FA0, 0.08, 0.08)
     static let tileEdge = Theme.dyn(0x08D9D9, 0x0A8FA0, 0.2, 0.25)
@@ -321,7 +322,7 @@ extension View {
             .background(SetUI.fill, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(border, lineWidth: 1))
-            .shadow(color: .black.opacity(0.22), radius: 12, y: 8)
+            .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.22, 0.12), radius: 12, y: 8)
     }
 }
 
@@ -421,9 +422,9 @@ struct SBanner: View {
                 else { Image(systemName: icon).font(.system(size: 24, weight: .regular)).foregroundStyle(SetUI.accent) }
             }
             .frame(width: 54, height: 54)
-            .background(LinearGradient(colors: [Theme.hex(0x08D9D9, 0.16), Theme.hex(0x08D9D9, 0.04)], startPoint: .topLeading, endPoint: .bottomTrailing),
+            .background(LinearGradient(colors: [Theme.dyn(0x08D9D9, 0x0097A5, 0.16, 0.14), Theme.dyn(0x08D9D9, 0x0097A5, 0.04, 0.04)], startPoint: .topLeading, endPoint: .bottomTrailing),
                         in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.hex(0x08D9D9, 0.28), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.dyn(0x08D9D9, 0x00939F, 0.28, 0.3), lineWidth: 1))
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.system(size: 19, weight: .bold)).foregroundStyle(SetUI.text).lineLimit(2)
                 if let subtitle, !subtitle.isEmpty {
@@ -457,9 +458,9 @@ struct SettingsSweep: View {
 
     private var sweep: some View {
         SweepShape()
-            .fill(LinearGradient(stops: [.init(color: Theme.hex(0x08D9D9, 0), location: 0),
-                                         .init(color: Theme.hex(0x08D9D9, peak), location: 0.55),
-                                         .init(color: Theme.hex(0x08D9D9, tail), location: 1)],
+            .fill(LinearGradient(stops: [.init(color: Theme.dyn(0x08D9D9, 0x00B3C0, 0, 0), location: 0),
+                                         .init(color: Theme.dyn(0x08D9D9, 0x00B3C0, CGFloat(peak), CGFloat(peak) * 0.6), location: 0.55),
+                                         .init(color: Theme.dyn(0x08D9D9, 0x00B3C0, CGFloat(tail), CGFloat(tail) * 0.6), location: 1)],
                                  startPoint: .leading, endPoint: .trailing))
             .flipsForRightToLeftLayoutDirection(true)
     }
@@ -487,8 +488,8 @@ struct TFSwitchStyle: ToggleStyle {
                     .fill(configuration.isOn
                           ? AnyShapeStyle(LinearGradient(colors: [Theme.dyn(0x00C9D6, 0x00B9C7), Theme.dyn(0x00E3F0, 0x00CDD9)], startPoint: .leading, endPoint: .trailing))
                           : AnyShapeStyle(Theme.dyn(0x163D4C, 0xC7D6E0)))
-                    .shadow(color: configuration.isOn ? Theme.hex(0x00DCEB, 0.3) : .clear, radius: 5)
-                Circle().fill(configuration.isOn ? Color.white : Theme.hex(0xCFDBE2))
+                    .shadow(color: configuration.isOn ? Theme.dyn(0x00DCEB, 0x0097A5, 0.3, 0.22) : .clear, radius: 5)
+                Circle().fill(configuration.isOn ? Color.white : Theme.dyn(0xCFDBE2, 0xFFFFFF))
                     .frame(width: 22, height: 22)
                     .padding(3)
             }
@@ -543,9 +544,9 @@ struct SettingsPage<Content: View>: View {
                     if let icon {
                         Image(systemName: icon).font(.system(size: 21)).foregroundStyle(SetUI.accent)
                             .frame(width: 46, height: 46)
-                            .background(RadialGradient(colors: [Theme.hex(0x08D9D9, 0.14), Theme.hex(0x08D9D9, 0.03)], center: .center, startRadius: 0, endRadius: 23),
+                            .background(RadialGradient(colors: [Theme.dyn(0x08D9D9, 0x0097A5, 0.14, 0.12), Theme.dyn(0x08D9D9, 0x0097A5, 0.03, 0.03)], center: .center, startRadius: 0, endRadius: 23),
                                         in: Circle())
-                            .overlay(Circle().stroke(Theme.hex(0x08D9D9, 0.25), lineWidth: 1))
+                            .overlay(Circle().stroke(Theme.dyn(0x08D9D9, 0x00939F, 0.25, 0.3), lineWidth: 1))
                             .accessibilityHidden(true)
                     }
                 }
@@ -561,7 +562,9 @@ struct SettingsPage<Content: View>: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .toolbarBackground(.hidden, for: .navigationBar)
+        // a solid bar in the page's own top colour: the rows scroll under it, never through the Back button and the clock
+        .toolbarBackground(Theme.dyn(0x011E29, 0xEEF3F7), for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
     }
 }
 
@@ -711,7 +714,7 @@ struct EditProfileSheet: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Theme.hex(0x02242F), Theme.hex(0x00131B), Theme.hex(0x000F16)], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [Theme.dyn(0x02242F, 0xF4FBFC), Theme.dyn(0x00131B, 0xEAF6F8), Theme.dyn(0x000F16, 0xE2F1F4)], startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
             // the glowing curves: one behind the picture, one rising at the bottom (as the design)
             ProfileHeroLines().frame(height: 300).frame(maxHeight: .infinity, alignment: .top).opacity(0.9).ignoresSafeArea()
@@ -723,18 +726,18 @@ struct EditProfileSheet: View {
                         avatar
                         card(icon: "person", label: "pe.name") {
                             TextField("set.name.ph", text: $name).textContentType(.name).focused($focus, equals: .name)
-                                .font(.system(size: 22)).foregroundStyle(.white)
+                                .font(.system(size: 22)).foregroundStyle(Theme.text)
                                 .onChange(of: name) { v in let c = Self.clip(v, 64); if c != v { name = c } }
                         }
                         card(icon: "at", label: "signup.username", trailing: { availView }) {
                             TextField("signup.username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
                                 .focused($focus, equals: .username)
-                                .font(.system(size: 22)).foregroundStyle(.white)
+                                .font(.system(size: 22)).foregroundStyle(Theme.text)
                                 .onChange(of: username) { v in let c = Self.clip(v, 24); if c != v { username = c } }
                         }
                         aboutCard
                         if let problem {
-                            Text(problem).font(.system(size: 14)).foregroundStyle(Theme.hex(0xFFB3B3)).multilineTextAlignment(.center)
+                            Text(problem).font(.system(size: 14)).foregroundStyle(Theme.dyn(0xFFB3B3, 0xC43848)).multilineTextAlignment(.center)
                                 .frame(maxWidth: .infinity).padding(.horizontal, 12)
                         }
                     }
@@ -743,7 +746,7 @@ struct EditProfileSheet: View {
                 .scrollDismissesKeyboard(.interactively)
             }
         }
-        .environment(\.colorScheme, .dark)
+        .tfColorScheme()
         .onAppear {
             name = profile.display_name
             username = profile.username
@@ -773,7 +776,7 @@ struct EditProfileSheet: View {
             .buttonStyle(.plain)
             Spacer(minLength: 6)
             HStack(spacing: 8) {
-                Text("pe.title").font(.system(size: 20, weight: .bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
+                Text("pe.title").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1).minimumScaleFactor(0.7)
                 Image(systemName: "person").font(.system(size: 18)).foregroundStyle(Theme.accent)
                     .overlay(alignment: .bottomTrailing) { Image(systemName: "pencil").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.accent).offset(x: 5, y: 3) }
             }
@@ -785,7 +788,7 @@ struct EditProfileSheet: View {
                 }
                 .font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.onAccent)
                 .padding(.horizontal, 18).frame(height: 44)
-                .background(LinearGradient(colors: [Theme.hex(0x12E6E8), Theme.hex(0x0AB8C4)], startPoint: .leading, endPoint: .trailing), in: Capsule())
+                .background(LinearGradient(colors: [Theme.dyn(0x12E6E8, 0x00A8B5), Theme.dyn(0x0AB8C4, 0x00939F)], startPoint: .leading, endPoint: .trailing), in: Capsule())
                 .shadow(color: Theme.accent.opacity(0.55), radius: 10)
             }
             .buttonStyle(.plain)
@@ -811,7 +814,7 @@ struct EditProfileSheet: View {
                 Button { onPhoto() } label: {
                     Image(systemName: "camera.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.text)
                         .frame(width: 48, height: 48)
-                        .background(Theme.hex(0x062B36), in: Circle())
+                        .background(Theme.dyn(0x062B36, 0xFFFFFF), in: Circle())
                         .overlay(Circle().stroke(Theme.accent, lineWidth: 2))
                         .shadow(color: Theme.accent.opacity(0.5), radius: 8)
                 }
@@ -867,7 +870,7 @@ struct EditProfileSheet: View {
 
     private var glass: some View {
         RoundedRectangle(cornerRadius: 22, style: .continuous)
-            .fill(LinearGradient(colors: [Theme.hex(0x08323F, 0.75), Theme.hex(0x04202B, 0.75)], startPoint: .top, endPoint: .bottom))
+            .fill(LinearGradient(colors: [Theme.dyn(0x08323F, 0xFFFFFF, 0.75, 0.92), Theme.dyn(0x04202B, 0xF3FBFC, 0.75, 0.92)], startPoint: .top, endPoint: .bottom))
     }
 
     private var aboutCard: some View {
@@ -877,10 +880,10 @@ struct EditProfileSheet: View {
                 Text("settings.bio").font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text)
             }
             TextField("set.bio.ph", text: $bio, axis: .vertical).lineLimit(4...10).focused($focus, equals: .bio)
-                .font(.system(size: 19)).foregroundStyle(.white).lineSpacing(3)
+                .font(.system(size: 19)).foregroundStyle(Theme.text).lineSpacing(3)
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .background(Theme.dyn(0x000000, 0xDDF7F8, 0.22, 0.55), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.accent.opacity(0.4), lineWidth: 1))
                 .onChange(of: bio) { v in let c = Self.clip(v, 200); if c != v { bio = c } }
             Text(verbatim: "\(bio.unicodeScalars.count) / 200").font(.system(size: 16)).monospacedDigit().foregroundStyle(Theme.muted)

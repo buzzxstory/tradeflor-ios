@@ -93,12 +93,13 @@ struct TradeFlorView: View {
                 ZStack {
                     Starfield()
                     // web .tf-home: radial-gradient(120% 50% at 100% 0%, rgba(0,201,211,.12), transparent 55%)
-                    RadialGradient(colors: [Theme.hex(0x00C9D3, 0.12), .clear], center: .topTrailing, startRadius: 0, endRadius: 420)
+                    RadialGradient(colors: [Theme.dyn(0x00C9D3, 0x00A8B5, 0.12, 0.1), .clear], center: .topTrailing, startRadius: 0, endRadius: 420)
                         .ignoresSafeArea()
                         .allowsHitTesting(false)
                 }
             )
             .toolbar(.hidden, for: .navigationBar)
+            .modifier(StatusBarScrim()) // rows scrolled up pass under a frosted status bar, not through the clock
         }
         .task { await load() }
         .task {
@@ -132,10 +133,10 @@ struct TradeFlorView: View {
     private var header: some View {
         HStack(spacing: 10) {
             Image("BrandFlower").resizable().scaledToFit().frame(width: 40, height: 40)
-                .shadow(color: Theme.hex(0x3CF0EE, 0.35), radius: 6)
+                .shadow(color: Theme.dyn(0x3CF0EE, 0x0097A5, 0.35, 0.2), radius: 6)
             HStack(spacing: 0) {
                 Text(verbatim: "Trade").foregroundStyle(Theme.text)
-                Text(verbatim: "Flor").foregroundStyle(LinearGradient(colors: [Theme.hex(0x3CF0EE), Theme.hex(0xF3C95C)],
+                Text(verbatim: "Flor").foregroundStyle(LinearGradient(colors: [Theme.dyn(0x3CF0EE, 0x0097A5), Theme.dyn(0xF3C95C, 0xB98700)],
                                                                       startPoint: .leading, endPoint: .trailing))
             }
             .font(.system(size: 28, weight: .heavy))
@@ -145,7 +146,7 @@ struct TradeFlorView: View {
             Button { manage = true } label: {
                 Image(systemName: "camera").font(.system(size: 17, weight: .regular)).foregroundStyle(Theme.accent)
                     .frame(width: 40, height: 40)
-                    .background(Theme.hex(0x00C9D3, 0.08), in: Circle())
+                    .background(Theme.dyn(0x00C9D3, 0x0097A5, 0.08, 0.08), in: Circle())
                     .overlay(Circle().stroke(Theme.dyn(0x1F6B78, 0x9FD3DC), lineWidth: 1))
             }
             .buttonStyle(.plain)
@@ -182,18 +183,18 @@ struct TradeFlorView: View {
             Image(systemName: "waveform.path.ecg").font(.system(size: 19, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 40, height: 40).background(Theme.hex(0xFF5D6C), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(e.currency) \(e.event)").font(.system(size: 15.5, weight: .bold)).foregroundStyle(.white).lineLimit(1)
+                Text("\(e.currency) \(e.event)").font(.system(size: 15.5, weight: .bold)).foregroundStyle(Theme.dyn(0xFFFFFF, 0x0F2533)).lineLimit(1)
                 Text(String(format: NSLocalizedString("tf.next.sub", comment: ""), Self.hm.string(from: d)))
-                    .font(.system(size: 12.5)).foregroundStyle(Theme.hex(0xF2B3BB)).lineLimit(1)
+                    .font(.system(size: 12.5)).foregroundStyle(Theme.dyn(0xF2B3BB, 0xA4505C)).lineLimit(1)
             }
             Spacer(minLength: 4)
             TickText { Self.countdown(d.timeIntervalSince($0)) }.font(.system(size: 16, weight: .bold, design: .monospaced))
-                .foregroundStyle(Theme.hex(0xFFD0D6)).lineLimit(1).fixedSize()
+                .foregroundStyle(Theme.dyn(0xFFD0D6, 0xC43848)).lineLimit(1).fixedSize()
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
-        .background(LinearGradient(colors: [Theme.hex(0x3A0F1A), Theme.hex(0x1E0C12)], startPoint: .topLeading, endPoint: .bottomTrailing),
+        .background(LinearGradient(colors: [Theme.dyn(0x3A0F1A, 0xFFF1F3), Theme.dyn(0x1E0C12, 0xFFE4E8)], startPoint: .topLeading, endPoint: .bottomTrailing),
                     in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.hex(0x8A2A3A), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.dyn(0x8A2A3A, 0xF3B5BE), lineWidth: 1))
         .contentShape(Rectangle())
     }
 
@@ -221,7 +222,7 @@ struct TradeFlorView: View {
         if isOpen { label = String(format: NSLocalizedString("ux3.tf.sess.open", comment: ""), name) }
         else if soon { label = "\(name) \(Self.shortSpan(open - mins))" }
         else { label = String(format: NSLocalizedString("ux3.tf.sess.closed", comment: ""), name) }
-        let openGreen = Theme.hex(0x2BF29A)
+        let openGreen = Theme.dyn(0x2BF29A, 0x0FB57F)
         return HStack(spacing: 7) {
             Circle()
                 .fill(isOpen ? openGreen : Color.clear)
@@ -284,16 +285,18 @@ struct TradeFlorView: View {
 
     private func personCard(_ g: StatusGroup, palette: Int) -> some View {
         let fills: [(UInt32, UInt32)] = [(0x1E4B63, 0x0D2431), (0x4A3A5E, 0x191427), (0x25503F, 0x0C211A)]
-        let f = fills[palette]
+        // day: the same three hues, soft and light, with dark text
+        let dayFills: [(UInt32, UInt32)] = [(0xDDF2F8, 0xBFE0EC), (0xEAE2F5, 0xD3C6E8), (0xDCF3E8, 0xBDE3D0)]
+        let f = fills[palette], df = dayFills[palette]
         return ZStack(alignment: .topLeading) {
-            LinearGradient(stops: [.init(color: Theme.hex(f.0), location: 0), .init(color: Theme.hex(f.1), location: 0.75)],
+            LinearGradient(stops: [.init(color: Theme.dyn(f.0, df.0), location: 0), .init(color: Theme.dyn(f.1, df.1), location: 0.75)],
                            startPoint: .top, endPoint: .bottom)
             Avatar(token: token, userID: g.user_id, avatarID: nil, title: g.username, size: 38)
                 .overlay(Circle().strokeBorder(Theme.dyn(0x06141B, 0xFFFFFF), lineWidth: 2))
                 .padding(2)
                 .background(
                     Circle().fill(g.all_seen
-                                  ? AnyShapeStyle(Theme.hex(0x5F777F))
+                                  ? AnyShapeStyle(Theme.dyn(0x5F777F, 0xB9CAD1))
                                   : AnyShapeStyle(AngularGradient(stops: [.init(color: Theme.hex(0x3FE4E2), location: 0),
                                                                           .init(color: Theme.hex(0x3FE4E2), location: 0.805),
                                                                           .init(color: Theme.hex(0xC9A85A), location: 0.806),
@@ -303,9 +306,9 @@ struct TradeFlorView: View {
                 .padding(9)
             VStack(alignment: .leading, spacing: 1) {
                 Spacer()
-                Text(g.username).font(.system(size: 13.5, weight: .bold)).foregroundStyle(.white).lineLimit(1)
+                Text(g.username).font(.system(size: 13.5, weight: .bold)).foregroundStyle(Theme.dyn(0xFFFFFF, 0x0F2533)).lineLimit(1)
                 if let d = serverDate(g.latest) {
-                    Text(Self.ago(d, now)).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
+                    Text(Self.ago(d, now)).font(.system(size: 11.5)).foregroundStyle(Theme.dyn(0xFFFFFF, 0x0F2533, 0.72, 0.65)).lineLimit(1)
                 }
             }
             .padding(.leading, 10).padding(.trailing, 8).padding(.bottom, 10)
@@ -359,7 +362,7 @@ struct TradeFlorView: View {
             ForEach(Array(rows.enumerated()), id: \.element.id) { i, r in
                 Button { Self.go(r.go) } label: {
                     HStack(spacing: 11) {
-                        Image(systemName: r.icon).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.hex(r.tint))
+                        Image(systemName: r.icon).font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.dyn(r.tint, r.tint == 0x3CD6D8 ? 0x0097A5 : r.tint == 0x2BF29A ? 0x0C9A5F : 0xD8404A))
                             .frame(width: 30, height: 30)
                             .background(Theme.hex(r.tint, 0.16), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                         Text(r.text).font(.system(size: 14.5)).foregroundStyle(Theme.text).lineLimit(1)
@@ -371,7 +374,7 @@ struct TradeFlorView: View {
                     .padding(.vertical, 9)
                     .contentShape(Rectangle())
                     .overlay(alignment: .top) {
-                        if i > 0 { Rectangle().fill(Theme.hex(0x1D5A68, 0.55)).frame(height: 1) }
+                        if i > 0 { Rectangle().fill(Theme.dyn(0x1D5A68, 0xC4EEF1, 0.55, 1)).frame(height: 1) }
                     }
                 }
                 .buttonStyle(.plain)
@@ -432,8 +435,8 @@ struct TradeFlorView: View {
                          : NSLocalizedString("tf.showless", comment: ""))
                         .font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.accent)
                         .frame(maxWidth: .infinity).padding(.vertical, 12).padding(.horizontal, 16)
-                        .background(Theme.hex(0x00D4DF, 0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.hex(0x00D4DF, 0.28), lineWidth: 1))
+                        .background(Theme.dyn(0x00D4DF, 0x0097A5, 0.07, 0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.dyn(0x00D4DF, 0x00A8B5, 0.28, 0.35), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 10)
@@ -464,9 +467,9 @@ struct TradeFlorView: View {
                 Image(systemName: on ? "bell.fill" : "bell").font(.system(size: 16, weight: .regular))
                     .foregroundStyle(on ? Theme.accent : Theme.muted)
                     .frame(width: 40, height: 40)
-                    .background(on ? Theme.hex(0x00D4DF, 0.12) : Color.clear, in: Circle())
+                    .background(on ? Theme.dyn(0x00D4DF, 0x0097A5, 0.12, 0.1) : Color.clear, in: Circle())
                     .overlay(Circle().stroke(on ? Theme.accent : Theme.dyn(0x2A5866, 0xB9D3DC), lineWidth: 1))
-                    .shadow(color: on ? Theme.hex(0x00D4DF, 0.25) : .clear, radius: 6)
+                    .shadow(color: on ? Theme.dyn(0x00D4DF, 0x0097A5, 0.25, 0.18) : .clear, radius: 6)
             }
             .buttonStyle(.plain)
             .disabled(out)

@@ -745,7 +745,8 @@ struct ChatView: View {
 
     private func chatHead2<V: View>(_ v: V) -> some View {
         v
-        .sheet(isPresented: $showInfo, onDismiss: {
+        // full screen, as WhatsApp's Contact info / Group info (a sheet left the chat showing above it)
+        .fullScreenCover(isPresented: $showInfo, onDismiss: {
             // left or deleted from Group Info: back to the list (the group is no longer mine to read)
             if groupGone { dismissView(); return }
             Task {

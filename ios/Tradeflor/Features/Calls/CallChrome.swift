@@ -105,6 +105,22 @@ struct CallReturnBar: View {
     }
 }
 
+/// Puts the app below the green call bar: the bar fills the status bar area and its own row, the screens start under it.
+struct CallBarSpace: ViewModifier {
+    @ObservedObject var calls: CallManager
+
+    func body(content: Content) -> some View {
+        VStack(spacing: 0) {
+            if !calls.showScreen && calls.lineInUse {
+                CallReturnBar(calls: calls)
+                    .background(Theme.hex(0x14C27A).ignoresSafeArea(edges: .top))
+            }
+            content
+        }
+        .animation(.easeOut(duration: 0.2), value: !calls.showScreen && calls.lineInUse)
+    }
+}
+
 /// The other person's profile photo for the call screen (the big avatar and the blurred background), kept for the session.
 @MainActor
 final class CallPhotoCache {

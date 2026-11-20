@@ -11,24 +11,24 @@ private func ldT(_ key: String) -> String { NSLocalizedString(key, comment: "") 
 
 /// The page's own palette (76-linked-devices.css: midnight navy, deep teal cards, soft turquoise accents).
 private enum LD {
-    static let ink = Theme.hex(0xEEF8FB)
-    static let head = Theme.hex(0xF2FBFF)
-    static let sub = Theme.hex(0xA9C0CA)
-    static let body = Theme.hex(0xB8CCD5)
-    static let note = Theme.hex(0xCFE3EA)
-    static let empty = Theme.hex(0x9FB8C4)
-    static let cyan = Theme.hex(0x35E6F2)
-    static let cyanSoft = Theme.hex(0x7FF3F3)
-    static let green = Theme.hex(0x22D68A)
-    static let greenText = Theme.hex(0x7FF3C8)
-    static let red = Theme.hex(0xFF6B78)
-    static let line = Theme.hex(0x51C8DC, 0.24)
-    static let rule = Theme.hex(0x51C8DC, 0.14)
-    static let cardFill = LinearGradient(colors: [Theme.hex(0x052C38, 0.72), Theme.hex(0x02161F, 0.86)],
+    static let ink = Theme.dyn(0xEEF8FB, 0x0F2533)
+    static let head = Theme.dyn(0xF2FBFF, 0x0F2533)
+    static let sub = Theme.dyn(0xA9C0CA, 0x4E6873)
+    static let body = Theme.dyn(0xB8CCD5, 0x4E6873)
+    static let note = Theme.dyn(0xCFE3EA, 0x3C5668)
+    static let empty = Theme.dyn(0x9FB8C4, 0x5F7686)
+    static let cyan = Theme.dyn(0x35E6F2, 0x0097A5)
+    static let cyanSoft = Theme.dyn(0x7FF3F3, 0x00939F)
+    static let green = Theme.dyn(0x22D68A, 0x0FB57F)
+    static let greenText = Theme.dyn(0x7FF3C8, 0x0C8564)
+    static let red = Theme.dyn(0xFF6B78, 0xD8404A)
+    static let line = Theme.dyn(0x51C8DC, 0xA6E3E7, 0.24, 1)
+    static let rule = Theme.dyn(0x51C8DC, 0xC4EEF1, 0.14, 1)
+    static let cardFill = LinearGradient(colors: [Theme.dyn(0x052C38, 0xFFFFFF, 0.72, 1), Theme.dyn(0x02161F, 0xF6FCFD, 0.86, 1)],
                                          startPoint: UnitPoint(x: 0.2, y: 0), endPoint: UnitPoint(x: 0.8, y: 1))
-    static let currentFill = LinearGradient(colors: [Theme.hex(0x063E4A, 0.78), Theme.hex(0x021E28, 0.9)],
+    static let currentFill = LinearGradient(colors: [Theme.dyn(0x063E4A, 0xEFFBFC, 0.78, 1), Theme.dyn(0x021E28, 0xDDF7F8, 0.9, 1)],
                                             startPoint: UnitPoint(x: 0.2, y: 0), endPoint: UnitPoint(x: 0.8, y: 1))
-    static let art = LinearGradient(colors: [Theme.hex(0x7FF3F3), Theme.hex(0x22CFE0)], startPoint: .leading, endPoint: .trailing)
+    static let art = LinearGradient(colors: [Theme.dyn(0x7FF3F3, 0x22CFE0), Theme.dyn(0x22CFE0, 0x0097A5)], startPoint: .leading, endPoint: .trailing)
 }
 
 // MARK: what a session is called and how its activity reads (only what the server recorded)
@@ -184,8 +184,8 @@ struct LinkedDevicesView: View {
                             sectionTitle("ld.sec.this")
                             VStack(spacing: 0) { row(current) }
                                 .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(LD.currentFill))
-                                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.hex(0x35E6F2, 0.65), lineWidth: 1))
-                                .shadow(color: Theme.hex(0x35E6F2, 0.12), radius: 11)
+                                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.dyn(0x35E6F2, 0x00A8B5, 0.65, 0.55), lineWidth: 1))
+                                .shadow(color: Theme.dyn(0x35E6F2, 0x0B5E68, 0.12, 0.12), radius: 11)
                         }
                         if !others.isEmpty {
                             sectionTitle("ld.sec.others")
@@ -221,6 +221,7 @@ struct LinkedDevicesView: View {
         .animation(.easeOut(duration: 0.18), value: toast)
         .buttonStyle(.plain)
         .toolbar(.hidden, for: .navigationBar)
+        .modifier(StatusBarScrim()) // rows scrolled up pass under a frosted status bar, not through the clock
         .task { await load() }
         // live: the server says "sessions changed" (a sign-in, a sign-out, a rename on any device), or the socket came back
         .onReceive(live.sessionsChanged) { _ in Task { await load() } }
@@ -335,8 +336,8 @@ struct LinkedDevicesView: View {
 
     private var background: some View {
         ZStack(alignment: .top) {
-            Theme.hex(0x00131B)
-            RadialGradient(colors: [Theme.hex(0x128CA0, 0.22), Theme.hex(0x128CA0, 0)],
+            Theme.dyn(0x00131B, 0xF4FAFB)
+            RadialGradient(colors: [Theme.dyn(0x128CA0, 0x7FD9E0, 0.22, 0.25), Theme.dyn(0x128CA0, 0x7FD9E0, 0, 0)],
                            center: UnitPoint(x: 0.5, y: 0.3), startRadius: 0, endRadius: 250)
                 .frame(height: 420)
         }
@@ -366,8 +367,8 @@ struct LinkedDevicesView: View {
         Button(action: action) {
             Image(systemName: icon).font(.system(size: 18, weight: .semibold)).foregroundStyle(LD.ink)
                 .frame(width: 46, height: 46)
-                .background(Circle().fill(Theme.hex(0x041019, 0.7)))
-                .overlay(Circle().stroke(on ? Theme.hex(0x6EE8F4, 0.45) : Color.white.opacity(0.14), lineWidth: 1))
+                .background(Circle().fill(Theme.dyn(0x041019, 0xFFFFFF, 0.7, 1)))
+                .overlay(Circle().stroke(on ? Theme.dyn(0x6EE8F4, 0x00A8B5, 0.45, 0.6) : Theme.dyn(0xFFFFFF, 0xA6E3E7, 0.14, 1), lineWidth: 1))
                 .contentShape(Circle())
         }
         .accessibilityLabel(Text(LocalizedStringKey(label)))
@@ -379,8 +380,8 @@ struct LinkedDevicesView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.vertical, 12).padding(.horizontal, 14)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.hex(0x041E28, 0.85)))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.hex(0x6EE8F4, 0.3), lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.dyn(0x041E28, 0xFFFFFF, 0.85, 1)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.dyn(0x6EE8F4, 0xA6E3E7, 0.3, 1), lineWidth: 1))
             .transition(.opacity)
     }
 
@@ -392,11 +393,11 @@ struct LinkedDevicesView: View {
                 Image(systemName: "iphone").font(.system(size: 58, weight: .regular))
             }
             .foregroundStyle(LD.art)
-            .shadow(color: Theme.hex(0x28D2E6, 0.35), radius: 10)
+            .shadow(color: Theme.dyn(0x28D2E6, 0x0B5E68, 0.35, 0.15), radius: 10)
             .frame(height: 96)
             .environment(\.layoutDirection, .leftToRight)
             .accessibilityHidden(true)
-            Text("ld.title").font(.system(size: 32, weight: .heavy)).tracking(-0.6).foregroundStyle(Color.white)
+            Text("ld.title").font(.system(size: 32, weight: .heavy)).tracking(-0.6).foregroundStyle(Theme.dyn(0xFFFFFF, 0x0F2533))
                 .multilineTextAlignment(.center).padding(.top, 6)
                 .accessibilityAddTraits(.isHeader)
             Text("ld.subtitle").font(.system(size: 14.5)).foregroundStyle(LD.body)
@@ -419,22 +420,22 @@ struct LinkedDevicesView: View {
     private func chip(_ icon: String, _ key: String) -> some View {
         HStack(spacing: 5) {
             Image(systemName: icon).font(.system(size: 13, weight: .medium)).foregroundStyle(LD.cyan)
-            Text(LocalizedStringKey(key)).font(.system(size: 12)).foregroundStyle(Theme.hex(0xE6F3F7))
+            Text(LocalizedStringKey(key)).font(.system(size: 12)).foregroundStyle(Theme.dyn(0xE6F3F7, 0x264452))
                 .lineLimit(1).minimumScaleFactor(0.75)
         }
         .padding(.horizontal, 9)
         .frame(height: 32)
-        .background(Capsule().fill(Theme.hex(0x041821, 0.7)))
-        .overlay(Capsule().stroke(Theme.hex(0x6EE8F4, 0.22), lineWidth: 1))
+        .background(Capsule().fill(Theme.dyn(0x041821, 0xFFFFFF, 0.7, 1)))
+        .overlay(Capsule().stroke(Theme.dyn(0x6EE8F4, 0xA6E3E7, 0.22, 1), lineWidth: 1))
     }
 
     private func errorBanner(_ text: String) -> some View {
-        Text(text).font(.system(size: 14)).foregroundStyle(Theme.hex(0xFFC9C9))
+        Text(text).font(.system(size: 14)).foregroundStyle(Theme.dyn(0xFFC9C9, 0xB3333F))
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.vertical, 10).padding(.horizontal, 14)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.hex(0xFF5A5A, 0.1)))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hex(0xFF7878, 0.3), lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.dyn(0xFF5A5A, 0xFF5A5A, 0.1, 0.08)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.dyn(0xFF7878, 0xE0606C, 0.3, 0.4), lineWidth: 1))
             .accessibilityAddTraits(.isStaticText)
     }
 
@@ -455,9 +456,9 @@ struct LinkedDevicesView: View {
     private func iconCircle(_ symbol: String, size: CGFloat) -> some View {
         Image(systemName: symbol).font(.system(size: size * 0.42, weight: .regular)).foregroundStyle(LD.cyanSoft)
             .frame(width: size, height: size)
-            .background(Circle().fill(RadialGradient(colors: [Theme.hex(0x28C8DC, 0.22), Theme.hex(0x031E28, 0.9)],
+            .background(Circle().fill(RadialGradient(colors: [Theme.dyn(0x28C8DC, 0xC4EEF1, 0.22, 1), Theme.dyn(0x031E28, 0xEFFBFC, 0.9, 1)],
                                                      center: UnitPoint(x: 0.35, y: 0.3), startRadius: 0, endRadius: size * 0.75)))
-            .overlay(Circle().stroke(Theme.hex(0x51C8DC, 0.3), lineWidth: 1))
+            .overlay(Circle().stroke(Theme.dyn(0x51C8DC, 0xA6E3E7, 0.3, 1), lineWidth: 1))
             .accessibilityHidden(true)
     }
 
@@ -466,7 +467,7 @@ struct LinkedDevicesView: View {
             iconCircle("laptopcomputer", size: 46)
             VStack(alignment: .leading, spacing: 2) {
                 Text(count == 1 ? ldT("ld.summary.one") : String(format: ldT("ld.summary.n"), count))
-                    .font(.system(size: 16, weight: .bold)).foregroundStyle(Color.white)
+                    .font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.dyn(0xFFFFFF, 0x0F2533))
                     .fixedSize(horizontal: false, vertical: true)
                 Text("ld.summary.sub").font(.system(size: 13.5)).foregroundStyle(LD.sub)
                     .fixedSize(horizontal: false, vertical: true)
@@ -492,13 +493,13 @@ struct LinkedDevicesView: View {
         return HStack(spacing: 12) {
             iconCircle(LinkedDeviceText.icon(d), size: 46)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 16, weight: .bold)).foregroundStyle(Color.white).lineLimit(1)
+                Text(title).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.dyn(0xFFFFFF, 0x0F2533)).lineLimit(1)
                 Text(LinkedDeviceText.sub(d)).font(.system(size: 13.5)).foregroundStyle(LD.sub).lineLimit(1)
                 HStack(spacing: 8) {
-                    Circle().fill(a.tone == .past ? Theme.hex(0x6B8691) : LD.green).frame(width: 9, height: 9)
+                    Circle().fill(a.tone == .past ? Theme.dyn(0x6B8691, 0x9AB0BA) : LD.green).frame(width: 9, height: 9)
                         .shadow(color: a.tone == .past ? .clear : LD.green.opacity(0.55), radius: 3)
                     Text(a.text).font(.system(size: 13.5))
-                        .foregroundStyle(a.tone == .past ? Theme.hex(0xB2C4CC) : Theme.hex(0xDBE9EE)).lineLimit(1)
+                        .foregroundStyle(a.tone == .past ? Theme.dyn(0xB2C4CC, 0x5F7686) : Theme.dyn(0xDBE9EE, 0x264452)).lineLimit(1)
                 }
                 .padding(.top, 2)
             }
@@ -507,8 +508,8 @@ struct LinkedDevicesView: View {
             if isCurrent {
                 Text("ld.badge.this").font(.system(size: 12.5, weight: .bold)).foregroundStyle(LD.cyanSoft).lineLimit(1)
                     .padding(.vertical, 4).padding(.horizontal, 10)
-                    .background(Capsule().fill(Theme.hex(0x35E6F2, 0.1)))
-                    .overlay(Capsule().stroke(Theme.hex(0x35E6F2, 0.55), lineWidth: 1))
+                    .background(Capsule().fill(Theme.dyn(0x35E6F2, 0x0097A5, 0.1, 0.1)))
+                    .overlay(Capsule().stroke(Theme.dyn(0x35E6F2, 0x0097A5, 0.55, 0.45), lineWidth: 1))
                     .fixedSize()
             }
             moreButton(d, title: title, small: isCurrent)
@@ -525,10 +526,10 @@ struct LinkedDevicesView: View {
             withAnimation(.easeOut(duration: 0.12)) { menu = open ? nil : d.id }
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 16, weight: .bold)).rotationEffect(.degrees(90))
-                .foregroundStyle(Theme.hex(0xE6F3F7))
+                .foregroundStyle(Theme.dyn(0xE6F3F7, 0x264452))
                 .frame(width: s, height: s)
-                .background(Circle().fill(Theme.hex(0x03121A, 0.6)))
-                .overlay(Circle().stroke(open ? Theme.hex(0x6EE8F4, 0.55) : Color.white.opacity(0.16), lineWidth: 1))
+                .background(Circle().fill(Theme.dyn(0x03121A, 0xFFFFFF, 0.6, 1)))
+                .overlay(Circle().stroke(open ? Theme.dyn(0x6EE8F4, 0x00A8B5, 0.55, 0.6) : Theme.dyn(0xFFFFFF, 0xA6E3E7, 0.16, 1), lineWidth: 1))
                 .contentShape(Circle())
         }
         .accessibilityLabel(Text(String(format: ldT("ld.options"), title)))
@@ -542,8 +543,8 @@ struct LinkedDevicesView: View {
             }
             .foregroundStyle(LD.red)
             .frame(maxWidth: .infinity, minHeight: 56)
-            .background(Capsule().fill(Theme.hex(0x3C0A12, 0.2)))
-            .overlay(Capsule().stroke(Theme.hex(0xFF6B78, 0.55), lineWidth: 1.5))
+            .background(Capsule().fill(Theme.dyn(0x3C0A12, 0xFFEEF0, 0.2, 1)))
+            .overlay(Capsule().stroke(Theme.dyn(0xFF6B78, 0xD8404A, 0.55, 0.5), lineWidth: 1.5))
             .contentShape(Capsule())
         }
     }
@@ -552,10 +553,10 @@ struct LinkedDevicesView: View {
         NavigationLink { PrivacyPage() } label: {
             HStack(spacing: 14) {
                 Image(systemName: "checkmark.shield").font(.system(size: 28, weight: .regular)).foregroundStyle(LD.cyan)
-                    .shadow(color: Theme.hex(0x35E6F2, 0.45), radius: 6)
+                    .shadow(color: Theme.dyn(0x35E6F2, 0x0097A5, 0.45, 0.2), radius: 6)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("ld.security.title").font(.system(size: 16, weight: .bold)).foregroundStyle(Color.white)
+                    Text("ld.security.title").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.dyn(0xFFFFFF, 0x0F2533))
                     Text("ld.security.sub").font(.system(size: 13.5)).foregroundStyle(LD.sub)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -599,25 +600,25 @@ struct LinkedDevicesView: View {
             HStack(spacing: 12) {
                 iconCircle(LinkedDeviceText.icon(d), size: 40)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(LinkedDeviceText.title(d)).font(.system(size: 15.5, weight: .bold)).foregroundStyle(Color.white).lineLimit(1)
+                    Text(LinkedDeviceText.title(d)).font(.system(size: 15.5, weight: .bold)).foregroundStyle(Theme.dyn(0xFFFFFF, 0x0F2533)).lineLimit(1)
                     Text(LinkedDeviceText.type(d)).font(.system(size: 13)).foregroundStyle(LD.sub).lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 4).padding(.top, 8).padding(.bottom, 10)
-            Rectangle().fill(Theme.hex(0x51C8DC, 0.16)).frame(height: 1)
+            Rectangle().fill(Theme.dyn(0x51C8DC, 0xC4EEF1, 0.16, 1)).frame(height: 1)
             menuItem("info.circle", "ld.menu.details") { open(.details(d)) }
-            Rectangle().fill(Theme.hex(0x51C8DC, 0.1)).frame(height: 1)
+            Rectangle().fill(Theme.dyn(0x51C8DC, 0xC4EEF1, 0.1, 1)).frame(height: 1)
             menuItem("pencil", "ld.menu.rename") { open(.rename(d)) }
             if d.current != true {
-                Rectangle().fill(Theme.hex(0x51C8DC, 0.1)).frame(height: 1)
+                Rectangle().fill(Theme.dyn(0x51C8DC, 0xC4EEF1, 0.1, 1)).frame(height: 1)
                 menuItem("rectangle.portrait.and.arrow.right", "ld.menu.signout", danger: true) { open(.out(d)) }
             }
         }
         .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 8)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.hex(0x051E28, 0.98)))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.hex(0x6EE8F4, 0.3), lineWidth: 1))
-        .shadow(color: Color.black.opacity(0.55), radius: 25, y: 20)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.dyn(0x051E28, 0xFFFFFF, 0.98, 1)))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.dyn(0x6EE8F4, 0xA6E3E7, 0.3, 1), lineWidth: 1))
+        .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.55, 0.18), radius: 25, y: 20)
     }
 
     private func menuItem(_ icon: String, _ key: String, danger: Bool = false, _ action: @escaping () -> Void) -> some View {
@@ -638,7 +639,7 @@ struct LinkedDevicesView: View {
     @ViewBuilder private var dialogLayer: some View {
         if let dlg = dialog {
             ZStack {
-                Theme.hex(0x01080E, 0.66).ignoresSafeArea()
+                Theme.dyn(0x01080E, 0x0F2533, 0.66, 0.28).ignoresSafeArea()
                     .onTapGesture { if !busy { close() } }
                 dialogCard(dlg).padding(20)
             }
@@ -667,29 +668,29 @@ struct LinkedDevicesView: View {
         .padding(.top, 26).padding(.horizontal, 22).padding(.bottom, 20)
         .frame(maxWidth: 400)
         .background(RoundedRectangle(cornerRadius: 26, style: .continuous)
-            .fill(LinearGradient(colors: [Theme.hex(0x0A2C39), Theme.hex(0x051A24)], startPoint: .top, endPoint: .bottom)))
-        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Theme.hex(0x6EE8F4, 0.3), lineWidth: 1))
+            .fill(LinearGradient(colors: [Theme.dyn(0x0A2C39, 0xFFFFFF), Theme.dyn(0x051A24, 0xF4FBFC)], startPoint: .top, endPoint: .bottom)))
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Theme.dyn(0x6EE8F4, 0xA6E3E7, 0.3, 1), lineWidth: 1))
         .overlay(alignment: .topTrailing) {
             Button { if !busy { close() } } label: {
-                Image(systemName: "xmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.hex(0xDBE9EE))
-                    .frame(width: 36, height: 36).background(Circle().fill(Color.white.opacity(0.06))).contentShape(Circle())
+                Image(systemName: "xmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.dyn(0xDBE9EE, 0x264452))
+                    .frame(width: 36, height: 36).background(Circle().fill(Theme.dyn(0xFFFFFF, 0x0097A5, 0.06, 0.08))).contentShape(Circle())
             }
             .accessibilityLabel(Text("ld.close"))
             .padding(12)
         }
-        .shadow(color: Color.black.opacity(0.6), radius: 40, y: 30)
+        .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.6, 0.18), radius: 40, y: 30)
     }
 
     private func dialogIcon(_ symbol: String, danger: Bool = false) -> some View {
         Image(systemName: symbol).font(.system(size: 26, weight: .regular)).foregroundStyle(danger ? LD.red : LD.cyanSoft)
             .frame(width: 64, height: 64)
-            .background(Circle().fill(danger ? Theme.hex(0xFF6B78, 0.12) : Theme.hex(0x35E6F2, 0.1)))
-            .overlay(Circle().stroke(danger ? Theme.hex(0xFF6B78, 0.35) : Theme.hex(0x35E6F2, 0.35), lineWidth: 1))
+            .background(Circle().fill(danger ? Theme.dyn(0xFF6B78, 0xD8404A, 0.12, 0.1) : Theme.dyn(0x35E6F2, 0x0097A5, 0.1, 0.1)))
+            .overlay(Circle().stroke(danger ? Theme.dyn(0xFF6B78, 0xD8404A, 0.35, 0.35) : Theme.dyn(0x35E6F2, 0x0097A5, 0.35, 0.35), lineWidth: 1))
             .accessibilityHidden(true)
     }
 
     private func dialogTitle(_ text: String) -> some View {
-        Text(text).font(.system(size: 22, weight: .bold)).foregroundStyle(Color.white)
+        Text(text).font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.dyn(0xFFFFFF, 0x0F2533))
             .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             .accessibilityAddTraits(.isHeader)
     }
@@ -714,7 +715,7 @@ struct LinkedDevicesView: View {
                     case .primary:
                         Capsule().fill(LinearGradient(colors: [Theme.hex(0xA8FBFF), Theme.hex(0x22CFE0)], startPoint: .top, endPoint: .bottom))
                     case .plain:
-                        Capsule().stroke(Color.white.opacity(0.22), lineWidth: 1)
+                        Capsule().stroke(Theme.dyn(0xFFFFFF, 0xA6E3E7, 0.22, 1), lineWidth: 1)
                     }
                 }
                 .contentShape(Capsule())
@@ -750,7 +751,7 @@ struct LinkedDevicesView: View {
             dialogTitle(LinkedDeviceText.title(d))
             VStack(spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { i, r in
-                    if i > 0 { Rectangle().fill(Theme.hex(0x51C8DC, 0.12)).frame(height: 1) }
+                    if i > 0 { Rectangle().fill(Theme.dyn(0x51C8DC, 0xC4EEF1, 0.12, 1)).frame(height: 1) }
                     HStack(alignment: .firstTextBaseline, spacing: 16) {
                         Text(r.0).foregroundStyle(LD.empty)
                         Spacer(minLength: 8)
@@ -763,7 +764,7 @@ struct LinkedDevicesView: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.hex(0x51C8DC, 0.18), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.dyn(0x51C8DC, 0xA6E3E7, 0.18, 1), lineWidth: 1))
             .padding(.top, 4)
         }
     }
@@ -773,9 +774,9 @@ struct LinkedDevicesView: View {
         return VStack(spacing: 12) {
             dialogTitle(ldT("ld.rename.title"))
             dialogBody(String(format: ldT("ld.rename.hint"), LinkedDeviceText.name(d)))
-            TextField("", text: $renameText, prompt: Text(LinkedDeviceText.name(d)).foregroundColor(Theme.hex(0x8FA6B2)))
+            TextField("", text: $renameText, prompt: Text(LinkedDeviceText.name(d)).foregroundColor(Theme.dyn(0x8FA6B2, 0x7A939E)))
                 .font(.system(size: 16))
-                .foregroundStyle(Color.white)
+                .foregroundStyle(Theme.dyn(0xFFFFFF, 0x0F2533))
                 .tint(LD.cyan)
                 .focused($renameFocused)
                 .submitLabel(.done)
@@ -784,11 +785,11 @@ struct LinkedDevicesView: View {
                 .onChange(of: renameText) { v in if v.count > 40 { renameText = String(v.prefix(40)) } }
                 .padding(.horizontal, 16)
                 .frame(height: 52)
-                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.hex(0x021018, 0.8)))
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.dyn(0x021018, 0xF3FBFC, 0.8, 1)))
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(renameFocused ? Theme.hex(0x8FF6FB) : Theme.hex(0x6EE8F4, 0.4), lineWidth: 1.5))
+                    .stroke(renameFocused ? Theme.dyn(0x8FF6FB, 0x00A8B5) : Theme.dyn(0x6EE8F4, 0xA6E3E7, 0.4, 1), lineWidth: 1.5))
                 .accessibilityLabel(Text("ld.rename.field"))
-            Text(verbatim: "\(count)/40").font(.system(size: 12.5)).foregroundStyle(Theme.hex(0x8FA6B2))
+            Text(verbatim: "\(count)/40").font(.system(size: 12.5)).foregroundStyle(Theme.dyn(0x8FA6B2, 0x7A939E))
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.top, -6)
             if !renameError.isEmpty { errorBanner(renameError) }
@@ -806,21 +807,21 @@ struct LinkedDevicesView: View {
                     .frame(width: 36, height: 36).background(Circle().fill(Theme.hex(0x1FBF78)))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(t.title).font(.system(size: 16, weight: .bold)).foregroundStyle(Color.white)
+                    Text(t.title).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.dyn(0xFFFFFF, 0x0F2533))
                     Text(t.text).font(.system(size: 13.5)).foregroundStyle(LD.sub).fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityElement(children: .combine)
                 Button { toast = nil } label: {
-                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.hex(0xDBE9EE))
-                        .frame(width: 36, height: 36).background(Circle().fill(Color.white.opacity(0.06))).contentShape(Circle())
+                    Image(systemName: "xmark").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.dyn(0xDBE9EE, 0x264452))
+                        .frame(width: 36, height: 36).background(Circle().fill(Theme.dyn(0xFFFFFF, 0x0097A5, 0.06, 0.08))).contentShape(Circle())
                 }
                 .accessibilityLabel(Text("ld.dismiss"))
             }
             .padding(.vertical, 12).padding(.leading, 14).padding(.trailing, 12)
-            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.hex(0x052828, 0.97)))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.hex(0x22D68A, 0.45), lineWidth: 1))
-            .shadow(color: Color.black.opacity(0.45), radius: 20, y: 16)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.dyn(0x052828, 0xEFFBF5, 0.97, 1)))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.dyn(0x22D68A, 0x0FB57F, 0.45, 0.5), lineWidth: 1))
+            .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.45, 0.16), radius: 20, y: 16)
             .frame(maxWidth: 420)
             .padding(.horizontal, 16)
             .padding(.bottom, 16)

@@ -55,7 +55,7 @@ struct JoinRequestRow: View {
 
     var body: some View {
         let muted = Theme.dyn(0x7F9AA7, 0x5F7686)
-        let cyan = Theme.hex(0x2FF0F3)
+        let cyan = Theme.dyn(0x2FF0F3, 0x00B3C0)
         HStack(spacing: 11) {
             Avatar(token: token, userID: request.user_id, avatarID: nil, title: name, size: 36)
             VStack(alignment: .leading, spacing: 1) {
@@ -66,10 +66,10 @@ struct JoinRequestRow: View {
             }
             Spacer(minLength: 4)
             Button { decide(false) } label: {
-                Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.hex(0xFF8F8F))
+                Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.dyn(0xFF8F8F, 0xD8404A))
                     .frame(width: 34, height: 34)
                     .background(Theme.hex(0xFF5A5A, 0.1), in: Circle())
-                    .overlay(Circle().stroke(Theme.hex(0xFF7878, 0.25), lineWidth: 1))
+                    .overlay(Circle().stroke(Theme.dyn(0xFF7878, 0xD8404A, 0.25, 0.3), lineWidth: 1))
             }
             .buttonStyle(.plain)
             .accessibilityLabel(Text("grp.decline") + Text(" " + name))
@@ -77,7 +77,7 @@ struct JoinRequestRow: View {
                 Image(systemName: "checkmark").font(.system(size: 14, weight: .heavy)).foregroundStyle(Theme.hex(0x032229))
                     .frame(width: 34, height: 34)
                     .background(LinearGradient(colors: [cyan, Theme.hex(0x08A8B8)], startPoint: .topLeading, endPoint: .bottomTrailing), in: Circle())
-                    .shadow(color: Theme.hex(0x2FF0F3, 0.35), radius: 6)
+                    .shadow(color: Theme.dyn(0x2FF0F3, 0x0097A5, 0.35, 0.22), radius: 6)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(Text("grp.approve") + Text(" " + name))
@@ -86,11 +86,11 @@ struct JoinRequestRow: View {
         .background {
             if fresh {
                 ZStack {
-                    LinearGradient(stops: [.init(color: Theme.hex(0x2FF0F3, 0.14), location: 0),
-                                           .init(color: Theme.hex(0x2FF0F3, 0.03), location: 0.6),
+                    LinearGradient(stops: [.init(color: Theme.dyn(0x2FF0F3, 0x00A8B5, 0.14, 0.12), location: 0),
+                                           .init(color: Theme.dyn(0x2FF0F3, 0x00A8B5, 0.03, 0.03), location: 0.6),
                                            .init(color: .clear, location: 1)],
                                    startPoint: .leading, endPoint: .trailing)
-                    Theme.hex(0x2FF0F3, flash ? 0.22 : 0.03)
+                    Theme.dyn(0x2FF0F3, 0x00A8B5, flash ? 0.22 : 0.03, flash ? 0.16 : 0.03)
                 }
             }
         }

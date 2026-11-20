@@ -97,7 +97,7 @@ struct CIV3Switch: View {
             .fill(on ? Theme.hex(0x12B8C4) : Theme.dyn(0x1D3D4A, 0xC9D8DE))
             .frame(width: 46, height: 28)
             .overlay(alignment: on ? .trailing : .leading) {
-                Circle().fill(Theme.hex(0xEEF6F9)).frame(width: 22, height: 22).padding(3)
+                Circle().fill(Theme.dyn(0xEEF6F9, 0xFFFFFF)).frame(width: 22, height: 22).padding(3)
             }
             .animation(.easeOut(duration: 0.18), value: on)
             .accessibilityHidden(true)
@@ -120,7 +120,7 @@ struct CIV3Tile: View {
             .frame(maxWidth: 110)
             .frame(height: 78)
             .background(CIV3.tile, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.hex(0x35E6F2, 0.3), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.dyn(0x35E6F2, 0xA6E3E7, 0.3, 1), lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -212,7 +212,7 @@ struct CIV3MediaPage: View {
         }
         .padding(3)
         .background(CIV3.tile, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hex(0x35E6F2, 0.25), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.dyn(0x35E6F2, 0xA6E3E7, 0.25, 1), lineWidth: 1))
     }
 
     @ViewBuilder private var content: some View {
@@ -253,7 +253,7 @@ struct CIV3MediaPage: View {
                         .padding(6)
                 }
             }
-            .background(Theme.hex(0x08202A))
+            .background(Theme.dyn(0x08202A, 0xE8F3F6))
             .clipped()
             .contentShape(Rectangle())
             .onTapGesture {
@@ -450,7 +450,7 @@ struct CIV3StoragePage: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(CIV3.danger)
                     .frame(maxWidth: .infinity, minHeight: 50)
-                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.hex(0xFF6B78, 0.45), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Theme.dyn(0xFF6B78, 0xD8404A, 0.45, 0.45), lineWidth: 1))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -580,7 +580,7 @@ struct CIV3ListsPage: View {
                                     Text(verbatim: f.name).font(.system(size: 16.5, weight: .medium)).foregroundStyle(CIV3.rowText).lineLimit(1)
                                     Spacer(minLength: 8)
                                     ZStack {
-                                        Circle().stroke(inside ? CIV3.cyan : Theme.hex(0x5F8B99), lineWidth: 2)
+                                        Circle().stroke(inside ? CIV3.cyan : Theme.dyn(0x5F8B99, 0x9AB0BA), lineWidth: 2)
                                         if inside {
                                             Circle().fill(CIV3.cyan)
                                             Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.hex(0x032029))

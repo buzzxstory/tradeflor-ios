@@ -320,7 +320,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             content.body = flag("notifications.previews") ? describe(m) : NSLocalizedString("notify.new", comment: "")
         }
         if locked { content.title = "Tradeflor"; content.body = NSLocalizedString("notify.new", comment: "") }
-        if flag("notifications.sound") { content.sound = UNNotificationSound(named: MessageSound.notificationName) }
+        if flag("notifications.sound") { content.sound = MessageSound.notificationSound(group: group) }
         content.threadIdentifier = m.conversation_id
         content.categoryIdentifier = Self.messageCategory
         content.targetContentIdentifier = m.conversation_id
@@ -337,10 +337,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         // behind, with remote push working, the push (same id) brings the sound: this copy stays silent
         if active || PushManager.shared.alertState == .ok { content.sound = nil }
         try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: m.id, content: content, trigger: nil))
-        if active {
-            if soundWanted { MessageSound.preview() }
-            MessageSound.haptic()
-        }
+        if active { MessageSound.incomingAlert(group: group, sound: soundWanted) }
     }
 
     /// Someone asked to join a group I own or run (website: one notice per request).
@@ -355,7 +352,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         content.body = flag("notifications.previews")
             ? String(format: NSLocalizedString("join.asked", comment: ""), d["name"] ?? NSLocalizedString("notify.someone", comment: ""))
             : NSLocalizedString("notify.generic", comment: "")
-        if flag("notifications.sound") { content.sound = UNNotificationSound(named: MessageSound.notificationName) }
+        if flag("notifications.sound") { content.sound = MessageSound.notificationSound(group: true) }
         content.threadIdentifier = conv
         content.userInfo = ["conversation_id": conv]
         try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "joinreq|\(conv)|\(d["user_id"] ?? "")", content: content, trigger: nil))

@@ -72,10 +72,10 @@ struct CalendarView: View {
         static let mu = Theme.dyn(0x93AAB4, 0x50687F)
         static let mu2 = Theme.dyn(0x7A949F, 0x6A8096)
         static let cyan = Theme.dyn(0x35E6F2, 0x0097A5)
-        static let blue = Theme.hex(0x00C6C4)
-        static let hi = Theme.hex(0xFF3D72)
-        static let md = Theme.hex(0xFFB72E)
-        static let lo = Theme.hex(0x2BB6C9)
+        static let blue = Theme.dyn(0x00C6C4, 0x00939F)
+        static let hi = Theme.dyn(0xFF3D72, 0xD62E5C)
+        static let md = Theme.dyn(0xFFB72E, 0xC98A0B)
+        static let lo = Theme.dyn(0x2BB6C9, 0x1C93A5)
         static let up = Theme.dyn(0x22E3A0, 0x0C9A5F)
         static let dn = Theme.dyn(0xFF5A7E, 0xD8404A)
         static let box = Theme.dyn(0x05202B, 0xEEF3F8, 0.8, 1)
@@ -167,19 +167,20 @@ struct CalendarView: View {
                 ZStack {
                     Starfield()
                     // calendar.css body: radial-gradient(1100px 560px at 78% -8%, rgba(0,198,196,.16), transparent 60%)
-                    RadialGradient(colors: [Theme.hex(0x00C6C4, 0.16), .clear], center: UnitPoint(x: 0.78, y: -0.08),
+                    RadialGradient(colors: [Theme.dyn(0x00C6C4, 0x0097A5, 0.16, 0.16), .clear], center: UnitPoint(x: 0.78, y: -0.08),
                                    startRadius: 0, endRadius: 460)
                         .ignoresSafeArea()
                         .allowsHitTesting(false)
                 }
             )
             .toolbar(.hidden, for: .navigationBar)
+            .modifier(StatusBarScrim()) // rows scrolled up pass under a frosted status bar, not through the clock
             .overlay(alignment: .bottom) {
                 if let toast {
                     Text(toast).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(P.tx).padding(.horizontal, 18).padding(.vertical, 12)
                         .background(Theme.dyn(0x07223F, 0xFFFFFF), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.cyan, lineWidth: 1))
-                        .shadow(color: .black.opacity(0.5), radius: 20, y: 14)
+                        .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.5, 0.16), radius: 20, y: 14)
                         .padding(16)
                         .onTapGesture { self.toast = nil }
                         .task(id: toast) {
@@ -273,7 +274,7 @@ struct CalendarView: View {
             RoundedRectangle(cornerRadius: 4)
                 .fill(LinearGradient(colors: [P.cyan, P.blue], startPoint: .top, endPoint: .bottom))
                 .frame(width: 4)
-                .shadow(color: Theme.hex(0x35E6F2, 0.7), radius: 8)
+                .shadow(color: Theme.dyn(0x35E6F2, 0x0097A5, 0.7, 0.7), radius: 8)
                 .padding(.vertical, 6)
             VStack(alignment: .leading, spacing: 10) {
                 Text("calendar.heading").font(.system(size: 28, weight: .heavy)).kerning(-0.5).foregroundStyle(P.tx)
@@ -314,8 +315,8 @@ struct CalendarView: View {
             HStack(spacing: 10) {
                 Image(systemName: "calendar.badge.checkmark").font(.system(size: 19, weight: .medium)).foregroundStyle(P.cyan)
                     .frame(width: 42, height: 42)
-                    .background(Theme.hex(0x35E6F2, 0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.hex(0x35E6F2, 0.35), lineWidth: 1))
+                    .background(Theme.dyn(0x35E6F2, 0x0097A5, 0.08, 0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.dyn(0x35E6F2, 0x0097A5, 0.35, 0.35), lineWidth: 1))
                 VStack(alignment: .leading, spacing: 3) {
                     Text(isToday ? NSLocalizedString("calendar.today", comment: "") : dayString(day, "EEEE"))
                         .font(.system(size: 17, weight: .bold)).foregroundStyle(P.tx)
@@ -329,7 +330,7 @@ struct CalendarView: View {
     /// .st.next: cyan edge and glow; "Next Event", flag + name (15 bold), "15:30 · 1h 12m" (12.5 mono), a 50 pt ring
     /// that fills over the last four hours.
     private var nextCard: some View {
-        statBox(border: Theme.hex(0x35E6F2, 0.45), glow: Theme.hex(0x35E6F2, 0.18)) {
+        statBox(border: Theme.dyn(0x35E6F2, 0x0097A5, 0.45, 0.45), glow: Theme.dyn(0x35E6F2, 0x0097A5, 0.18, 0.18)) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("calendar.next").font(.system(size: 12, weight: .semibold)).foregroundStyle(P.mu)
@@ -572,12 +573,12 @@ struct CalendarView: View {
             .foregroundStyle(on ? P.tx : P.chipTx)
             .padding(.horizontal, 8)
             .frame(maxWidth: .infinity, minHeight: 34)
-            .background(on ? AnyShapeStyle(LinearGradient(colors: [Theme.hex(0x35E6F2, 0.16), Theme.hex(0x00C6C4, 0.08)],
+            .background(on ? AnyShapeStyle(LinearGradient(colors: [Theme.dyn(0x35E6F2, 0x0097A5, 0.16, 0.16), Theme.dyn(0x00C6C4, 0x0097A5, 0.08, 0.08)],
                                                           startPoint: .top, endPoint: .bottom))
                            : AnyShapeStyle(P.chipBg),
                         in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(on ? P.cyan : P.chipBd, lineWidth: 1))
-            .shadow(color: on ? Theme.hex(0x35E6F2, 0.3) : .clear, radius: 8)
+            .shadow(color: on ? Theme.dyn(0x35E6F2, 0x0097A5, 0.3, 0.3) : .clear, radius: 8)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(on ? .isSelected : [])
@@ -588,8 +589,8 @@ struct CalendarView: View {
             .font(.system(size: 13)).foregroundStyle(Theme.dyn(0xFFE2AD, 0x7A4D00)).lineSpacing(2)
             .padding(.horizontal, 14).padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.hex(0xFFB72E, 0.08), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(Theme.hex(0xFFB72E, 0.45), lineWidth: 1))
+            .background(Theme.dyn(0xFFB72E, 0xC98A0B, 0.08, 0.08), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(Theme.dyn(0xFFB72E, 0xC98A0B, 0.45, 0.45), lineWidth: 1))
     }
 
     @ViewBuilder private var eventsBlock: some View {
@@ -671,7 +672,7 @@ struct CalendarView: View {
                             .font(.system(size: 13.5, design: .monospaced))
                             .foregroundStyle(past ? P.mu2 : Theme.dyn(0xD6EEF2, 0x235D9B))
                             .padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(Theme.hex(0x00C6C4, 0.1), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .background(Theme.dyn(0x00C6C4, 0x0097A5, 0.1, 0.1), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                         HStack(spacing: 8) {
                             Text(Self.flag(e.country_code)).font(.system(size: 16))
                             Text(e.currency).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(P.tx)
@@ -696,12 +697,12 @@ struct CalendarView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .background(open ? Theme.hex(0x35E6F2, 0.06) : Color.clear)
+            .background(open ? Theme.dyn(0x35E6F2, 0x0097A5, 0.06, 0.06) : Color.clear)
             if open { details(e, past: past).padding(.horizontal, 12).padding(.bottom, 12) }
         }
         .background(P.well, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(open ? Theme.hex(0x35E6F2, 0.45) : P.bd, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(open ? Theme.dyn(0x35E6F2, 0x0097A5, 0.45, 0.45) : P.bd, lineWidth: 1))
     }
 
     /// The name (15.5 semibold) with LIVE (pink, pulsing dot) for 15 minutes after the time until a figure is out, or SOON
@@ -722,11 +723,11 @@ struct CalendarView: View {
                 }
                 .foregroundStyle(Theme.dyn(0xFF7C9D, 0xBE0030))
                 .padding(.horizontal, 7).frame(height: 19)
-                .background(Theme.hex(0xFF3D72, 0.14), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .background(Theme.dyn(0xFF3D72, 0xD62E5C, 0.14, 0.14), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             } else if soon {
                 Text("cal.soon").font(.system(size: 10.5, weight: .heavy)).kerning(0.4).foregroundStyle(P.cyan)
                     .padding(.horizontal, 7).frame(height: 19)
-                    .background(Theme.hex(0x35E6F2, 0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .background(Theme.dyn(0x35E6F2, 0x0097A5, 0.12, 0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
         }
     }
@@ -807,7 +808,7 @@ struct CalendarView: View {
         .foregroundStyle(on ? P.cyan : Theme.dyn(0xDBECEF, 0x285D95))
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, minHeight: 42)
-        .background(on ? Theme.hex(0x35E6F2, 0.1) : Theme.dyn(0x06203C, 0xEAF0F7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(on ? Theme.dyn(0x35E6F2, 0x0097A5, 0.1, 0.1) : Theme.dyn(0x06203C, 0xEAF0F7), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(on ? P.cyan : Theme.dyn(0x1A4673, 0xC6D6E7), lineWidth: 1))
     }
 
@@ -827,7 +828,7 @@ struct CalendarView: View {
     private func loadMore(total: Int) -> some View {
         let done = visible >= total
         return HStack(spacing: 12) {
-            LinearGradient(colors: [.clear, Theme.hex(0x35E6F2, 0.6)], startPoint: .leading, endPoint: .trailing).frame(height: 1)
+            LinearGradient(colors: [.clear, Theme.dyn(0x35E6F2, 0x0097A5, 0.6, 0.6)], startPoint: .leading, endPoint: .trailing).frame(height: 1)
             Button { visible += 10 } label: {
                 HStack(spacing: 10) {
                     Text(LocalizedStringKey(done ? "cal.allloaded" : "cal.loadmore")).font(.system(size: 14.5, weight: .bold))
@@ -835,15 +836,15 @@ struct CalendarView: View {
                 }
                 .foregroundStyle(P.tx)
                 .padding(.horizontal, 24).frame(height: 46)
-                .background(Theme.hex(0x35E6F2, 0.06), in: Capsule())
+                .background(Theme.dyn(0x35E6F2, 0x0097A5, 0.06, 0.06), in: Capsule())
                 .overlay(Capsule().stroke(done ? Theme.dyn(0x1B4A75, 0xC6D6E7) : P.cyan, lineWidth: 1))
-                .shadow(color: done ? .clear : Theme.hex(0x35E6F2, 0.35), radius: 10)
+                .shadow(color: done ? .clear : Theme.dyn(0x35E6F2, 0x0097A5, 0.35, 0.35), radius: 10)
             }
             .buttonStyle(.plain)
             .disabled(done)
             .opacity(done ? 0.55 : 1)
             .fixedSize()
-            LinearGradient(colors: [Theme.hex(0x35E6F2, 0.6), .clear], startPoint: .leading, endPoint: .trailing).frame(height: 1)
+            LinearGradient(colors: [Theme.dyn(0x35E6F2, 0x0097A5, 0.6, 0.6), .clear], startPoint: .leading, endPoint: .trailing).frame(height: 1)
         }
         .padding(.top, 14)
     }
@@ -870,7 +871,7 @@ struct CalendarView: View {
                 Image(systemName: icon).font(.system(size: 15, weight: .medium)).foregroundStyle(P.cyan)
                     .frame(width: 34, height: 34)
                     .overlay(Circle().stroke(P.cyan, lineWidth: 1.5))
-                    .shadow(color: Theme.hex(0x35E6F2, 0.35), radius: 7)
+                    .shadow(color: Theme.dyn(0x35E6F2, 0x0097A5, 0.35, 0.35), radius: 7)
                 title()
             }
             content()
@@ -1008,7 +1009,7 @@ struct CalendarView: View {
         }
         .padding(6)
         .frame(width: 150, height: 150)
-        .shadow(color: Theme.hex(0x00C6C4, 0.3), radius: 8)
+        .shadow(color: Theme.dyn(0x00C6C4, 0x0B5E68, 0.3, 0.14), radius: 8)
     }
 
     // MARK: helpers

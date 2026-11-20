@@ -54,8 +54,8 @@ enum ListLook {
         case "purple": return Theme.hex(0xA57BFF)
         case "orange": return Theme.hex(0xFF9F43)
         case "pink": return Theme.hex(0xFF5C8A)
-        case "gold": return Theme.hex(0xE8B84A)
-        default: return Theme.hex(0x08D9D9)
+        case "gold": return Theme.dyn(0xE8B84A, 0xB98700)
+        default: return Theme.dyn(0x08D9D9, 0x0097A5)
         }
     }
 }
@@ -116,8 +116,8 @@ struct ListDiscButton<Glyph: View>: View {
                                                        startPoint: UnitPoint(x: 0.33, y: 0), endPoint: UnitPoint(x: 0.67, y: 1)))
                         : AnyShapeStyle(Color.white),
                     in: Circle())
-                .overlay(Circle().stroke(scheme == .dark ? Theme.hex(0x40E2EC, 0.5) : Theme.borderStrong, lineWidth: 1))
-                .shadow(color: .black.opacity(scheme == .dark ? 0.28 : 0.08), radius: 5, y: 3)
+                .overlay(Circle().stroke(scheme == .dark ? Theme.hex(0x40E2EC, 0.5) : Theme.hex(0xA6E3E7), lineWidth: 1))
+                .shadow(color: scheme == .dark ? Color.black.opacity(0.28) : Theme.hex(0x0B5E68, 0.12), radius: 5, y: 3)
                 .contentShape(Circle())
         }
         .buttonStyle(ListPressStyle())
@@ -139,8 +139,8 @@ struct ListDiscFace<Glyph: View>: View {
                                                    startPoint: UnitPoint(x: 0.33, y: 0), endPoint: UnitPoint(x: 0.67, y: 1)))
                     : AnyShapeStyle(Color.white),
                 in: Circle())
-            .overlay(Circle().stroke(scheme == .dark ? Theme.hex(0x40E2EC, 0.5) : Theme.borderStrong, lineWidth: 1))
-            .shadow(color: .black.opacity(scheme == .dark ? 0.28 : 0.08), radius: 5, y: 3)
+            .overlay(Circle().stroke(scheme == .dark ? Theme.hex(0x40E2EC, 0.5) : Theme.hex(0xA6E3E7), lineWidth: 1))
+            .shadow(color: scheme == .dark ? Color.black.opacity(0.28) : Theme.hex(0x0B5E68, 0.12), radius: 5, y: 3)
             .contentShape(Circle())
     }
 }
@@ -154,7 +154,7 @@ struct ListSquareFace<Glyph: View>: View {
             .frame(width: 43, height: 43)
             .background(ListLook.squareFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(ListLook.squareBorder, lineWidth: 1))
-            .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+            .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.25, 0.12), radius: 4, y: 2)
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

@@ -144,11 +144,11 @@ struct SmartFocusSheet: View {
                         toggleRow("focus.important", $f.use_important)
                     }
                     if f.on && !f.hasFilters {
-                        Text("focus.none").font(.system(size: 12.5)).foregroundStyle(Theme.hex(0xFF8A8A))
+                        Text("focus.none").font(.system(size: 12.5)).foregroundStyle(Theme.dyn(0xFF8A8A, 0xC43848))
                     }
                     if f.use_important { importantMembers }
                     if let error {
-                        Text(error).font(.system(size: 12.5)).foregroundStyle(Theme.hex(0xFF8A8A))
+                        Text(error).font(.system(size: 12.5)).foregroundStyle(Theme.dyn(0xFF8A8A, 0xC43848))
                     }
                 }
                 .padding(16)
@@ -156,7 +156,6 @@ struct SmartFocusSheet: View {
             footer
         }
         .background(SFLook.dialog.ignoresSafeArea())
-        .environment(\.colorScheme, .dark)
         .tfColorScheme()
     }
 
@@ -167,25 +166,25 @@ struct SmartFocusSheet: View {
             Text("focus.title").font(.system(size: 18, weight: .bold)).tracking(0.18).foregroundStyle(SFLook.text)
             Spacer()
             Button { dismiss() } label: {
-                Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.hex(0xEEF4F7))
+                Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.dyn(0xEEF4F7, 0x0F2533))
                     .frame(width: 34, height: 34)
-                    .background(Theme.hex(0x01141B, 0.7), in: Circle())
-                    .overlay(Circle().stroke(Theme.hex(0x50AAC8, 0.35), lineWidth: 1))
+                    .background(Theme.dyn(0x01141B, 0xFFFFFF, 0.7, 1), in: Circle())
+                    .overlay(Circle().stroke(Theme.dyn(0x50AAC8, 0xA6E3E7, 0.35, 1), lineWidth: 1))
             }
             .buttonStyle(.plain)
             .accessibilityLabel(Text("grp.cancel"))
         }
         .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 12)
-        .overlay(alignment: .bottom) { Rectangle().fill(Theme.hex(0x288CAA, 0.22)).frame(height: 1) }
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.dyn(0x288CAA, 0xC4EEF1, 0.22, 1)).frame(height: 1) }
     }
 
     private var footer: some View {
         HStack(spacing: 10) {
             Button { dismiss() } label: {
-                Text("grp.cancel").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.hex(0xEEF5F8))
+                Text("grp.cancel").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.dyn(0xEEF5F8, 0x0F2533))
                     .frame(maxWidth: .infinity).frame(height: 46)
-                    .background(Theme.hex(0x021A23), in: Capsule())
-                    .overlay(Capsule().strokeBorder(Theme.hex(0x3C96B4, 0.5), lineWidth: 1.5))
+                    .background(Theme.dyn(0x021A23, 0xFFFFFF), in: Capsule())
+                    .overlay(Capsule().strokeBorder(Theme.dyn(0x3C96B4, 0xA6E3E7, 0.5, 1), lineWidth: 1.5))
             }
             .buttonStyle(.plain)
             Button { Task { await save() } } label: {
@@ -194,17 +193,17 @@ struct SmartFocusSheet: View {
                 }
                 .foregroundStyle(Theme.hex(0x052332))
                 .frame(maxWidth: .infinity).frame(height: 46)
-                .background(LinearGradient(stops: [.init(color: Theme.hex(0x5AF6FC), location: 0), .init(color: Theme.hex(0x20E4EE), location: 0.45),
-                                                   .init(color: Theme.hex(0x03D2DC), location: 1)], startPoint: .top, endPoint: .bottom), in: Capsule())
-                .overlay(Capsule().strokeBorder(Theme.hex(0x78FAFF, 0.7), lineWidth: 1.5))
-                .shadow(color: Theme.hex(0x12E0F0, 0.4), radius: 9)
+                .background(LinearGradient(stops: [.init(color: Theme.dyn(0x5AF6FC, 0x3FD8E2), location: 0), .init(color: Theme.dyn(0x20E4EE, 0x14C6D2), location: 0.45),
+                                                   .init(color: Theme.dyn(0x03D2DC, 0x00ADBA), location: 1)], startPoint: .top, endPoint: .bottom), in: Capsule())
+                .overlay(Capsule().strokeBorder(Theme.dyn(0x78FAFF, 0x00A8B5, 0.7, 0.5), lineWidth: 1.5))
+                .shadow(color: Theme.dyn(0x12E0F0, 0x0B5E68, 0.4, 0.16), radius: 9)
             }
             .buttonStyle(.plain)
             .disabled(saving || f == initial.focus)
             .opacity(saving || f == initial.focus ? 0.55 : 1)
         }
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 12)
-        .overlay(alignment: .top) { Rectangle().fill(Theme.hex(0x288CAA, 0.22)).frame(height: 1) }
+        .overlay(alignment: .top) { Rectangle().fill(Theme.dyn(0x288CAA, 0xC4EEF1, 0.22, 1)).frame(height: 1) }
     }
 
     @ViewBuilder private var importantMembers: some View {
@@ -217,9 +216,9 @@ struct SmartFocusSheet: View {
                 .focused($searching)
         }
         .padding(.horizontal, 12).frame(height: 42)
-        .background(Theme.hex(0x01141B, 0.6), in: RoundedRectangle(cornerRadius: 11))
-        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(searching ? Theme.hex(0x12E0F0, 0.8) : Theme.hex(0x287896, 0.55), lineWidth: 1.5))
-        .shadow(color: searching ? Theme.hex(0x12E0F0, 0.14) : .clear, radius: 3)
+        .background(Theme.dyn(0x01141B, 0xFFFFFF, 0.6, 1), in: RoundedRectangle(cornerRadius: 11))
+        .overlay(RoundedRectangle(cornerRadius: 11).strokeBorder(searching ? Theme.dyn(0x12E0F0, 0x0097A5, 0.8, 0.8) : Theme.dyn(0x287896, 0xA6E3E7, 0.55, 1), lineWidth: 1.5))
+        .shadow(color: searching ? Theme.dyn(0x12E0F0, 0x0097A5, 0.14, 0.12) : .clear, radius: 3)
         // chosen
         VStack(alignment: .leading, spacing: 8) {
             sectionLabel(Text(String(format: NSLocalizedString("focus.important.n", comment: ""), f.important.count)))
@@ -239,8 +238,8 @@ struct SmartFocusSheet: View {
             }
         }
         .padding(.vertical, 4)
-        .background(Theme.hex(0x041D26), in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.hex(0x78BED2, 0.12), lineWidth: 1))
+        .background(Theme.dyn(0x041D26, 0xFFFFFF), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.dyn(0x78BED2, 0xC4EEF1, 0.12, 1), lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
@@ -255,9 +254,9 @@ struct SmartFocusSheet: View {
                         Text("@\(m.username)").font(.system(size: 12)).foregroundStyle(SFLook.muted).lineLimit(1)
                         if let r = roles[m.user_id] {
                             Text(LocalizedStringKey("group.role." + r)).font(.system(size: 10, weight: .heavy))
-                                .foregroundStyle(r == "owner" ? Theme.hex(0xE8B931) : Theme.hex(0x2FF0F3))
+                                .foregroundStyle(r == "owner" ? Theme.dyn(0xE8B931, 0xB98700) : Theme.dyn(0x2FF0F3, 0x0097A5))
                                 .padding(.horizontal, 6).padding(.vertical, 1)
-                                .overlay(Capsule().stroke((r == "owner" ? Theme.hex(0xE8B931) : Theme.hex(0x2FF0F3)).opacity(0.5), lineWidth: 1))
+                                .overlay(Capsule().stroke((r == "owner" ? Theme.dyn(0xE8B931, 0xB98700) : Theme.dyn(0x2FF0F3, 0x0097A5)).opacity(0.5), lineWidth: 1))
                         }
                     }
                 }
@@ -266,7 +265,7 @@ struct SmartFocusSheet: View {
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(on ? AnyShapeStyle(LinearGradient(stops: [.init(color: Theme.hex(0x2FF0F3, 0.12), location: 0), .init(color: Theme.hex(0x2FF0F3, 0.02), location: 0.7)],
+            .background(on ? AnyShapeStyle(LinearGradient(stops: [.init(color: Theme.dyn(0x2FF0F3, 0x00A8B5, 0.12, 0.12), location: 0), .init(color: Theme.dyn(0x2FF0F3, 0x00A8B5, 0.02, 0.02), location: 0.7)],
                                                           startPoint: .leading, endPoint: .trailing)) : AnyShapeStyle(Color.clear))
             .contentShape(Rectangle())
         }
@@ -281,12 +280,12 @@ struct SmartFocusSheet: View {
                 RoundedRectangle(cornerRadius: 7).fill(SFLook.cyanGradient)
                 Image(systemName: "checkmark").font(.system(size: 11, weight: .heavy)).foregroundStyle(Theme.hex(0x032229))
             } else {
-                RoundedRectangle(cornerRadius: 7).fill(Theme.hex(0x01141B, 0.7))
-                RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.hex(0x50AAC8, 0.55), lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: 7).fill(Theme.dyn(0x01141B, 0xFFFFFF, 0.7, 1))
+                RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.dyn(0x50AAC8, 0x8FD3DA, 0.55, 1), lineWidth: 1.5)
             }
         }
         .frame(width: 22, height: 22)
-        .shadow(color: on ? Theme.hex(0x2FF0F3, 0.4) : .clear, radius: 5)
+        .shadow(color: on ? Theme.dyn(0x2FF0F3, 0x0097A5, 0.4, 0.25) : .clear, radius: 5)
     }
 
     private func chip(_ uid: String) -> some View {
@@ -311,15 +310,15 @@ struct SmartFocusSheet: View {
     private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         VStack(spacing: 0) { content() }
             .padding(.vertical, 4)
-            .background(Theme.hex(0x041D26), in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.hex(0x78BED2, 0.12), lineWidth: 1))
+            .background(Theme.dyn(0x041D26, 0xFFFFFF), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Theme.dyn(0x78BED2, 0xC4EEF1, 0.12, 1), lineWidth: 1))
     }
 
     private func sectionLabel(_ t: Text) -> some View {
         t.font(.system(size: 11, weight: .bold)).tracking(0.88).textCase(.uppercase).foregroundStyle(SFLook.label)
     }
 
-    private var hairline: some View { Rectangle().fill(Theme.hex(0x78BED2, 0.06)).frame(height: 1) }
+    private var hairline: some View { Rectangle().fill(Theme.dyn(0x78BED2, 0xDDEFF2, 0.06, 1)).frame(height: 1) }
 
     private func toggle(_ uid: String) {
         if let i = f.important.firstIndex(of: uid) { f.important.remove(at: i) } else { f.important.append(uid) }
@@ -340,18 +339,18 @@ struct SmartFocusSheet: View {
 
 /// Smart Focus colours (styles/38-smart-focus.css, .fx-members): the one colour soul, cyan ticks and chips.
 private enum SFLook {
-    static let text = Theme.hex(0xF4F8FB)
-    static let muted = Theme.hex(0x7F9AA7)
-    static let label = Theme.hex(0x6F93A3)
-    static let cyan = Theme.hex(0x2FF0F3)
+    static let text = Theme.dyn(0xF4F8FB, 0x0F2533)
+    static let muted = Theme.dyn(0x7F9AA7, 0x4E6873)
+    static let label = Theme.dyn(0x6F93A3, 0x5F7686)
+    static let cyan = Theme.dyn(0x2FF0F3, 0x00A8B5)
     static let cyanGradient = LinearGradient(colors: [Theme.hex(0x2FF0F3), Theme.hex(0x08A8B8)], startPoint: .topLeading, endPoint: .bottomTrailing)
 
     /// radial rgba(6,70,90,.35) at the top-left over #03202b -> #021821 (55%) -> #01141B
     static var dialog: some View {
         ZStack {
-            LinearGradient(stops: [.init(color: Theme.hex(0x03202B), location: 0), .init(color: Theme.hex(0x021821), location: 0.55),
-                                   .init(color: Theme.hex(0x01141B), location: 1)], startPoint: .top, endPoint: .bottom)
-            RadialGradient(colors: [Theme.hex(0x06465A, 0.35), .clear], center: .topLeading, startRadius: 0, endRadius: 340)
+            LinearGradient(stops: [.init(color: Theme.dyn(0x03202B, 0xF6F9FC), location: 0), .init(color: Theme.dyn(0x021821, 0xF1F6F9), location: 0.55),
+                                   .init(color: Theme.dyn(0x01141B, 0xEEF4F8), location: 1)], startPoint: .top, endPoint: .bottom)
+            RadialGradient(colors: [Theme.dyn(0x06465A, 0xDFF2F5, 0.35, 0.6), .clear], center: .topLeading, startRadius: 0, endRadius: 340)
         }
     }
 }

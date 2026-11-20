@@ -83,7 +83,7 @@ struct CreateGroupView: View {
                             }
                         }
                         .frame(width: 68, height: 68).clipShape(Circle())
-                        .overlay(Circle().stroke(Theme.hex(0x12E0F0, 0.55), lineWidth: 2))
+                        .overlay(Circle().stroke(Theme.dyn(0x12E0F0, 0x00A8B5, 0.55, 0.55), lineWidth: 2))
                         PhotosPicker(selection: $logoItem, matching: .images) {
                             HStack(spacing: 8) {
                                 Image(systemName: "camera").font(.system(size: 15))
@@ -91,7 +91,7 @@ struct CreateGroupView: View {
                             }
                             .font(.system(size: 13.5, weight: .semibold)).foregroundStyle(Theme.accent).lineLimit(1)
                             .padding(.horizontal, 14).frame(height: 36)
-                            .background(Theme.hex(0x00CAD1, 0.06), in: Capsule())
+                            .background(Theme.dyn(0x00CAD1, 0x0097A5, 0.06, 0.07), in: Capsule())
                             .overlay(Capsule().stroke(Theme.borderActive, lineWidth: 1))
                         }
                     }
@@ -256,7 +256,7 @@ struct CreateGroupView: View {
                 Image(systemName: selected ? "largecircle.fill.circle" : "circle").foregroundStyle(selected ? Theme.accent : Theme.faint)
             }
             .padding(.horizontal, 14).frame(minHeight: 42)
-            .background(selected ? Theme.hex(0x00CAD1, 0.08) : Self.fieldFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .background(selected ? Theme.dyn(0x00CAD1, 0x0097A5, 0.08, 0.08) : Self.fieldFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).stroke(selected ? Self.fieldFocus : Self.fieldLine, lineWidth: 1.5))
         }
         .buttonStyle(.plain)
@@ -630,7 +630,7 @@ struct GroupInfoView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(danger ? Theme.danger.opacity(0.04) : Theme.soulCard, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(danger ? Theme.hex(0xFF6E6E, 0.22) : Theme.soulCardBorder, lineWidth: 1))
+                    .stroke(danger ? Theme.dyn(0xFF6E6E, 0xD8404A, 0.22, 0.3) : Theme.soulCardBorder, lineWidth: 1))
         }
     }
 
@@ -648,7 +648,7 @@ struct GroupInfoView: View {
             var line = Path()
             let ys: [CGFloat] = [110, 100, 114, 92, 100, 74, 84, 54, 60, 26, 18]
             for (i, y) in ys.enumerated() { let p = pt(10 + CGFloat(i) * 30, y); if i == 0 { line.move(to: p) } else { line.addLine(to: p) } }
-            ctx.stroke(line, with: .color(Theme.hex(0x22C7DA, 0.35)), lineWidth: 1.2)
+            ctx.stroke(line, with: .color(Theme.dyn(0x22C7DA, 0x0097A5, 0.35, 0.35)), lineWidth: 1.2)
             let bars: [(CGFloat, CGFloat, CGFloat, UInt32)] = [(40, 96, 22, 0x14C27A), (100, 84, 26, 0xF0525B), (160, 70, 30, 0x14C27A),
                                                                 (220, 52, 28, 0x14C27A), (280, 36, 24, 0xF0525B), (320, 18, 30, 0xF0525B)]
             for b in bars {
@@ -657,7 +657,7 @@ struct GroupInfoView: View {
             }
         }
         .frame(height: 130)
-        .background(LinearGradient(colors: [Theme.hex(0x062A33), Theme.hex(0x01141B)], startPoint: .top, endPoint: .bottom))
+        .background(LinearGradient(colors: [Theme.dyn(0x062A33, 0xDDF7F8), Theme.dyn(0x01141B, 0xF6F9FC)], startPoint: .top, endPoint: .bottom))
         .allowsHitTesting(false)
     }
 
@@ -682,13 +682,13 @@ struct GroupInfoView: View {
             if admin {
                 HStack(spacing: 8) {
                     if let a = g.avatar_id, !a.isEmpty {
-                        pill("grp.picture.view", Theme.hex(0x5FE6EE), Theme.hex(0x00CAD1)) { viewingPicture = a }
+                        pill("grp.picture.view", Theme.dyn(0x5FE6EE, 0x00838E), Theme.dyn(0x00CAD1, 0x0097A5)) { viewingPicture = a }
                     }
                     PhotosPicker(selection: $avatarItem, matching: .images) {
-                        pillLabel("grp.picture.change", Theme.hex(0x5FE6EE), Theme.hex(0x00CAD1))
+                        pillLabel("grp.picture.change", Theme.dyn(0x5FE6EE, 0x00838E), Theme.dyn(0x00CAD1, 0x0097A5))
                     }
                     if !(g.avatar_id ?? "").isEmpty {
-                        pill("grp.picture.remove", Theme.hex(0xFF9A9A), Theme.hex(0xFF7878)) {
+                        pill("grp.picture.remove", Theme.dyn(0xFF9A9A, 0xC43848), Theme.dyn(0xFF7878, 0xD8404A)) {
                             Task { await run { try await APIClient.shared.grpRemoveAvatar(token: token, id: groupID) } }
                         }
                     }
@@ -757,16 +757,16 @@ struct GroupInfoView: View {
     private var joinRequestsCard: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Image(systemName: "person.badge.plus").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.hex(0xE8B931))
+                Image(systemName: "person.badge.plus").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.dyn(0xE8B931, 0xB98700))
                     .frame(width: 30, height: 30)
-                    .background(Theme.hex(0xE8B931, 0.1), in: RoundedRectangle(cornerRadius: 10))
+                    .background(Theme.dyn(0xE8B931, 0xE8B931, 0.1, 0.14), in: RoundedRectangle(cornerRadius: 10))
                 Text(NSLocalizedString("gx.jr.title", comment: "").uppercased()).font(.system(size: 13, weight: .bold)).tracking(0.78)
                     .foregroundStyle(Theme.dyn(0xE8B931, 0x9A7410)).lineLimit(1)
                 Spacer(minLength: 4)
                 if requests.isEmpty {
                     Text("gx.jr.none").font(.system(size: 12.5)).foregroundStyle(Theme.dyn(0x7F9AA7, 0x5F7686))
                         .padding(.horizontal, 10).padding(.vertical, 3)
-                        .background(Theme.hex(0x78BED2, 0.07), in: Capsule())
+                        .background(Theme.dyn(0x78BED2, 0x0097A5, 0.07, 0.07), in: Capsule())
                 } else {
                     JoinRequestCountBadge(count: requests.count, animate: !reduceMotion)
                 }
@@ -905,9 +905,9 @@ struct GroupInfoView: View {
                             }
                             Spacer()
                             Text(LocalizedStringKey(a.role == "owner" ? "gi.role.owner" : "gi.role.admin"))
-                                .font(.system(size: 12)).foregroundStyle(a.role == "owner" ? Theme.hex(0xC7A8FF) : Theme.hex(0x8FD9E0))
+                                .font(.system(size: 12)).foregroundStyle(a.role == "owner" ? Theme.dyn(0xC7A8FF, 0x6B45C9) : Theme.dyn(0x8FD9E0, 0x00838E))
                                 .padding(.horizontal, 9).padding(.vertical, 2)
-                                .background(a.role == "owner" ? Theme.hex(0x966EFF, 0.16) : Theme.hex(0x00CAD1, 0.12), in: Capsule())
+                                .background(a.role == "owner" ? Theme.hex(0x966EFF, 0.16) : Theme.dyn(0x00CAD1, 0x0097A5, 0.12, 0.1), in: Capsule())
                         }
                         .padding(.vertical, 8)
                         .contentShape(Rectangle())
@@ -1051,14 +1051,14 @@ struct GroupInfoView: View {
 
         block(danger: true) {
             Button { confirmLeave = true } label: {
-                gipRow("rectangle.portrait.and.arrow.right", NSLocalizedString("grp.leave", comment: ""), tint: Theme.hex(0xFF8F8F), textTint: Theme.hex(0xFF8F8F))
+                gipRow("rectangle.portrait.and.arrow.right", NSLocalizedString("grp.leave", comment: ""), tint: Theme.dyn(0xFF8F8F, 0xD8404A), textTint: Theme.dyn(0xFF8F8F, 0xD8404A))
             }
             .buttonStyle(.plain)
             // deleting the group is the owner's alone (server DeleteGroup: RoleOwner; website: myRole === "owner")
             if owner {
                 hair()
                 Button { confirmDelete = true } label: {
-                    gipRow("trash", NSLocalizedString("grp.delete", comment: ""), tint: Theme.hex(0xFF8F8F), textTint: Theme.hex(0xFF8F8F))
+                    gipRow("trash", NSLocalizedString("grp.delete", comment: ""), tint: Theme.dyn(0xFF8F8F, 0xD8404A), textTint: Theme.dyn(0xFF8F8F, 0xD8404A))
                 }
                 .buttonStyle(.plain)
             }
@@ -1098,7 +1098,7 @@ struct GroupInfoView: View {
                     ShareLink(item: URL(string: newLink) ?? URL(string: "https://app.tradeflor.com")!,
                               message: Text(shareText(g.name, newLink))) {
                         Text("gi.share").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
-                            .padding(.horizontal, 12).frame(height: 32).overlay(Capsule().stroke(Theme.hex(0x78BED2, 0.22), lineWidth: 1))
+                            .padding(.horizontal, 12).frame(height: 32).overlay(Capsule().stroke(Theme.dyn(0x78BED2, 0xA6E3E7, 0.22, 1), lineWidth: 1))
                     }
                 }
                 .padding(.bottom, 10)
@@ -1185,7 +1185,7 @@ struct GroupInfoView: View {
                 .tint(Theme.accent)
                 .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
                 .background(Theme.soul, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hex(0x78BED2, 0.22), lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.dyn(0x78BED2, 0xA6E3E7, 0.22, 1), lineWidth: 1))
         }
         .frame(maxWidth: .infinity)
     }
@@ -1194,7 +1194,7 @@ struct GroupInfoView: View {
         Button(title) { if let u = URL(string: url) { UIApplication.shared.open(u) } }
             .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text)
             .frame(maxWidth: .infinity, minHeight: 36)
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hex(0x78BED2, 0.22), lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.dyn(0x78BED2, 0xA6E3E7, 0.22, 1), lineWidth: 1))
     }
 
     private func shareText(_ name: String, _ url: String) -> String {
@@ -1363,7 +1363,7 @@ struct GroupInfoView: View {
                      + (m.user_id == me ? Text(" " + NSLocalizedString("grp.you", comment: "")).font(.system(size: 14.5, weight: .medium)).foregroundColor(mutedText) : Text("")))
                         .lineLimit(1)
                     if isOwner {
-                        Image(systemName: "crown.fill").font(.system(size: 11)).foregroundStyle(Theme.hex(0xE8B931))
+                        Image(systemName: "crown.fill").font(.system(size: 11)).foregroundStyle(Theme.dyn(0xE8B931, 0xB98700))
                             .shadow(color: Theme.hex(0xE8B931, 0.6), radius: 3)
                     }
                 }
@@ -1371,8 +1371,8 @@ struct GroupInfoView: View {
             }
             Spacer(minLength: 4)
             if m.isMuted {
-                Text("grp.muted").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x9FB2BB))
-                    .padding(.horizontal, 9).padding(.vertical, 3).background(Theme.hex(0x78BED2, 0.1), in: Capsule())
+                Text("grp.muted").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.dyn(0x9FB2BB, 0x5F7686))
+                    .padding(.horizontal, 9).padding(.vertical, 3).background(Theme.dyn(0x78BED2, 0x0097A5, 0.1, 0.08), in: Capsule())
             }
             if isOwner {
                 Text("grp.role.owner").font(.system(size: 11, weight: .heavy)).tracking(0.33).foregroundStyle(Theme.hex(0x2B1D00))
@@ -1392,7 +1392,7 @@ struct GroupInfoView: View {
                 Menu { memberMenu(m) } label: {
                     Image(systemName: "ellipsis").font(.system(size: 14, weight: .bold)).foregroundStyle(mutedText)
                         .frame(width: 30, height: 30)
-                        .background(Theme.hex(0x78BED2, 0.06), in: Circle())
+                        .background(Theme.dyn(0x78BED2, 0x0097A5, 0.06, 0.07), in: Circle())
                         .contentShape(Circle())
                 }
                 .accessibilityLabel(Text("grp.more"))
@@ -1498,7 +1498,7 @@ struct GroupInfoView: View {
                 .font(.system(size: 13)).foregroundStyle(Theme.text)
                 .padding(.horizontal, 8).frame(width: 142, height: 34)
                 .background(Theme.soul, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hex(0x78BED2, 0.22), lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.dyn(0x78BED2, 0xA6E3E7, 0.22, 1), lineWidth: 1))
             }
         }
         .padding(.vertical, 8)
@@ -1520,7 +1520,7 @@ struct GroupInfoView: View {
                 .font(.system(size: 13)).foregroundStyle(Theme.text)
                 .padding(.horizontal, 8).frame(width: 142, height: 34)
                 .background(Theme.soul, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.hex(0x78BED2, 0.22), lineWidth: 1))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.dyn(0x78BED2, 0xA6E3E7, 0.22, 1), lineWidth: 1))
             }
         }
         .padding(.vertical, 8)
@@ -1711,8 +1711,8 @@ struct GroupDialogArt: View {
             var curve = Path()
             curve.move(to: CGPoint(x: w * 0.52, y: -4))
             curve.addQuadCurve(to: CGPoint(x: w + 6, y: h * 0.22), control: CGPoint(x: w * 0.86, y: h * 0.02))
-            ctx.stroke(curve, with: .color(Theme.hex(0x2AF0FF, 0.22)), style: StrokeStyle(lineWidth: 6, lineCap: .round))
-            ctx.stroke(curve, with: .color(Theme.hex(0x2AF0FF, 0.75)), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+            ctx.stroke(curve, with: .color(Theme.dyn(0x2AF0FF, 0x00A8B5, 0.22, 0.16)), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+            ctx.stroke(curve, with: .color(Theme.dyn(0x2AF0FF, 0x00A8B5, 0.75, 0.55)), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
             // the dotted wave, bottom left
             let base = h - 70
             for row in 0..<4 {
@@ -1722,7 +1722,7 @@ struct GroupDialogArt: View {
                     let y = base + CGFloat(row) * 11 + sin(t * .pi * 2.2 + CGFloat(row) * 0.5) * 16
                     let a = 0.5 * (1 - t) * (1 - Double(row) * 0.18)
                     let r: CGFloat = 1.6 - CGFloat(row) * 0.25
-                    ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)), with: .color(Theme.hex(0x3FE3F0, a)))
+                    ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)), with: .color(Theme.dyn(0x3FE3F0, 0x00A8B5, CGFloat(a), CGFloat(a) * 0.7)))
                     x += 9
                 }
             }
@@ -1734,7 +1734,7 @@ struct GroupDialogArt: View {
                 wave.addLine(to: CGPoint(x: x, y: base + 28 + sin(t * .pi * 2.2) * 18))
                 x += 4
             }
-            ctx.stroke(wave, with: .linearGradient(Gradient(colors: [Theme.hex(0x3FE3F0, 0.55), Theme.hex(0x3FE3F0, 0)]),
+            ctx.stroke(wave, with: .linearGradient(Gradient(colors: [Theme.dyn(0x3FE3F0, 0x00A8B5, 0.55, 0.4), Theme.dyn(0x3FE3F0, 0x00A8B5, 0, 0)]),
                                                     startPoint: CGPoint(x: 0, y: 0), endPoint: CGPoint(x: w * 0.7, y: 0)),
                        lineWidth: 1.2)
         }
