@@ -331,12 +331,12 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         registry[message.id] = Registered(token: token, message: message)
     }
 
-    /// A voice bubble came on screen: an iPhone-recorded note (small) is downloaded now, so a tap plays it at once.
+    /// A voice bubble came on screen: the note is downloaded now (iPhone M4A and website WebM alike), so a tap plays it at
+    /// once. A website note also starts the hidden web player now: launching WebKit took most of a second on the first tap.
     func prefetch(token: String, message: Message) {
-        guard let id = message.audio_id, !message.isDeleted, !message.isViewOnce, !token.isEmpty,
-              !prefetching.contains(id), !failed.contains(id), !APIClient.shared.hasVoice(audioID: id) else { return }
-        let mime = message.mime_type ?? ""
-        guard mime.contains("mp4") || mime.contains("aac") || mime.contains("m4a"),
+        guard let id = message.audio_id, !message.isDeleted, !message.isViewOnce, !token.isEmpty else { return }
+        if !Self.isNative(message.mime_type) { warmWeb() }
+        guard !prefetching.contains(id), !failed.contains(id), !APIClient.shared.hasVoice(audioID: id),
               (message.duration_ms ?? 0) < 10 * 60 * 1000 else { return }
         prefetching.insert(id)
         Task(priority: .utility) {
@@ -403,10 +403,16 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         begun = true
         loading = true
         if let message { markPlayed(message.id) }
-        let isMP4 = (mime ?? "").contains("mp4") || (mime ?? "").contains("aac") || (mime ?? "").contains("m4a")
+        let native = Self.isNative(mime)
         Task {
-            if isMP4 { await playNative(token: token, audioID: audioID) } else { await playWeb(token: token, audioID: audioID) }
+            if native { await playNative(token: token, audioID: audioID) } else { await playWeb(token: token, audioID: audioID, mime: mime) }
         }
+    }
+
+    /// M4A / AAC plays in AVAudioPlayer; anything else (WebM / Ogg Opus from the website) in the web player.
+    nonisolated static func isNative(_ mime: String?) -> Bool {
+        let m = mime ?? ""
+        return m.contains("mp4") || m.contains("aac") || m.contains("m4a")
     }
 
     private func markPlayed(_ id: String) {
@@ -454,40 +460,87 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         startTimer()
     }
 
-    private func playWeb(token: String, audioID: String) async {
+    /// The web player's page is loaded once and kept (a new page per note cost a WebKit reload on every tap); each load
+    /// carries a number, so an event of an earlier note (its "error" after it was stopped) never touches the new one.
+    private var webGen = 0
+    private var webReady = false
+    private var webPending: String?
+    /// The note playing in the web player came from prefetched bytes (a data URL): on an error it is tried once more
+    /// from the server's address.
+    private var webFallback: (token: String, audioID: String)?
+
+    private static let webPage = """
+    <html><head><meta name="viewport" content="width=device-width"></head><body><audio id="a" playsinline preload="auto"></audio><script>
+    const a = document.getElementById('a');
+    let gen = 0, known = 0, startAt = 0;
+    window.vnRate = 1;
+    const post = (m) => { m.g = gen; window.webkit.messageHandlers.voice.postMessage(m); };
+    const dur = () => (isFinite(a.duration) && a.duration > 0) ? a.duration : known;
+    window.vnSeek = (f) => { const d = dur(); if (d > 0) { try { a.currentTime = f * d; } catch (e) {} } };
+    a.addEventListener('loadedmetadata', () => { if (startAt > 0) { window.vnSeek(startAt); startAt = 0; } });
+    a.addEventListener('playing', () => { if (a.playbackRate !== window.vnRate) a.playbackRate = window.vnRate; post({e: 'playing'}); });
+    a.addEventListener('timeupdate', () => { const d = dur(); post({e: 'time', p: d > 0 ? Math.min(1, a.currentTime / d) : 0}); });
+    a.addEventListener('ended', () => post({e: 'ended'}));
+    a.addEventListener('error', () => { if (a.getAttribute('src')) post({e: 'error'}); });
+    window.vnLoad = (g, src, k, s, r) => {
+      gen = g; known = k; startAt = s; window.vnRate = r;
+      a.src = src; a.defaultPlaybackRate = r; a.playbackRate = r;
+      a.play().catch(() => post({e: 'error'}));
+    };
+    window.vnStop = () => { gen = -1; a.pause(); a.removeAttribute('src'); a.load(); };
+    window.webkit.messageHandlers.voice.postMessage({e: 'ready', g: -2});
+    </script></body></html>
+    """
+
+    /// Starts WebKit and loads the player page ahead of the first tap (a website note came on screen).
+    func warmWeb() {
+        guard web == nil else { return }
+        webReady = false
+        webView().loadHTMLString(Self.webPage, baseURL: URL(string: "https://app.tradeflor.com/"))
+    }
+
+    private func playWeb(token: String, audioID: String, mime: String?) async {
         async let session: Void = activateSession()
-        var ticket: String?
-        if let t = self.ticket, Date().timeIntervalSince(t.at) < 40 { ticket = t.value }
-        else if let fresh = try? await APIClient.shared.mediaTicket(token: token) { ticket = fresh; self.ticket = (fresh, Date()) }
+        // the bytes, when prefetched (or downloading now): played from memory, no ticket and no second download
+        var src: String?
+        webFallback = nil
+        if APIClient.shared.hasOrLoadsVoice(audioID: audioID), let data = await APIClient.shared.voice(token: token, audioID: audioID),
+           data.count < 6_000_000 {
+            let head = (mime ?? "").split(separator: ";").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+            let type = head.isEmpty ? "audio/webm" : head
+            src = "data:\(type);base64,\(data.base64EncodedString())"
+            webFallback = (token, audioID)
+        } else {
+            src = await streamURL(token: token, audioID: audioID)
+        }
         await session
         guard current == audioID else { return } // no longer wanted: not a failure
-        guard let ticket else {
+        guard let src else {
             markFailed(audioID)
             return
         }
-        let src = APIClient.shared.voiceURL(audioID: audioID, ticket: ticket).absoluteString
-        let w = webView()
-        let html = """
-        <html><body><audio id="a" playsinline preload="auto" src="\(src)"></audio><script>
-        const a = document.getElementById('a');
-        const post = (m) => window.webkit.messageHandlers.voice.postMessage(m);
-        const known = \(knownDuration);
-        let startAt = \(startAt);
-        window.vnRate = \(speed);
-        const dur = () => (isFinite(a.duration) && a.duration > 0) ? a.duration : known;
-        window.vnSeek = (f) => { const d = dur(); if (d > 0) { try { a.currentTime = f * d; } catch (e) {} } };
-        a.defaultPlaybackRate = window.vnRate;
-        a.playbackRate = window.vnRate;
-        a.addEventListener('loadedmetadata', () => { if (startAt > 0) { window.vnSeek(startAt); startAt = 0; } });
-        a.addEventListener('playing', () => { if (a.playbackRate !== window.vnRate) a.playbackRate = window.vnRate; post({e: 'playing'}); });
-        a.addEventListener('timeupdate', () => { const d = dur(); post({e: 'time', p: d > 0 ? Math.min(1, a.currentTime / d) : 0}); });
-        a.addEventListener('ended', () => post({e: 'ended'}));
-        a.addEventListener('error', () => post({e: 'error'}));
-        a.play().catch(() => post({e: 'error'}));
-        </script></body></html>
-        """
+        webLoad(src)
+    }
+
+    /// The note's address on the server with a one-minute media ticket (reused for 40 s).
+    private func streamURL(token: String, audioID: String) async -> String? {
+        var value: String?
+        if let t = self.ticket, Date().timeIntervalSince(t.at) < 40 { value = t.value }
+        else if let fresh = try? await APIClient.shared.mediaTicket(token: token) { value = fresh; self.ticket = (fresh, Date()) }
+        guard let value else { return nil }
+        return APIClient.shared.voiceURL(audioID: audioID, ticket: value).absoluteString
+    }
+
+    /// Hands one note to the web player page (queued until the page said it is ready).
+    private func webLoad(_ src: String) {
+        webGen += 1
+        // the address as a JavaScript string literal (JSON string escaping)
+        let quoted = (try? JSONSerialization.data(withJSONObject: [src]))
+            .flatMap { String(data: $0, encoding: .utf8) }.map { String($0.dropFirst().dropLast()) } ?? "''"
+        let js = "window.vnLoad(\(webGen), \(quoted), \(knownDuration), \(startAt), \(speed))"
         startAt = 0
-        w.loadHTMLString(html, baseURL: URL(string: "https://app.tradeflor.com/"))
+        if web == nil { warmWeb() }
+        if webReady { web?.evaluateJavaScript(js) } else { webPending = js }
     }
 
     private func webView() -> WKWebView {
@@ -509,12 +562,31 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     fileprivate func webEvent(_ body: [String: Any]) {
-        guard current != nil else { return }
+        if body["e"] as? String == "ready" {
+            webReady = true
+            if let js = webPending { webPending = nil; web?.evaluateJavaScript(js) }
+            return
+        }
+        // events of the note handed over last only (a stopped note's late "error" must not fail the next one)
+        guard current != nil, (body["g"] as? Int) == webGen else { return }
         switch body["e"] as? String {
         case "playing": loading = false; playing = true
         case "time": progress = (body["p"] as? Double) ?? progress
         case "ended": finished()
-        case "error": if let c = current { markFailed(c) }
+        case "error":
+            // the prefetched bytes did not play: once more from the server's address, else it failed
+            if let f = webFallback, f.audioID == current {
+                webFallback = nil
+                Task {
+                    guard let src = await streamURL(token: f.token, audioID: f.audioID), current == f.audioID else {
+                        if current == f.audioID { markFailed(f.audioID) }
+                        return
+                    }
+                    webLoad(src)
+                }
+            } else if let c = current {
+                markFailed(c)
+            }
         default: break
         }
     }
@@ -543,7 +615,10 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     func stop() {
         player?.stop()
         player = nil
-        web?.loadHTMLString("", baseURL: nil)
+        webGen += 1
+        webPending = nil
+        webFallback = nil
+        web?.evaluateJavaScript("window.vnStop && window.vnStop()")
         timer?.invalidate()
         timer = nil
         playing = false

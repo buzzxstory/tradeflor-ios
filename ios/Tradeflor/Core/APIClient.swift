@@ -733,6 +733,13 @@ final class APIClient {
 
     func hasVoice(audioID: String) -> Bool { avatarCache.object(forKey: "voice/\(audioID)" as NSString) != nil }
 
+    /// Downloaded already, or a prefetch is on its way: waiting for it is faster than starting a second download.
+    func hasOrLoadsVoice(audioID: String) -> Bool {
+        if hasVoice(audioID: audioID) { return true }
+        voiceLock.lock(); defer { voiceLock.unlock() }
+        return voiceInFlight[audioID] != nil
+    }
+
     private func fetchVoice(token: String, audioID: String, key: NSString) async -> Data? {
         var req = URLRequest(url: base.appendingPathComponent("media").appendingPathComponent("voice").appendingPathComponent(audioID))
         req.timeoutInterval = 60
