@@ -222,7 +222,7 @@ struct LinkedDevicesView: View {
         .background(background)
         .overlayPreferenceValue(LDRowAnchor.self) { anchors in menuLayer(anchors) }
         .overlay { dialogLayer }
-        .overlay(alignment: .bottom) { toastLayer }
+        .overlay(alignment: .bottom) { toastLayer.modifier(DockLift()) } // above the floating dock, never behind it
         .animation(.easeOut(duration: 0.18), value: toast)
         .buttonStyle(.plain)
         .toolbar(.hidden, for: .navigationBar)

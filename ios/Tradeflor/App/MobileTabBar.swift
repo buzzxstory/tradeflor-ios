@@ -140,6 +140,15 @@ struct MobileTabBar: View {
 }
 
 
+/// Lifts something pinned to the bottom of a tab (a toast) above the floating dock, so it never shows behind it.
+struct DockLift: ViewModifier {
+    @ObservedObject private var chrome = TabChrome.shared
+
+    func body(content: Content) -> some View {
+        content.padding(.bottom, chrome.hidden ? 0 : DockSpace.height)
+    }
+}
+
 /// Room at the bottom of a tab for the floating dock: its real height (52 pt items + 6 pt padding each side + 4 pt
 /// above and below) plus the TradeFlor orb's lift, above the home indicator's safe area. None in a conversation or
 /// with the keyboard up (the dock steps aside then).

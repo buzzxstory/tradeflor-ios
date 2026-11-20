@@ -184,6 +184,7 @@ struct CalendarView: View {
                         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(P.cyan, lineWidth: 1))
                         .shadow(color: Theme.dyn(0x000000, 0x0B5E68, 0.5, 0.16), radius: 20, y: 14)
                         .padding(16)
+                        .modifier(DockLift()) // above the floating dock, never behind it
                         .onTapGesture { self.toast = nil }
                         .task(id: toast) {
                             try? await Task.sleep(nanoseconds: 3_500_000_000)

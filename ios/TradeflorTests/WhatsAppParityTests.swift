@@ -55,4 +55,15 @@ final class WhatsAppParityTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(settings.components(separatedBy: ".modifier(DockSpace())").count - 1, 3,
                                     "Settings and both SettingsPage looks need room for the dock")
     }
+
+    /// A toast pinned to the bottom of a tab screen shows above the dock, never behind it.
+    func testBottomToastsSitAboveTheDock() throws {
+        for f in ["Tradeflor/Features/Chats/ChatListView.swift", "Tradeflor/Features/Status/CalendarView.swift",
+                  "Tradeflor/Features/Settings/LinkedDevicesView.swift"] {
+            XCTAssertTrue(try source(f).contains(".modifier(DockLift())"), "\(f): its toast would sit behind the dock")
+        }
+        // the old inset on the TabView pages (outside each NavigationStack) never reached the screens: not used again
+        let root = try source("Tradeflor/App/TradeflorApp.swift")
+        XCTAssertFalse(root.contains(".modifier(DockSpace())"))
+    }
 }
