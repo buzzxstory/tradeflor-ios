@@ -4,7 +4,9 @@ import UserNotifications
 
 /// Notification Service Extension (WhatsApp way): Apple's push carries no name and no word of a message ("Tradeflor / New
 /// message"); before iOS shows it, this extension asks Tradeflor's own server, on the phone, for the real text
-/// (GET /push/peek with the subscription id and secret the app was given at registration) and writes it into the notice.
+/// (GET /push/peek with the subscription id, the secret the app was given at registration in X-Push-Secret, and the
+/// message id: docs/push/PUSH_PEEK_MESSAGE_CONTRACT.md on the server side) and writes it into the notice. Never a guess:
+/// only the text of exactly this message.
 /// The server already decided the text per person: previews off ("New message"), a locked chat ("New message in a locked
 /// chat"), a mention, a group ("sender: text"). Anything that fails leaves Apple's text as it was.
 final class NotificationService: UNNotificationServiceExtension {
@@ -20,22 +22,66 @@ final class NotificationService: UNNotificationServiceExtension {
         }
         best = content
         let tf = (content.userInfo["tf"] as? [String: Any]) ?? [:]
-        let want = PeekMatch(identifier: request.identifier,
-                             conversation: tf["conversation_id"] as? String,
-                             kind: (tf["kind"] as? String) ?? "",
-                             callID: tf["call_id"] as? String)
-        // what an earlier wake-up already fetched (the server hands each notice out once per device)
-        if let hit = PeekCache.find(want) {
-            finish(apply(hit, to: content))
-            return
-        }
-        guard let keys = SharedPushKeys.load(), let url = Self.peekURL(id: keys.id, secret: keys.secret) else {
+        let kind = (tf["kind"] as? String) ?? ""
+        let want = PeekMatch(identifier: request.identifier, kind: kind, callID: tf["call_id"] as? String)
+        guard let keys = SharedPushKeys.load() else {
             finish(content)
             return
         }
+        // the subscription id the push names, when it is the one whose secret is kept (else the kept one: same account)
+        let subID = (tf["id"] as? String).flatMap { $0 == keys.id ? $0 : nil } ?? keys.id
+        if kind.isEmpty {
+            // a message: its own text, read from the stored message (server 710ed38a, PUSH_PEEK_MESSAGE_CONTRACT.md)
+            peekMessage(id: subID, secret: keys.secret, messageID: request.identifier, want: want, content: content)
+        } else {
+            peekAll(id: subID, secret: keys.secret, want: want, content: content)
+        }
+    }
+
+    /// GET /push/peek?id=&m=<message id> with the secret in X-Push-Secret. 200: this message's text. 404: it must not be
+    /// shown (deleted, hidden, blocked, too old, signed out) -> the original "New message". A server from before 710ed38a
+    /// answers 404 to every such request: until this phone has seen one 200, a 404 is tried once more in the older way
+    /// (all notices, exact message id only).
+    private func peekMessage(id: String, secret: String, messageID: String, want: PeekMatch, content: UNMutableNotificationContent) {
+        if let hit = PeekCache.find(want) { finish(apply(hit, to: content)); return }
+        guard let url = Self.peekURL(["id": id, "m": messageID]) else { finish(content); return }
         var req = URLRequest(url: url)
-        req.timeoutInterval = 12
+        req.timeoutInterval = 8
         req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue(secret, forHTTPHeaderField: "X-Push-Secret")
+        task = URLSession.shared.dataTask(with: req) { [weak self] data, response, _ in
+            guard let self else { return }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 200, let data, let n = try? JSONDecoder().decode(PeekNotice.self, from: data) {
+                PeekServer.supportsMessagePeek = true
+                // never another message's text under this push
+                if (n.message_id ?? messageID) == messageID {
+                    self.finish(self.apply(n, to: content))
+                } else {
+                    self.finish(content)
+                }
+                return
+            }
+            if status == 404 && PeekServer.supportsMessagePeek {
+                self.finish(content) // must not be shown
+                return
+            }
+            // an older server (404 for every message), or the request failed on the network: the notices way, exact only
+            self.peekAll(id: id, secret: secret, want: want, content: content)
+        }
+        task?.resume()
+    }
+
+    /// GET /push/peek?all=1: every fresh notice not yet handed to this device (kept 10 minutes here for a burst). Only the
+    /// notice of exactly this push is used (message id, tag or call id): never a guess at another message of the chat.
+    private func peekAll(id: String, secret: String, want: PeekMatch, content: UNMutableNotificationContent) {
+        if let hit = PeekCache.find(want) { finish(apply(hit, to: content)); return }
+        // the server that is live today reads the secret only from &k= in this mode
+        guard let url = Self.peekURL(["all": "1", "id": id, "k": secret]) else { finish(content); return }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        req.setValue(secret, forHTTPHeaderField: "X-Push-Secret")
         task = URLSession.shared.dataTask(with: req) { [weak self] data, response, _ in
             guard let self else { return }
             if let data, (response as? HTTPURLResponse)?.statusCode == 200,
@@ -61,7 +107,7 @@ final class NotificationService: UNNotificationServiceExtension {
         let body = n.body.trimmingCharacters(in: .whitespacesAndNewlines)
         if !title.isEmpty { content.title = title }
         if !body.isEmpty { content.body = body }
-        // one stack per chat in Notification Center, as WhatsApp
+        // one stack per chat in Notification Center, as WhatsApp (a locked chat has none: it stays unnamed)
         if let c = n.conversation_id, !c.isEmpty { content.threadIdentifier = c }
         return content
     }
@@ -73,12 +119,22 @@ final class NotificationService: UNNotificationServiceExtension {
     }
 
     /// The server's address: the same TFAPIBase build setting as the app.
-    static func peekURL(id: String, secret: String) -> URL? {
+    static func peekURL(_ query: [String: String]) -> URL? {
         let raw = (Bundle.main.object(forInfoDictionaryKey: "TFAPIBase") as? String) ?? ""
         let base = raw.isEmpty ? "https://app.tradeflor.com/api" : raw
         guard var c = URLComponents(string: base.hasSuffix("/") ? base + "push/peek" : base + "/push/peek") else { return nil }
-        c.queryItems = [URLQueryItem(name: "all", value: "1"), URLQueryItem(name: "id", value: id), URLQueryItem(name: "k", value: secret)]
+        c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         return c.url
+    }
+}
+
+/// What this phone learned about the server: once one message was read by its id, a 404 means "must not be shown" and
+/// the older notices way is not tried again.
+enum PeekServer {
+    private static let key = "tf.peek.byMessage"
+    static var supportsMessagePeek: Bool {
+        get { UserDefaults.standard.bool(forKey: key) }
+        set { if newValue { UserDefaults.standard.set(true, forKey: key) } }
     }
 }
 
@@ -103,7 +159,6 @@ struct PeekAnswer: Decodable {
 /// for a call, the notice's tag (or its hash) for anything else.
 struct PeekMatch {
     let identifier: String
-    let conversation: String?
     let kind: String
     let callID: String?
 
@@ -141,12 +196,10 @@ enum PeekCache {
         try? data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }
 
-    static func find(_ want: PeekMatch, now: Date = Date()) -> PeekNotice? {
-        let list = load()
-        if let exact = list.last(where: { want.matches($0) }) { return exact }
-        // a message push whose id the notice does not carry: the newest notice of the same chat, fetched just now
-        guard want.kind.isEmpty, let c = want.conversation, !c.isEmpty else { return nil }
-        return list.last { $0.conversation_id == c && ($0.kind ?? "").isEmpty && now.timeIntervalSince($0.fetched ?? .distantPast) < 120 }
+    /// Exactly this push's notice, or nothing (never the newest of the same chat: in a burst that put one message's
+    /// text under another's push).
+    static func find(_ want: PeekMatch) -> PeekNotice? {
+        load().last { want.matches($0) }
     }
 }
 
