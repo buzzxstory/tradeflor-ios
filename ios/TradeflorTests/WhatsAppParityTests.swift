@@ -112,8 +112,7 @@ final class WhatsAppParityTests: XCTestCase {
         for f in ["Tradeflor/Features/Chats/ChatListView.swift", "Tradeflor/Features/Groups/GroupsListView.swift",
                   "Tradeflor/Features/Settings/SettingsView.swift", "Tradeflor/Features/Status/CalendarView.swift",
                   "Tradeflor/Features/Status/TradeFlorView.swift", "Tradeflor/Features/Settings/LinkedDevicesView.swift"] {
-            let lines = try source(f).components(separatedBy: "
-")
+            let lines = try source(f).components(separatedBy: "\n")
             for (i, l) in lines.enumerated() where l.contains(".modifier(DockSpace()) // on the scroll view itself") {
                 XCTAssertTrue(i > 0 && lines[i - 1].contains(".clipped()"), "\(f):\(i + 1): rows would show under the dock")
             }
