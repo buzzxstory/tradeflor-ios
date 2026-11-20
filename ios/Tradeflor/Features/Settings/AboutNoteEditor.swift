@@ -106,7 +106,7 @@ struct AboutNoteEditor: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(Text("note.emoji"))
-            TextField(text: $text, prompt: Text("note.placeholder").foregroundStyle(Theme.faint)) { EmptyView() }
+            TextField(text: $text, prompt: Text("note.placeholder").foregroundColor(Theme.faint)) { EmptyView() }
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(Theme.text)
                 .focused($typing)
