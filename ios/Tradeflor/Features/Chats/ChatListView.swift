@@ -144,14 +144,15 @@ struct ChatListView: View {
                 // the rings are read again through .tfStatusChanged (posted once the "seen" calls have arrived)
                 StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) {}
             }
-            .sheet(isPresented: $showFolderEditor) { FolderEditorView(token: token, chats: chats) { Task { await reloadFolders() } } }
-            .sheet(item: $editingFolder) { f in FolderEditorView(token: token, chats: chats, editing: f) { Task { await reloadFolders() } } }
-            .sheet(isPresented: $showManageFolders) { ManageFoldersView(token: token, chats: chats) { Task { await reloadFolders() } } }
+            .sheet(isPresented: $showFolderEditor) { FolderEditorView(token: token, chats: chats) { Task { await reloadFolders() } }.tfColorScheme() }
+            .sheet(item: $editingFolder) { f in FolderEditorView(token: token, chats: chats, editing: f) { Task { await reloadFolders() } }.tfColorScheme() }
+            .sheet(isPresented: $showManageFolders) { ManageFoldersView(token: token, chats: chats) { Task { await reloadFolders() } }.tfColorScheme() }
             .sheet(item: $lockSheetFor) { c in
                 LockChatSheet(conversationID: c.conversation_id, name: c.title, locked: lockedIDs.contains(c.conversation_id)) {
                     Task { await loadLocks() }
                 }
                 .environmentObject(store)
+                .tfColorScheme()
             }
             .confirmationDialog(Text("folder.remove.title"), isPresented: Binding(get: { removingFolder != nil }, set: { if !$0 { removingFolder = nil } }),
                                 titleVisibility: .visible) {
@@ -202,6 +203,7 @@ struct ChatListView: View {
                         path = [c]
                     }
                 }
+                .tfColorScheme()
             }
         }
         // a burst of new messages (a busy group) is one reload, not one per message: that redrew the list all the time
@@ -291,6 +293,7 @@ struct ChatListView: View {
                         path = [c]
                     }
                 }
+                .tfColorScheme()
             }
     }
 

@@ -149,6 +149,7 @@ struct GroupsListView: View {
             .background(ChatsWallpaper())
             .sheet(isPresented: $showFolderEditor) {
                 FolderEditorView(token: token, chats: groups.map(\.asConversation)) { Task { await reloadFolders() } }
+                    .tfColorScheme()
             }
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: GroupSummary.self) { g in ChatView(chat: g.asConversation, canSend: g.can_send) }
@@ -165,16 +166,18 @@ struct GroupsListView: View {
                     LocalNotifier.shared.tappedConversation = nil
                 }
             }
-            .sheet(isPresented: $showCreate) { CreateGroupView { id in Task { await open(id) } } }
-            .sheet(isPresented: $showJoin) { JoinGroupView { id in Task { await open(id) } } }
+            .sheet(isPresented: $showCreate) { CreateGroupView { id in Task { await open(id) } }.tfColorScheme() }
+            .sheet(isPresented: $showJoin) { JoinGroupView { id in Task { await open(id) } }.tfColorScheme() }
             .sheet(item: $joining) { d in
                 InviteJoinView(handle: d.handle) { id in Task { await open(id) } }
+                    .tfColorScheme()
             }
             .sheet(item: $lockSheetFor) { g in
                 LockChatSheet(conversationID: g.conversation_id, name: g.name, locked: isLocked(g), isGroup: true) {
                     Task { await load() }
                 }
                 .environmentObject(store)
+                .tfColorScheme()
             }
             // the owner cannot just leave (server: transfer ownership first, 409): told so, with no Leave button (website
             // GroupsView confirm: myRole !== "owner")
@@ -213,6 +216,7 @@ struct GroupsListView: View {
         }
         .sheet(isPresented: Binding(get: { joinLink != nil }, set: { if !$0 { joinLink = nil } })) {
             JoinGroupView(onJoined: { id in Task { await open(id) } }, initialLink: joinLink ?? "")
+                .tfColorScheme()
         }
         .onReceive(live.messages) { m in if m.conversation_id.hasPrefix("grp_") { reloadSoon() } }
         .onReceive(live.groupChanged) { _ in reloadSoon() }

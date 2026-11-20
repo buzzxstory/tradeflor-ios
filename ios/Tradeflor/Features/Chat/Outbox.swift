@@ -25,6 +25,38 @@ enum OutboxStore {
         var failed: Bool?
         /// A video note's file name (optional: entries saved before this field still load).
         var noteName: String?
+        /// A group text's @mentions, built when it was saved (optional: entries saved before this field still load, and
+        /// OutboxFlusher builds them itself when they are missing).
+        var mentions: [Mention]?
+    }
+
+    /// One @mention kept with a group text (server Mentions: {user_id, username}).
+    struct Mention: Codable {
+        let user_id: String
+        let username: String
+    }
+
+    /// The members of each group the chat screen last loaded (noteMembers): `save` builds a group text's @mentions with them.
+    private static let membersLock = NSLock()
+    private static var membersByChat: [String: [GroupMember]] = [:]
+
+    /// The chat screen hands over a group's members, so the @mentions of its unsent texts are kept with them.
+    static func noteMembers(conversation: String, _ members: [GroupMember]) {
+        membersLock.lock()
+        membersByChat[conversation] = members
+        membersLock.unlock()
+    }
+
+    private static func builtMentions(_ conversation: String, _ body: String) -> [Mention]? {
+        guard conversation.hasPrefix("grp_"), body.contains("@") else { return nil }
+        membersLock.lock()
+        let known = membersByChat[conversation]
+        membersLock.unlock()
+        guard let members = known, !members.isEmpty else { return nil } // not known here: OutboxFlusher builds them
+        return MentionsBuilder.build(body, members: members).compactMap { (m: [String: Any]) -> Mention? in
+            guard let id = m["user_id"] as? String, let name = m["username"] as? String else { return nil }
+            return Mention(user_id: id, username: name)
+        }
     }
 
     private static func file(_ account: String, _ conversation: String) -> URL? {
@@ -49,12 +81,14 @@ enum OutboxStore {
 
     static func save(account: String, conversation: String, _ pending: [PendingMessage]) {
         guard let url = file(account, conversation) else { return }
-        let entries = pending.filter { !$0.missing && ($0.video == nil || $0.file != nil) }.map {
-            Entry(id: $0.id, body: $0.body, date: $0.date, jpeg: $0.jpeg, audio: $0.audio, durationMs: $0.durationMs,
-                  waveform: $0.waveform, replyTo: $0.replyTo, fileName: $0.file?.lastPathComponent,
-                  isVideo: $0.file != nil ? $0.video != nil : nil, docName: $0.docName.isEmpty ? nil : $0.docName,
-                  docMime: $0.docMime.isEmpty ? nil : $0.docMime, poster: $0.poster,
-                  failed: $0.refused ? true : nil, noteName: $0.noteName.isEmpty ? nil : $0.noteName)
+        let entries = pending.filter { !$0.missing && ($0.video == nil || $0.file != nil) }.map { (p: PendingMessage) -> Entry in
+            let mentions: [Mention]? = p.audio == nil ? builtMentions(conversation, p.body) : nil
+            return Entry(id: p.id, body: p.body, date: p.date, jpeg: p.jpeg, audio: p.audio, durationMs: p.durationMs,
+                         waveform: p.waveform, replyTo: p.replyTo, fileName: p.file?.lastPathComponent,
+                         isVideo: p.file != nil ? p.video != nil : nil, docName: p.docName.isEmpty ? nil : p.docName,
+                         docMime: p.docMime.isEmpty ? nil : p.docMime, poster: p.poster,
+                         failed: p.refused ? true : nil, noteName: p.noteName.isEmpty ? nil : p.noteName,
+                         mentions: mentions)
         }
         queue.async {
             let first = waiting[url] == nil
@@ -90,10 +124,34 @@ enum OutboxStore {
         let durationMs: Int?
         let waveform: [Double]
         let replyTo: String
+        /// The @mentions kept with a group text; nil when it was saved without them (built by OutboxFlusher then).
+        let mentions: [Mention]?
+    }
+
+    /// Any JSON value, read without its content: a photo's or poster's base64 is not decoded just to learn it is there.
+    private struct Present: Decodable {
+        init(from decoder: Decoder) throws {}
+    }
+
+    /// An entry as `lines` needs it: the same keys as Entry, without decoding the photo and poster payloads.
+    private struct LineEntry: Decodable {
+        let id: String
+        let body: String
+        let date: Date
+        var jpeg: Present?
+        var audio: Data?
+        var durationMs: Int?
+        var waveform: [Double]
+        var replyTo: String
+        var fileName: String?
+        var isVideo: Bool?
+        var docName: String?
+        var failed: Bool?
+        var mentions: [Mention]?
     }
 
     /// Every text / voice message of this account still waiting (not the ones the server refused, not photos / videos /
-    /// documents: those resume from their own files when their chat opens).
+    /// documents: those resume from their own files when their chat opens). Reads files: call it off the main thread.
     static func lines(account: String) -> [QueuedLine] {
         guard !account.isEmpty, let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return [] }
         let folder = dir.appendingPathComponent("outbox/\(account)", isDirectory: true)
@@ -103,11 +161,12 @@ enum OutboxStore {
             let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
             var out: [QueuedLine] = []
             for u in files where u.pathExtension == "json" {
-                guard let data = try? Data(contentsOf: u), let entries = try? JSONDecoder().decode([Entry].self, from: data) else { continue }
+                guard let data = try? Data(contentsOf: u), let entries = try? JSONDecoder().decode([LineEntry].self, from: data) else { continue }
                 let conv = u.deletingPathExtension().lastPathComponent
                 for e in entries where e.failed != true && e.fileName == nil && e.jpeg == nil && e.docName == nil && e.isVideo != true {
                     out.append(QueuedLine(conversation: conv, id: e.id, body: e.body, date: e.date, audio: e.audio,
-                                          durationMs: e.durationMs, waveform: e.waveform, replyTo: e.replyTo))
+                                          durationMs: e.durationMs, waveform: e.waveform, replyTo: e.replyTo,
+                                          mentions: e.mentions))
                 }
             }
             return out

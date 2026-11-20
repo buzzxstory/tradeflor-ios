@@ -86,28 +86,48 @@ final class OutboxFlusher {
         let tok = token, acct = account
         var waiting = false
         var delay = 20.0
-        let byChat = Dictionary(grouping: OutboxStore.lines(account: acct), by: { $0.conversation })
+        // reading and decoding the saved files (voice notes in base64) stays off the main thread
+        let all = await Task.detached(priority: .utility) { OutboxStore.lines(account: acct) }.value
+        let byChat = Dictionary(grouping: all, by: { $0.conversation })
+        // a group's people, read once per flush (for the @mentions of texts saved without them)
+        var people: [String: [GroupMember]] = [:]
         for (conv, items) in byChat {
-            // the chat on screen sends its own (it also builds @mentions, which are not kept with the entry)
+            // the chat on screen sends its own
             if LocalNotifier.shared.openConversation == conv { continue }
             for line in items.sorted(by: { $0.date < $1.date }) {
                 guard tok == token else { return } // signed out, or another account, meanwhile
-                if conv.hasPrefix("grp_"), line.audio == nil, line.body.contains("@") { break }
                 do {
                     if let audio = line.audio, let ms = line.durationMs {
                         _ = try await APIClient.shared.sendVoice(token: tok, conversationID: conv, audio: audio, durationMs: ms,
                                                                  waveform: line.waveform, key: line.id)
                     } else {
-                        _ = try await APIClient.shared.sendText(token: tok, conversationID: conv, body: line.body, key: line.id,
-                                                                replyTo: line.replyTo)
+                        var mentions: [[String: Any]] = []
+                        if conv.hasPrefix("grp_"), line.body.contains("@") {
+                            if let kept = line.mentions {
+                                mentions = kept.map { m -> [String: Any] in ["user_id": m.user_id, "username": m.username] }
+                            } else {
+                                // built as the chat screen builds them, from the same lists of the group's people
+                                if people[conv] == nil { people[conv] = await groupPeople(tok, conv) }
+                                // the people could not be read: left, with the ones after it, for when the chat is opened
+                                guard let known = people[conv] else { break }
+                                mentions = MentionsBuilder.build(line.body, members: known)
+                            }
+                        }
+                        if mentions.isEmpty {
+                            _ = try await APIClient.shared.sendText(token: tok, conversationID: conv, body: line.body, key: line.id,
+                                                                    replyTo: line.replyTo)
+                        } else {
+                            _ = try await APIClient.shared.chSendText(token: tok, conversationID: conv, body: line.body,
+                                                                      replyTo: line.replyTo, mentions: mentions, key: line.id)
+                        }
                     }
-                    OutboxStore.remove(account: acct, conversation: conv, id: line.id)
+                    await remove(acct, conv, line.id)
                     serverFails[line.id] = nil
                 } catch APIError.badCredentials {
                     return // the session is over: the app signs out by itself
                 } catch APIError.decoding {
                     // the server took it (only its answer could not be read)
-                    OutboxStore.remove(account: acct, conversation: conv, id: line.id)
+                    await remove(acct, conv, line.id)
                 } catch APIError.locked {
                     break // a locked chat: left for when it is opened
                 } catch {
@@ -124,7 +144,7 @@ final class OutboxFlusher {
                         if serverError {
                             serverFails[line.id, default: 0] += 1
                             if (serverFails[line.id] ?? 0) >= 5 {
-                                OutboxStore.markFailed(account: acct, conversation: conv, id: line.id)
+                                await markFailed(acct, conv, line.id)
                                 serverFails[line.id] = nil
                                 continue // this one is "Not sent"; the ones after it go on
                             }
@@ -136,7 +156,7 @@ final class OutboxFlusher {
                         break // keeps its place: the next ones wait behind it
                     }
                     // refused for good (blocked, too long, no longer a member): shown as "Not sent" when the chat opens
-                    OutboxStore.markFailed(account: acct, conversation: conv, id: line.id)
+                    await markFailed(acct, conv, line.id)
                 }
             }
         }
@@ -150,5 +170,26 @@ final class OutboxFlusher {
                 await self?.flush()
             }
         }
+    }
+
+    /// A group's people as the chat screen reads them (ChatView.loadPeople): the posters, the admins and, for an admin, the
+    /// whole directory. nil when the posters could not be read (everyone may read them); the other two are added when this
+    /// account may read them.
+    private func groupPeople(_ tok: String, _ conv: String) async -> [GroupMember]? {
+        guard let senders = try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(conv)/senders", token: tok) else { return nil }
+        var all: [String: GroupMemberFull] = [:]
+        for p in senders { all[p.user_id] = p }
+        for p in (try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(conv)/admins", token: tok)) ?? [] { all[p.user_id] = p }
+        for p in (try? await APIClient.shared.list(GroupMemberFull.self, "groups/\(conv)/members", token: tok)) ?? [] { all[p.user_id] = p }
+        return all.values.map { GroupMember(user_id: $0.user_id, username: $0.username, display_name: $0.display_name) }
+    }
+
+    /// The saved outbox is changed off the main thread (each change reads, decodes and rewrites the chat's file).
+    private func remove(_ account: String, _ conversation: String, _ id: String) async {
+        await Task.detached(priority: .utility) { OutboxStore.remove(account: account, conversation: conversation, id: id) }.value
+    }
+
+    private func markFailed(_ account: String, _ conversation: String, _ id: String) async {
+        await Task.detached(priority: .utility) { OutboxStore.markFailed(account: account, conversation: conversation, id: id) }.value
     }
 }

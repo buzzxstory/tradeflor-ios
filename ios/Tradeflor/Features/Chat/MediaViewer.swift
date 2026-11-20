@@ -119,6 +119,8 @@ struct MediaViewer: View {
             }
         }
         .environment(\.colorScheme, .dark)
+        // the status bar too (light clock on black in day mode); a full-screen cover's own scheme, not the app's beneath
+        .preferredColorScheme(.dark)
         .modifier(ClearCover())
         .statusBarHidden(!chromeShown)
         .onAppear {
@@ -148,6 +150,7 @@ struct MediaViewer: View {
         }
         .sheet(item: $forwardMessage) { m in
             ForwardSheet(token: token, message: m) { forwardMessage = nil }
+                .tfColorScheme() // the app's scheme, not the dark viewer's it is presented from
         }
         .sheet(item: $shareFile) { f in
             ActivityShare(items: [f.url]).ignoresSafeArea()

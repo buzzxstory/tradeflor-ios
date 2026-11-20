@@ -246,11 +246,13 @@ struct CalendarView: View {
                 MultiPickSheet(title: NSLocalizedString("cal.currencies", comment: ""),
                                options: seenCurrencies.map { c in (c, c, n[c] ?? 0) },
                                selection: $currencies)
+                    .tfColorScheme()
             } else {
                 let n = Dictionary(dayEvents.map { ($0.country_code.uppercased(), 1) }, uniquingKeysWith: +)
                 MultiPickSheet(title: NSLocalizedString("cal.countries", comment: ""),
                                options: countryOptions.map { c in (c.code, Self.flag(c.code) + "  " + c.name, n[c.code] ?? 0) },
                                selection: $countries)
+                    .tfColorScheme()
             }
         }
         .sheet(isPresented: $pickingDay) {
@@ -268,6 +270,7 @@ struct CalendarView: View {
             .background(Theme.ground.ignoresSafeArea())
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
+            .tfColorScheme()
         }
     }
 

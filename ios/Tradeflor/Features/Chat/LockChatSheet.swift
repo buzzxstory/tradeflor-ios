@@ -66,10 +66,12 @@ struct LockChatSheet: View {
         }
         .sheet(isPresented: $needUnlock) {
             UnlockSheet(token: token) { Task { await finish() } }
+                .tfColorScheme()
         }
         .sheet(isPresented: $needPIN) {
             // the PIN form is still closing: asking for the unlock sheet now was dropped by iOS (the tap seemed to do nothing)
             SetLockPINView { Task { try? await Task.sleep(nanoseconds: 700_000_000); await go() } }
+                .tfColorScheme()
         }
     }
 

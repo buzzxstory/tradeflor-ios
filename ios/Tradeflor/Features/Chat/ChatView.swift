@@ -157,11 +157,12 @@ struct ChatView: View {
     @State private var pendingCountSeen = 0
     /// Group Info left or deleted this group: the chat closes once the sheet has gone.
     @State private var groupGone = false
-    // hold-to-record voice: press = record, release = send, slide left = cancel, slide up = lock (hands free)
-    @State private var micPressed = false
+    // hold-to-record voice: press = record, release = send, slide left = cancel, slide up = lock (hands free).
+    // HoldMicButton keeps the press itself; the finger's position is in `hold`, watched only by the button and the strip
+    // (a finger move no longer redraws the chat). `holdRec` stays here: it swaps the message bar for the strip, and
+    // changes only when a hold starts or ends.
     @State private var holdRec = false
-    @State private var holdReleased = false
-    @State private var holdDrag: CGSize = .zero
+    @State private var hold = HoldDragBox()
     @State private var focusPages: [Message] = []
     @State private var focusShowAll = false
     @State private var showFocus = false
@@ -295,7 +296,7 @@ struct ChatView: View {
             let hitID: String? = hits.indices.contains(searchIndex) ? hits[searchIndex].id : nil
             let replyPhotos = derived.replyPhotos(messages) { replyPhotoIDs }
             ForEach(Array(rows.enumerated()), id: \.element.id) { i, m in
-                messageRow(m, i, rows, albums, lookIDs, hitID, replyPhotos)
+                messageRow(m, i, rows, albums, lookIDs, hitID, replyPhotos, proxy)
             }
             ForEach(pending) { p in
                 pendingRow(p)
@@ -316,7 +317,8 @@ struct ChatView: View {
 
     /// One message (with the day label and the unread line above it when they belong there).
     @ViewBuilder private func messageRow(_ m: Message, _ i: Int, _ rows: [Message], _ albums: Albums.Runs,
-                                         _ lookIDs: Set<String>, _ hitID: String?, _ replyPhotos: [String: String]) -> some View {
+                                         _ lookIDs: Set<String>, _ hitID: String?, _ replyPhotos: [String: String],
+                                         _ proxy: ScrollViewProxy) -> some View {
         if i == 0 || !sameDay(rows[i - 1], m) {
             DayDivider(date: m.date)
         }
@@ -325,24 +327,66 @@ struct ChatView: View {
         }
         if albums.hidden.contains(m.id) {
             // drawn inside its album
-            Color.clear.frame(height: 0).id(m.id).onAppear { if !flags.unseenBelow.isEmpty { seen(m.id) } }
+            Color.clear.frame(height: 0).id(m.id).onAppear {
+                if !flags.unseenBelow.isEmpty { seen(m.id) }
+                olderSoon(i, proxy)
+            }
         } else {
             let asGroup = isGroup && roleOf(m.sender_id) == "owner"
-            MessageRow(message: m, mine: m.sender_id == me, myID: me, peerName: chat.title,
-                       senderName: isGroup && (m.sender_id != me || asGroup) && newBlock(rows, i)
-                           ? (asGroup ? chat.title : (memberNames[m.sender_id] ?? "")) : nil,
-                       onReply: { replyingTo = m; composerFocused = true },
-                       onReact: { e in Task { await react(m, e) } },
-                       onCopy: { UIPasteboard.general.string = displayText(m); flash("chat.copied") },
-                       onForward: { forwarding = m },
-                       onDelete: { _ in deleteTargets = [m]; showDelete = true },
-                       options: rowOptions(m, i, rows, albums, lookIDs, hitID, replyPhotos, asGroup: asGroup),
-                       actions: rowActions(m, albums, asGroup: asGroup)) {
-                rowContent(m, albums)
-            }
+            let mine = m.sender_id == me
+            let senderName: String? = isGroup && (m.sender_id != me || asGroup) && newBlock(rows, i)
+                ? (asGroup ? chat.title : (memberNames[m.sender_id] ?? "")) : nil
+            let options = rowOptions(m, i, rows, albums, lookIDs, hitID, replyPhotos, asGroup: asGroup)
+            let actions = rowActions(m, albums, asGroup: asGroup)
+            // skipped when nothing it draws has changed (ChatRowCell): a change elsewhere in the chat no longer rebuilds
+            // every bubble
+            ChatRowCell(key: rowKey(m, albums, mine: mine, senderName: senderName, options: options, actions: actions),
+                        row: MessageRow(message: m, mine: mine, myID: me, peerName: chat.title,
+                                        senderName: senderName,
+                                        onReply: { replyingTo = m; composerFocused = true },
+                                        onReact: { e in Task { await react(m, e) } },
+                                        onCopy: { UIPasteboard.general.string = displayText(m); flash("chat.copied") },
+                                        onForward: { forwarding = m },
+                                        onDelete: { _ in deleteTargets = [m]; showDelete = true },
+                                        options: options,
+                                        actions: actions) {
+                            rowContent(m, albums)
+                        })
+            .equatable()
             .id(m.id)
-            .onAppear { if !flags.unseenBelow.isEmpty { seen(m.id) } }
+            .onAppear {
+                flags.onScreen.insert(m.id)
+                if !flags.unseenBelow.isEmpty { seen(m.id) }
+                olderSoon(i, proxy)
+            }
+            .onDisappear { flags.onScreen.remove(m.id) }
         }
+    }
+
+    /// Everything a row draws, beyond its closures (see ChatRowCell): the message, the row's options, which actions
+    /// exist, and what its content reads from the chat (names and pictures, view-once tick, poll rights, call back, theme).
+    private func rowKey(_ m: Message, _ albums: Albums.Runs, mine: Bool, senderName: String?,
+                        options o: MessageRowOptions, actions a: MessageRowActions) -> ChatRowKey {
+        ChatRowKey(message: m, album: albums.at[m.id], mine: mine, me: me, peerName: chat.title, senderName: senderName,
+                   isGroup: o.isGroup, restricted: o.restricted, canPin: o.canPin, pinned: o.pinned,
+                   selecting: o.selecting, selected: o.selected, highlighted: o.highlighted, roleTag: o.roleTag,
+                   asGroup: o.asGroup, hasAvatar: o.senderAvatar != nil, avatarSlot: o.avatarSlot, handle: o.handle,
+                   replySenderName: o.replySenderName, replyPhotoID: o.replyPhotoID, token: o.token, ownMenu: o.ownMenu,
+                   canSave: a.save != nil, canOpenSender: a.openSender != nil, canOpenReply: a.openReply != nil,
+                   canEdit: a.edit != nil,
+                   senderAvatarID: memberAvatars[m.sender_id], senderTitle: memberNames[m.sender_id],
+                   peerAvatarID: chat.peer_avatar_id, onceTick: onceTick, chatRestricted: restricted,
+                   canVote: canPost || (isGroup && groupCanReact), callBack: calls.enabled && !isGroup,
+                   themeID: themeID, scheme: appScheme)
+    }
+
+    /// One of the first rows came into view: the page before starts loading now, before the reader reaches the top
+    /// (one load at a time, never past the start, never while the chat is still opening at its end).
+    private func olderSoon(_ i: Int, _ proxy: ScrollViewProxy) {
+        guard i < 8, !reachedStart, !loadingOlder, openedAtEnd, !flags.bottomVisible,
+              Date().timeIntervalSince(openedAtTime) > 1.5 else { return }
+        flags.userScrolledUp = true
+        Task { await loadOlder(proxy) }
     }
 
     private func rowOptions(_ m: Message, _ i: Int, _ rows: [Message], _ albums: Albums.Runs, _ lookIDs: Set<String>,
@@ -721,13 +765,15 @@ struct ChatView: View {
             if isGroup {
                 GroupInfoView(groupID: chat.conversation_id, onGone: { groupGone = true })
                     .environmentObject(store).environmentObject(live)
+                    .tfColorScheme()
             } else {
                 ContactInfoView(chat: chat, onSearch: { showInfo = false; searchOpen = true })
                     .environmentObject(store).environmentObject(live)
+                    .tfColorScheme()
             }
         }
-        .sheet(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft) }
-        .sheet(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store) }
+        .sheet(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft).tfColorScheme() }
+        .sheet(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store).tfColorScheme() }
         .fullScreenCover(isPresented: $addingGroupStatus) {
             StatusCreatorSheet(onPosted: { Task { await loadGroupStatus() } }, groupID: chat.conversation_id, groupName: chat.title)
                 .environmentObject(store)
@@ -791,6 +837,7 @@ struct ChatView: View {
                     Task { await loadFocusPages() }
                 }
                 .environmentObject(store)
+                .tfColorScheme()
             }
         }
         .fullScreenCover(isPresented: $showNoteRecorder) {
@@ -802,6 +849,7 @@ struct ChatView: View {
         }
         .sheet(item: $forwarding) { m in
             ForwardSheet(token: token, message: m) { forwarding = nil }
+                .tfColorScheme()
         }
         .sheet(isPresented: $showPoll) {
             PollComposer { q, opts, multi in
@@ -812,6 +860,7 @@ struct ChatView: View {
                 } catch APIError.refused(let why) { return why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why
                 } catch { return NSLocalizedString("chat.action.failed", comment: "") }
             }
+            .tfColorScheme()
         }
         .sheet(isPresented: $showSignal) {
             SignalComposer { sym, dir, entry, sl, tp in
@@ -823,13 +872,16 @@ struct ChatView: View {
                 } catch APIError.refused(let why) { return why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why
                 } catch { return NSLocalizedString("chat.action.failed", comment: "") }
             }
+            .tfColorScheme()
         }
         .sheet(item: $commentsFor) { m in
             CommentsSheet(token: token, groupID: chat.conversation_id, postID: m.id, me: me, isAdmin: isAdmin, names: memberNames)
+                .tfColorScheme()
         }
         .overlay { emojiLayer }
         .sheet(isPresented: $showLocationSheet) {
             ShareLocationSheet { minutes in location.start(token: token, conversationID: chat.conversation_id, minutes: minutes) }
+                .tfColorScheme()
         }
         .photosPicker(isPresented: $showPhotoPicker, selection: $picked, maxSelectionCount: 30, matching: .any(of: [.images, .videos]))
         .fileImporter(isPresented: $showDocPicker, allowedContentTypes: [.item]) { result in
@@ -923,7 +975,7 @@ struct ChatView: View {
                     Task { await deliver(p) }
                 }
             }
-            Task { await loadNewest(quiet: true) }
+            Task { await loadNewest(quiet: true, prune: true) }
         }
         .onChange(of: scenePhase) { p in
             if p == .active { Task { await loadNewest(quiet: true) } }
@@ -1032,6 +1084,7 @@ struct ChatView: View {
         .sheet(isPresented: $showUnlock) {
             UnlockSheet(token: token) { Task { await loadNewest() } }
                 .presentationDetents([.large])
+                .tfColorScheme()
         }
         .fullScreenCover(item: $watching) { v in
             mediaViewer(v)
@@ -1313,7 +1366,7 @@ struct ChatView: View {
         VStack(spacing: 6) {
             HStack(alignment: .center, spacing: 8) {
                 if holdRec {
-                    holdStrip
+                    HoldStrip(meter: recorder.meter, hold: hold)
                 } else {
                 ChatAttachMenu(items: attachMenuItems) {
                     Image(systemName: "plus").font(.system(size: 24, weight: .regular)).foregroundStyle(Theme.muted)
@@ -1380,113 +1433,16 @@ struct ChatView: View {
         .overlay(alignment: .top) { mentionPanel.alignmentGuide(.top) { d in d[.bottom] + 6 } }
     }
 
-    private var holdStrip: some View {
-        HStack(spacing: 10) {
-            HoldClock(meter: recorder.meter)
-            Spacer(minLength: 6)
-            HStack(spacing: 4) {
-                Image(systemName: "chevron.left")
-                Text("chat.voice.slide")
-            }
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(Theme.muted)
-            .opacity(max(0.25, 1 + Double(holdDrag.width) / 140))
-            .offset(x: max(-80, holdDrag.width * 0.6))
-            Spacer(minLength: 6)
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 48)
-        .background(Theme.inputGradient, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(Color.red.opacity(0.6), lineWidth: 1.5))
-    }
-
     private var micButton: some View {
-        Image(systemName: "mic.fill")
-            .font(.system(size: 22, weight: .regular))
-            .foregroundStyle(holdRec ? Color.white : Theme.muted)
-            .frame(width: 44, height: 44)
-            .background(holdRec ? AnyShapeStyle(Color.red) : AnyShapeStyle(Color.clear), in: Circle())
-            .scaleEffect(holdRec ? 1.35 : 1)
-            .offset(x: holdRec ? max(-60, holdDrag.width * 0.4) : 0, y: holdRec ? max(-60, holdDrag.height * 0.4) : 0)
-            .overlay(alignment: .top) {
-                if holdRec {
-                    VStack(spacing: 4) {
-                        Image(systemName: holdDrag.height < -50 ? "lock.fill" : "lock.open")
-                        Image(systemName: "chevron.up")
-                    }
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Theme.text)
-                    .padding(.vertical, 10).padding(.horizontal, 8)
-                    .background(Theme.card, in: Capsule())
-                    .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1))
-                    .offset(y: -96)
-                    .accessibilityLabel(Text("chat.voice.lock"))
-                }
-            }
-            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: holdRec)
-            .contentShape(Circle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { v in
-                        if !micPressed {
-                            micPressed = true
-                            holdReleased = false
-                            holdDrag = .zero
-                            VoicePlayer.shared.stop()
-                            Task {
-                                try? await Task.sleep(nanoseconds: 250_000_000)
-                                guard micPressed, !holdReleased else { return }
-                                holdRec = true
-                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                await recorder.start()
-                                // released (or cancelled) while the microphone was starting
-                                if holdReleased || !holdRec { recorder.cancel(); holdRec = false }
-                            }
-                            return
-                        }
-                        guard holdRec else { return }
-                        holdDrag = CGSize(width: min(0, v.translation.width), height: min(0, v.translation.height))
-                        if holdDrag.width < -120 {
-                            // slide left: cancel
-                            UINotificationFeedbackGenerator().notificationOccurred(.warning)
-                            recorder.cancel()
-                            endHold()
-                        } else if holdDrag.height < -90 {
-                            // slide up: lock, keep recording hands free (the bar with delete / send)
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            endHold()
-                        }
-                    }
-                    .onEnded { _ in
-                        guard micPressed else { return }
-                        micPressed = false
-                        if holdReleased { return } // already cancelled or locked while dragging
-                        let wasHolding = holdRec
-                        holdReleased = true
-                        if wasHolding {
-                            let long = recorder.elapsed >= 0.6
-                            holdRec = false
-                            holdDrag = .zero
-                            if recorder.recording {
-                                if long { Task { await sendVoice() } } else { recorder.cancel(); flash("chat.voice.hold") }
-                            }
-                        } else {
-                            // a quick tap: record hands free (stop with the bar's send / delete)
-                            Task { await recorder.start() }
-                        }
-                    }
-            )
-            .accessibilityLabel(Text("chat.voice.record"))
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { Task { await recorder.start() } }
-            .accessibilityIdentifier("chat.mic")
-    }
-
-    /// Leaves hold mode without touching the recording (cancelled or locked by the caller).
-    private func endHold() {
-        holdRec = false
-        holdDrag = .zero
-        holdReleased = true
+        HoldMicButton(active: $holdRec, hold: hold,
+                      start: { await recorder.start() },
+                      cancel: { recorder.cancel() },
+                      release: {
+                          // let go while holding: a note of 0.6 s or more is sent, a shorter one is dropped with a hint
+                          if recorder.recording {
+                              if recorder.elapsed >= 0.6 { Task { await sendVoice() } } else { recorder.cancel(); flash("chat.voice.hold") }
+                          }
+                      })
     }
 
     // MARK: web parity helpers
@@ -1696,6 +1652,7 @@ struct ChatView: View {
         // people who left or were removed keep their names on old messages, but are not offered for "@"
         formerIDs = Set(list.filter { $0.active == false }.map(\.user_id))
         members = list.map { GroupMember(user_id: $0.user_id, username: $0.username, display_name: $0.display_name) }
+        OutboxStore.noteMembers(conversation: chat.conversation_id, members) // offline "@" texts keep their mentions
         lookAlike = NameSkeleton.lookAlikeIDs(members)
         memberNames = Dictionary(list.map { ($0.user_id, $0.title) }, uniquingKeysWith: { a, _ in a })
         memberRoles = Dictionary(list.filter { $0.role != "member" }.map { ($0.user_id, $0.role) }, uniquingKeysWith: { a, _ in a })
@@ -1904,7 +1861,10 @@ struct ChatView: View {
 
     // MARK: loading
 
-    private func loadNewest(quiet: Bool = false) async {
+    /// `prune`: the catch-up after the socket opened again. Messages hidden or gone meanwhile (deleted for me on another
+    /// device while this one was offline) are then taken away too: what is on screen inside the page's seq range but not
+    /// in the page.
+    private func loadNewest(quiet: Bool = false, prune: Bool = false) async {
         if !quiet { loading = true }
         defer { loading = false }
         do {
@@ -1935,6 +1895,16 @@ struct ChatView: View {
                 // the start of the chat only when the page reaches message 1 or is empty (a page can hold fewer messages when one
                 // could not be read: that alone does not mean the start)
                 reachedStart = page.isEmpty || (page.map(\.seq).min() ?? 2) <= 1
+            }
+            if prune, let lo = page.map(\.seq).min(), let hi = page.map(\.seq).max() {
+                // the page is the server's whole answer for lo...hi: a message there that it no longer returns is gone
+                // (only server messages, seq > 0; never one whose send is still waiting here)
+                let kept = Set(page.map(\.id))
+                let sending = Set(pending.map(\.id))
+                let stale: (Message) -> Bool = { m in
+                    m.seq > 0 && m.seq >= lo && m.seq <= hi && !kept.contains(m.id) && !sending.contains(m.client_key ?? "")
+                }
+                if messages.contains(where: stale) { messages.removeAll(where: stale) }
             }
             merge(page)
             // whole up to the newest message of this page (the gap, if any, was filled above or the list started again)
@@ -1968,7 +1938,7 @@ struct ChatView: View {
                     try? await Task.sleep(nanoseconds: 5_000_000_000)
                     if Task.isCancelled { return }
                     reloadRetry = nil
-                    await loadNewest(quiet: true)
+                    await loadNewest(quiet: true, prune: prune)
                 }
             }
         }
@@ -1980,6 +1950,9 @@ struct ChatView: View {
         defer { loadingOlder = false }
         if let page = try? await APIClient.shared.messages(token: token, conversationID: chat.conversation_id,
                                                            before: first.seq, limit: pageSize) {
+            // the page may come while the reader is still some rows below the first (it starts loading early): the row at
+            // the top of the screen now is the one kept in place, not the first one
+            let anchor = messages.first(where: { flags.onScreen.contains($0.id) })?.id ?? first.id
             // only an empty page above means the start (a page may hold fewer messages when one could not be read)
             reachedStart = page.isEmpty
             merge(page)
@@ -1987,7 +1960,7 @@ struct ChatView: View {
             if let proxy, !flags.bottomVisible {
                 var t = Transaction()
                 t.disablesAnimations = true
-                withTransaction(t) { proxy.scrollTo(first.id, anchor: .top) }
+                withTransaction(t) { proxy.scrollTo(anchor, anchor: .top) }
             }
         }
     }
@@ -1996,13 +1969,46 @@ struct ChatView: View {
     private func merge(_ incoming: [Message]) {
         let incoming = incoming.filter { !$0.isSealed } // a stub of a locked chat is never shown or kept
         guard !incoming.isEmpty else { return }
-        var byID = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        for m in incoming { byID[m.id] = m }
         let now = Int64(Date().timeIntervalSince1970)
         // disappearing messages leave once their time is up (the server erases them too)
-        let next = byID.values.filter { ($0.expires_at ?? 0) == 0 || ($0.expires_at ?? 0) > now }.sorted { $0.seq < $1.seq }
+        let alive: (Message) -> Bool = { ($0.expires_at ?? 0) == 0 || ($0.expires_at ?? 0) > now }
+        let ids = Set(incoming.map(\.id))
+        // the two common cases without rebuilding and sorting the whole list (a receipt or reaction reloads a page of 50):
+        // only when no message on screen has run out (the full pass below also takes those away) and no id comes twice
+        if ids.count == incoming.count, messages.allSatisfy(alive) {
+            // every one new and after the last: added at the end
+            if let lastSeq = messages.last?.seq, incoming.allSatisfy({ $0.seq > lastSeq }),
+               !messages.contains(where: { ids.contains($0.id) }) {
+                let add = incoming.filter(alive).sorted { $0.seq < $1.seq }
+                if !add.isEmpty { messages.append(contentsOf: add) }
+                dropSent(incoming)
+                return
+            }
+            // every one already here, at the same place (same seq): replaced where it stands
+            if incoming.allSatisfy(alive) {
+                var at: [String: Int] = [:]
+                for (i, m) in messages.enumerated() where at[m.id] == nil { at[m.id] = i }
+                if incoming.allSatisfy({ m in at[m.id].map { messages[$0].seq == m.seq } ?? false }) {
+                    var next = messages
+                    var changed = false
+                    for m in incoming {
+                        if let i = at[m.id], next[i] != m { next[i] = m; changed = true }
+                    }
+                    if changed { messages = next }
+                    dropSent(incoming)
+                    return
+                }
+            }
+        }
+        var byID = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for m in incoming { byID[m.id] = m }
+        let next = byID.values.filter(alive).sorted { $0.seq < $1.seq }
         if next != messages { messages = next }
-        // a message that came back from the server (a reload, the live socket) is no longer "sending"
+        dropSent(incoming)
+    }
+
+    /// A message that came back from the server (a reload, the live socket) is no longer "sending".
+    private func dropSent(_ incoming: [Message]) {
         if !pending.isEmpty {
             let keys = Set(incoming.compactMap { $0.client_key })
             if !keys.isEmpty { pending.removeAll { keys.contains($0.id) } }
@@ -2548,6 +2554,64 @@ final class ChatScrollFlags: ObservableObject {
     /// I scrolled by hand (or reached the top) since the end was last reached: nothing pulls me back to the end by itself.
     /// Not published: nothing on screen shows it.
     var userScrolledUp = false
+    /// The message rows on screen now (appeared, not yet gone): an older page keeps the topmost of them in place.
+    /// Not published.
+    var onScreen: Set<String> = []
+}
+
+/// Everything a message row draws that is not a closure (see ChatRowCell). A value left out here would leave a bubble
+/// that never updates: when in doubt, it goes in.
+struct ChatRowKey: Equatable {
+    let message: Message
+    /// An album's photos (each with its own receipts and reactions); nil for any other row.
+    let album: [Message]?
+    let mine: Bool
+    let me: String
+    let peerName: String
+    let senderName: String?
+    // MessageRowOptions, every value field
+    let isGroup: Bool
+    let restricted: Bool
+    let canPin: Bool
+    let pinned: Bool
+    let selecting: Bool
+    let selected: Bool
+    let highlighted: Bool
+    let roleTag: String?
+    let asGroup: Bool
+    let hasAvatar: Bool
+    let avatarSlot: Bool
+    let handle: String?
+    let replySenderName: String?
+    let replyPhotoID: String?
+    let token: String
+    let ownMenu: Bool
+    // MessageRowActions: which optional actions exist
+    let canSave: Bool
+    let canOpenSender: Bool
+    let canOpenReply: Bool
+    let canEdit: Bool
+    // what the content reads from the chat
+    let senderAvatarID: String?
+    let senderTitle: String?
+    let peerAvatarID: String?
+    let onceTick: Int
+    let chatRestricted: Bool
+    let canVote: Bool
+    let callBack: Bool
+    let themeID: String
+    let scheme: ColorScheme
+}
+
+/// A message row that SwiftUI skips (`.equatable()`) while its key is the same. The row's closures are not compared:
+/// they read the chat's state when they run, and are replaced whenever the key changes.
+struct ChatRowCell<Row: View>: View, Equatable {
+    let key: ChatRowKey
+    let row: Row
+
+    var body: some View { row }
+
+    static func == (a: ChatRowCell, b: ChatRowCell) -> Bool { a.key == b.key }
 }
 
 /// What the list works out from its messages (the albums, and the photo behind each reply), kept until the messages
@@ -2710,6 +2774,139 @@ private struct HoldClock: View {
         Circle().fill(Color.red).frame(width: 9, height: 9)
             .opacity(Int(meter.elapsed * 2) % 2 == 0 ? 1 : 0.3)
         Text(VoiceBubble.length(Int64(meter.elapsed * 1000))).monospacedDigit().foregroundStyle(Theme.text)
+    }
+}
+
+/// Where the finger is during a hold-to-record (only the left / up part): watched by the mic button and the strip only,
+/// never by the chat. Main thread only.
+final class HoldDragBox: ObservableObject {
+    @Published var offset: CGSize = .zero
+}
+
+/// The strip shown in place of the message bar while a voice note is held: the running time and "< Slide to cancel",
+/// which follows the finger.
+private struct HoldStrip: View {
+    let meter: VoiceMeter
+    @ObservedObject var hold: HoldDragBox
+
+    var body: some View {
+        HStack(spacing: 10) {
+            HoldClock(meter: meter)
+            Spacer(minLength: 6)
+            HStack(spacing: 4) {
+                Image(systemName: "chevron.left")
+                Text("chat.voice.slide")
+            }
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(Theme.muted)
+            .opacity(max(0.25, 1 + Double(hold.offset.width) / 140))
+            .offset(x: max(-80, hold.offset.width * 0.6))
+            Spacer(minLength: 6)
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 48)
+        .background(Theme.inputGradient, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(Color.red.opacity(0.6), lineWidth: 1.5))
+    }
+}
+
+/// The microphone of the message bar: press and hold = record, let go = `release` (send or drop), slide left = cancel,
+/// slide up = lock (keeps recording hands free); a quick tap records hands free. The press lives here: a finger move
+/// redraws this button and the strip, not the chat. `active` (holding now) is the chat's, which swaps its bar for the strip.
+private struct HoldMicButton: View {
+    @Binding var active: Bool
+    @ObservedObject var hold: HoldDragBox
+    let start: () async -> Void
+    let cancel: () -> Void
+    let release: () -> Void
+    @State private var pressed = false
+    @State private var released = false
+
+    var body: some View {
+        Image(systemName: "mic.fill")
+            .font(.system(size: 22, weight: .regular))
+            .foregroundStyle(active ? Color.white : Theme.muted)
+            .frame(width: 44, height: 44)
+            .background(active ? AnyShapeStyle(Color.red) : AnyShapeStyle(Color.clear), in: Circle())
+            .scaleEffect(active ? 1.35 : 1)
+            .offset(x: active ? max(-60, hold.offset.width * 0.4) : 0, y: active ? max(-60, hold.offset.height * 0.4) : 0)
+            .overlay(alignment: .top) {
+                if active {
+                    VStack(spacing: 4) {
+                        Image(systemName: hold.offset.height < -50 ? "lock.fill" : "lock.open")
+                        Image(systemName: "chevron.up")
+                    }
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Theme.text)
+                    .padding(.vertical, 10).padding(.horizontal, 8)
+                    .background(Theme.card, in: Capsule())
+                    .overlay(Capsule().stroke(Theme.borderStrong, lineWidth: 1))
+                    .offset(y: -96)
+                    .accessibilityLabel(Text("chat.voice.lock"))
+                }
+            }
+            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: active)
+            .contentShape(Circle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { v in
+                        if !pressed {
+                            pressed = true
+                            released = false
+                            hold.offset = .zero
+                            VoicePlayer.shared.stop()
+                            Task {
+                                try? await Task.sleep(nanoseconds: 250_000_000)
+                                guard pressed, !released else { return }
+                                active = true
+                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                await start()
+                                // released (or cancelled) while the microphone was starting
+                                if released || !active { cancel(); active = false }
+                            }
+                            return
+                        }
+                        guard active else { return }
+                        let d = CGSize(width: min(0, v.translation.width), height: min(0, v.translation.height))
+                        hold.offset = d
+                        if d.width < -120 {
+                            // slide left: cancel
+                            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                            cancel()
+                            endHold()
+                        } else if d.height < -90 {
+                            // slide up: lock, keep recording hands free (the bar with delete / send)
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            endHold()
+                        }
+                    }
+                    .onEnded { _ in
+                        guard pressed else { return }
+                        pressed = false
+                        if released { return } // already cancelled or locked while dragging
+                        let wasHolding = active
+                        released = true
+                        if wasHolding {
+                            active = false
+                            hold.offset = .zero
+                            release()
+                        } else {
+                            // a quick tap: record hands free (stop with the bar's send / delete)
+                            Task { await start() }
+                        }
+                    }
+            )
+            .accessibilityLabel(Text("chat.voice.record"))
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { Task { await start() } }
+            .accessibilityIdentifier("chat.mic")
+    }
+
+    /// Leaves hold mode without touching the recording (cancelled or locked by the caller).
+    private func endHold() {
+        active = false
+        hold.offset = .zero
+        released = true
     }
 }
 

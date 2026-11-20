@@ -126,6 +126,8 @@ struct StatusCreatorSheet: View {
             .toolbar(.hidden, for: .navigationBar)
         }
         .environment(\.colorScheme, .dark) // the web's creator is always the dark midnight screen
+        // the status bar too (light clock in day mode); a full-screen cover's own scheme, not the app's beneath
+        .preferredColorScheme(.dark)
         .onChange(of: picked) { list in
             guard !list.isEmpty else { return }
             picked = []
@@ -189,13 +191,15 @@ struct StatusCreatorSheet: View {
                 }
             }
             .presentationDetents([.medium])
+            .tfColorScheme()
         }
-        .sheet(isPresented: $showMusic) { MusicPickerSheet(selection: $music) }
+        .sheet(isPresented: $showMusic) { MusicPickerSheet(selection: $music).tfColorScheme() }
         .sheet(isPresented: Binding(get: { !layoutImages.isEmpty }, set: { if !$0 { layoutImages = [] } })) {
             LayoutBuilder(images: layoutImages) { img in
                 items.append(Item(image: img))
                 layoutImages = []
             }
+            .tfColorScheme()
         }
     }
 

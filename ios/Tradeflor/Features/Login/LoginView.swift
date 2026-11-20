@@ -175,18 +175,6 @@ struct LoginView: View {
     }
 }
 
-private extension View {
-    func fieldStyle() -> some View {
-        self
-            .padding(.horizontal, 14)
-            .frame(minHeight: 50)
-            .foregroundStyle(.white)
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.white.opacity(0.12)))
-    }
-}
-
-
 enum AuthStyle {
     static let navy = Theme.hex(0x0D1F45)
     static let ink2 = Theme.hex(0x2B3A55)

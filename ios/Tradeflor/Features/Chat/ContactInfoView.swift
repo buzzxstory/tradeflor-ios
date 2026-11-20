@@ -105,9 +105,11 @@ struct ContactInfoView: View {
             }
             .sheet(isPresented: $showMute) {
                 MuteSheet(conversationID: chat.conversation_id, name: name) { Task { await loadPrefs() } }
+                    .tfColorScheme()
             }
             .sheet(isPresented: $showLock) {
                 LockChatSheet(conversationID: chat.conversation_id, name: name, locked: locked) { Task { await loadLock() } }
+                    .tfColorScheme()
             }
         }
         .alert(Text("civ3.clear.confirm"), isPresented: $confirmClear) {

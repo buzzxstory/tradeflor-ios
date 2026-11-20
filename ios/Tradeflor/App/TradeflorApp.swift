@@ -181,7 +181,7 @@ struct RootView: View {
                 .accessibilityElement(children: .combine)
             }
         }
-        .fullScreenCover(isPresented: $needsSetup) { IdentitySetupView { needsSetup = false } }
+        .fullScreenCover(isPresented: $needsSetup) { IdentitySetupView { needsSetup = false }.tfColorScheme() }
         .task(id: store.session?.token) {
             // a new account (or one that never finished) still has to pick its @username and get its PIN
             guard let token = store.session?.token else { needsSetup = false; return }

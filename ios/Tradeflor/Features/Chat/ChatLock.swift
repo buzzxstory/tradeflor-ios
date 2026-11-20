@@ -128,7 +128,7 @@ struct UnlockSheet: View {
                 Button { resettingPIN = true } label: {
                     Text("lock.forgot.reset").font(.caption.weight(.semibold)).foregroundStyle(Theme.accent).multilineTextAlignment(.center)
                 }
-                .sheet(isPresented: $resettingPIN) { SetLockPINView() }
+                .sheet(isPresented: $resettingPIN) { SetLockPINView().tfColorScheme() }
                 Spacer()
             }
             .padding(.horizontal, 24)

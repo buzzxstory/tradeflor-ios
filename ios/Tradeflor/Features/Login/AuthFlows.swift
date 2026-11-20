@@ -86,7 +86,7 @@ struct SignUpView: View {
             .navigationTitle(Text("signup.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
-            .sheet(isPresented: $showForgot) { ForgotPasswordView() }
+            .sheet(isPresented: $showForgot) { ForgotPasswordView().preferredColorScheme(.dark) } // as LoginView presents it
             .navigationDestination(isPresented: Binding(get: { pendingUserID != nil }, set: { if !$0 { pendingUserID = nil } })) {
                 if let id = pendingUserID {
                     VerifyEmailView(userID: id, username: cleanUsername, displayName: fullName.trimmingCharacters(in: .whitespaces))
