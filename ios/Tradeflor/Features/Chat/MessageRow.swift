@@ -10,6 +10,9 @@ private let messageRowExpiryFormat: DateFormatter = {
 }()
 
 /// Per-row state from the conversation (the website's message row flags).
+/// WhatsApp's selection green (the checkbox and the tint of the chosen rows).
+let tfSelectGreen = Color(red: 0.12, green: 0.75, blue: 0.38)
+
 struct MessageRowOptions {
     var isGroup = false
     var restricted = false
@@ -81,9 +84,20 @@ struct MessageRow<Content: View>: View {
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             if options.selecting {
-                Image(systemName: options.selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 22)).foregroundStyle(options.selected ? Theme.accent : Theme.faint)
-                    .accessibilityLabel(Text(LocalizedStringKey(options.selected ? "select.deselect" : "select.select")))
+                // WhatsApp's checkbox: a rounded square, green with a white check when chosen
+                ZStack {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(options.selected ? tfSelectGreen : Color.clear)
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(options.selected ? tfSelectGreen : Theme.faint, lineWidth: 2)
+                    if options.selected {
+                        Image(systemName: "checkmark").font(.system(size: 13, weight: .heavy)).foregroundStyle(.white)
+                    }
+                }
+                .frame(width: 24, height: 24)
+                .padding(.trailing, 4)
+                .accessibilityElement()
+                .accessibilityLabel(Text(LocalizedStringKey(options.selected ? "select.deselect" : "select.select")))
             }
             if options.avatarSlot && !mine {
                 Group {
@@ -104,6 +118,12 @@ struct MessageRow<Content: View>: View {
         .onTapGesture { if options.selecting { actions.toggleSelect() } }
         .modifier(SwipeToReply(enabled: !options.selecting && !message.isDeleted && message.kind != "notice" && message.kind != "call", onReply: onReply))
         .background(options.highlighted ? Theme.gold.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+        // the chosen rows are tinted across the whole width, as in WhatsApp
+        .background {
+            if options.selecting && options.selected {
+                tfSelectGreen.opacity(0.16).padding(.horizontal, -14).padding(.vertical, -3)
+            }
+        }
     }
 
     private var column: some View {

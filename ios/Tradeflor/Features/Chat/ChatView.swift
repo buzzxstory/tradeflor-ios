@@ -211,7 +211,7 @@ struct ChatView: View {
     }
 
     @ViewBuilder private var chatHeader: some View {
-        if selecting { selectHead } else { topBar }
+        topBar
         if searchOpen { searchBar }
         if isGroup && (focusDoc?.focus.active ?? false) && !selecting {
             FocusBanner(showingAll: focusShowAll, onToggle: { focusShowAll.toggle() }, onEdit: { showFocus = true })
@@ -1465,33 +1465,49 @@ struct ChatView: View {
     private var selectBar: some View {
         let chosen = messages.filter { selected.contains($0.id) }
         let canCopy = chosen.contains { $0.kind == "text" && !$0.isDeleted }
-        return HStack {
+        return HStack(spacing: 14) {
+            Button { selecting = false; selected = []; allPicked = false } label: {
+                Image(systemName: "xmark").font(.system(size: 20, weight: .regular)).foregroundStyle(Theme.muted)
+                    .frame(width: 40, height: 44).contentShape(Rectangle())
+            }
+            .accessibilityLabel(Text("select.cancel"))
+            Text(String(format: NSLocalizedString("select.count", comment: ""), selected.count))
+                .font(.system(size: 18)).foregroundStyle(Theme.text).lineLimit(1)
+            // everything in the chat (loaded by pages first), as before
+            Button { Task { await selectAll() } } label: {
+                if pickingAll { ProgressView().tint(Theme.accent) } else {
+                    Text(LocalizedStringKey(allSelected ? "select.clear" : "select.all"))
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.accent)
+                }
+            }
+            .disabled(pickingAll)
+            Spacer(minLength: 4)
             Button {
                 if let first = chosen.first { forwarding = first }
                 selecting = false
                 selected = []
                 allPicked = false
-            } label: { Label("chat.forward", systemImage: "arrowshape.turn.up.right") }
+            } label: { Image(systemName: "arrowshape.turn.up.right").font(.system(size: 21)).frame(width: 44, height: 44) }
             .disabled(chosen.isEmpty || restricted)
-            Spacer()
+            .accessibilityLabel(Text("chat.forward"))
             Button {
                 UIPasteboard.general.string = chosen.filter { $0.kind == "text" }.map(\.body).joined(separator: "\n")
                 selecting = false
                 selected = []
                 flash("chat.copied")
-            } label: { Label("chat.copy", systemImage: "doc.on.doc") }
+            } label: { Image(systemName: "doc.on.doc").font(.system(size: 21)).frame(width: 44, height: 44) }
             .disabled(!canCopy || restricted)
-            Spacer()
-            Button(role: .destructive) {
+            .accessibilityLabel(Text("chat.copy"))
+            Button {
                 deleteTargets = chosen
                 showDelete = true
-            } label: { Label("chat.delete", systemImage: "trash") }
+            } label: { Image(systemName: "trash").font(.system(size: 21)).frame(width: 44, height: 44) }
             .disabled(chosen.isEmpty)
+            .accessibilityLabel(Text("chat.delete"))
         }
-        .font(.system(size: 15, weight: .semibold))
-        .foregroundStyle(Theme.accent)
-        .padding(.horizontal, 20)
-        .frame(height: 56)
+        .foregroundStyle(Theme.muted)
+        .padding(.horizontal, 12)
+        .frame(height: 60)
         .background(barColor.ignoresSafeArea(edges: .bottom))
         .overlay(alignment: .top) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
     }
