@@ -121,16 +121,28 @@ final class OutboxFlusher {
                                                                       replyTo: line.replyTo, mentions: mentions, key: line.id)
                         }
                     }
+                    guard tok == token else { return } // signed out while it was on its way: nothing written for that account
                     await remove(acct, conv, line.id)
                     serverFails[line.id] = nil
                 } catch APIError.badCredentials {
                     return // the session is over: the app signs out by itself
                 } catch APIError.decoding {
                     // the server took it (only its answer could not be read)
+                    guard tok == token else { return }
                     await remove(acct, conv, line.id)
                 } catch APIError.locked {
                     break // a locked chat: left for when it is opened
+                } catch is SendDeadlineExceeded {
+                    // a long voice note on a slow uplink: it steps aside, the texts after it go now; tried again on the next
+                    // flush with the same key (audit IOS-MSG-3)
+                    waiting = true
+                    continue
                 } catch {
+                    guard tok == token else { return }
+                    if SendPolicy.decide(error) == .conflict {
+                        // the server says this key was used for another conversation: a client bug, never retried by itself
+                        NSLog("TF outbox: Idempotency-Key %@ already used for another conversation (409); marked Not sent", line.id)
+                    }
                     var passing = error is URLError
                     var serverError = false
                     if let a = error as? APIError {

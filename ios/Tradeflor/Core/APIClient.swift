@@ -30,6 +30,22 @@ enum APIError: Error, Equatable {
     case decoding
 }
 
+/// Read requests (read-all, group read) sent in this app session: the debug count behind the audit's receipt check (opening a
+/// chat with 500 unread messages sends only a few; IOS-MSG-5). Logged in Debug builds.
+enum ReceiptStats {
+    private static let lock = NSLock()
+    private static var sent = 0
+    static var count: Int { lock.lock(); defer { lock.unlock() }; return sent }
+    static func note() {
+        lock.lock()
+        sent += 1
+        #if DEBUG
+        NSLog("TF receipts: read request #%d", sent)
+        #endif
+        lock.unlock()
+    }
+}
+
 /// Talks to the same Go API the website uses. No Origin header is sent (native clients are judged by their token),
 /// and the User-Agent contains "iPhone" so the server's session list labels this device as an iPhone.
 final class APIClient {
@@ -400,9 +416,13 @@ final class APIClient {
         return out
     }
 
-    /// Groups count reads by sequence number (the newest message I have seen).
-    func markGroupRead(token: String, groupID: String, seq: Int64) async {
-        _ = try? await send(request("groups/\(groupID)/read", method: "POST", token: token, body: ["Seq": seq]))
+    /// Groups count reads by sequence number (the newest message I have seen). One request for the whole chat, never one per
+    /// message (audit IOS-MSG-5). true when the server took it.
+    @discardableResult
+    func markGroupRead(token: String, groupID: String, seq: Int64) async -> Bool {
+        ReceiptStats.note()
+        guard let out = try? await send(request("groups/\(groupID)/read", method: "POST", token: token, body: ["Seq": seq])) else { return false }
+        return (200..<300).contains(out.1.statusCode)
     }
 
     func groupAvatar(token: String, groupID: String, avatarID: String) async -> Data? {
@@ -605,7 +625,7 @@ final class APIClient {
         var req = request("messages/file", method: "POST", token: token, body: nil)
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.setValue(key, forHTTPHeaderField: "Idempotency-Key")
-        req.timeoutInterval = 120
+        req.timeoutInterval = 60 // no progress for 60 s: given up, retried with the same key (audit IOS-MSG-3)
         req.httpBody = body
         let (data, http) = try await send(req)
         try check(http, data)
@@ -632,6 +652,8 @@ final class APIClient {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let unlock = unlockToken { req.setValue(unlock, forHTTPHeaderField: "X-Tradeflor-Unlock") }
         guard let out = try? await send(req), out.1.statusCode == 200, !out.0.isEmpty else { return nil }
+        // a download that finished after the sign-out is handed over but kept nowhere (memory or disk)
+        guard AccountGate.isCurrent(token: token) else { return out.0 }
         avatarCache.setObject(out.0 as NSData, forKey: key, cost: out.0.count)
         FileDiskCache.save(key as String, out.0)
         return out.0
@@ -656,10 +678,16 @@ final class APIClient {
         var req = request("messages/voice", method: "POST", token: token, body: nil)
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         req.setValue(key, forHTTPHeaderField: "Idempotency-Key")
-        req.timeoutInterval = 120
+        req.timeoutInterval = 60 // no progress for 60 s: given up (a dead route never hangs the line)
         req.httpBody = body
-        let (data, http) = try await send(req)
-        try check(http, data)
+        // and a whole deadline that grows with the size (web: 120 s + 2 KB/s, at most 15 min): a long note on a slow uplink
+        // throws SendDeadlineExceeded and steps out of the send line, so the texts behind it go (audit IOS-MSG-3)
+        let r = req
+        let data = try await SendDeadline.run(seconds: SendPolicy.voiceDeadline(bytes: body.count)) { [self] () async throws -> Data in
+            let (got, http) = try await self.send(r)
+            try self.check(http, got)
+            return got
+        }
         do { return try JSONDecoder().decode(Message.self, from: data) } catch { throw APIError.decoding }
     }
 
@@ -815,9 +843,14 @@ final class APIClient {
         base.appendingPathComponent("status-media").appendingPathComponent(id)
     }
 
-    func markRead(token: String, conversationID: String) async {
-        _ = try? await send(request("conversations/\(Self.q(conversationID))/read-all", method: "POST", token: token,
-                                    body: ["Silent": false]))
+    /// A private chat: everything read in one request (POST read-all), never a receipt per message (audit IOS-MSG-5).
+    /// true when the server took it.
+    @discardableResult
+    func markRead(token: String, conversationID: String) async -> Bool {
+        ReceiptStats.note()
+        guard let out = try? await send(request("conversations/\(Self.q(conversationID))/read-all", method: "POST", token: token,
+                                                body: ["Silent": false])) else { return false }
+        return (200..<300).contains(out.1.statusCode)
     }
 
     /// A one-minute ticket for the live socket, and the socket address.

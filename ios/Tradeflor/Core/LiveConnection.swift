@@ -82,6 +82,8 @@ final class LiveConnection: ObservableObject {
     private var attempt = 0
     /// Bumped by stop(): a loop from before (still waiting for its URL when it was replaced) never opens a socket.
     private var generation = 0
+    /// Asks for a one-minute ws ticket and returns the socket address (a unit test puts its own answer here).
+    var ticketURL: (String) async throws -> URL = { token in try await APIClient.shared.liveURL(token: token) }
 
     init() {
         path.pathUpdateHandler = { [weak self] p in
@@ -203,7 +205,7 @@ final class LiveConnection: ObservableObject {
         while !Task.isCancelled && gen == generation {
             guard let token else { return }
             do {
-                var url = try await APIClient.shared.liveURL(token: token)
+                var url = try await ticketURL(token)
                 // replaced while asking for the URL (foreground, network change, new login): open nothing -- a socket
                 // opened here would never be closed and keeps answering pings, so the server counts it against the
                 // account (20 at most) and refuses new ones
@@ -226,9 +228,14 @@ final class LiveConnection: ObservableObject {
                 }
                 try await receive(ws)
             } catch APIError.badCredentials {
+                // the session is gone (revoked, or expired: the server closes its socket within 5 minutes and the next ticket
+                // answers 401). One clean sign-out, then nothing: the token is forgotten here, so no foreground probe, network
+                // change or call asks for another ticket with it (audit IOS-NET-2)
                 connected = false
-                if gen == generation { sessionInvalid.send(()) }
-                return // signed out elsewhere
+                guard gen == generation else { return }
+                self.token = nil
+                sessionInvalid.send(())
+                return
             } catch {
                 // fall through to the backoff below
             }

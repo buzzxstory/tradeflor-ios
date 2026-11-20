@@ -45,6 +45,16 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
         if sharing.isEmpty && pendingStart == nil { manager.stopUpdatingLocation() }
     }
 
+    /// The session is gone (a 401): sharing stops on this phone without asking the server, which cannot be told any more (it
+    /// ends the shares of a session that no longer exists).
+    func stopLocally() {
+        pendingStart = nil
+        sharing = []
+        until = [:]
+        lastSent = nil
+        manager.stopUpdatingLocation()
+    }
+
     /// Sign-out: the shares this phone runs end on the server (shares started on another device are that device's), and
     /// the phone stops reading its location.
     func stopAll(token: String) async {

@@ -629,6 +629,8 @@ struct GroupsListView: View {
         let list = await prefsList
         let ex = await extrasMap
         let feed = await statusFeed
+        // signed out while this load was on its way: nothing of that account is shown or counted any more
+        guard !token.isEmpty else { return }
         if let fresh, fresh != groups { groups = fresh }
         if let list {
             let p = Dictionary(list.map { ($0.conversation_id, $0) }, uniquingKeysWith: { a, _ in a })

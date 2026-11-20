@@ -283,8 +283,9 @@ final class ResumableUploader {
                     continue
                 }
 
-                // 4. finish
+                // 4. finish (a file removed with its X after the last chunk is never posted: audit IOS-MSG-3)
                 meter.report(size, size, .finishing)
+                try Task.checkCancellation()
                 let fin = try await finish(token: token, uploadID: id, key: key, caption: caption, replyTo: replyTo, poster: poster)
                 switch fin {
                 case .message(let m):
@@ -339,6 +340,7 @@ final class ResumableUploader {
         } else {
             throw APIError.refused("")
         }
+        try Task.checkCancellation() // removed with its X while the file was read: not sent
         return try await APIClient.shared.sendImage(token: token, conversationID: conversationID, jpeg: bytes, caption: caption,
                                                     key: key, fileName: fileName, mime: mime, poster: poster)
     }

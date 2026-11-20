@@ -80,7 +80,8 @@ enum OutboxStore {
     }
 
     static func save(account: String, conversation: String, _ pending: [PendingMessage]) {
-        guard let url = file(account, conversation) else { return }
+        // an account that is no longer signed in writes nothing (a chat screen closing after the sign-out)
+        guard AccountGate.isCurrent(account: account), let url = file(account, conversation) else { return }
         let entries = pending.filter { !$0.missing && ($0.video == nil || $0.file != nil) }.map { (p: PendingMessage) -> Entry in
             let mentions: [Mention]? = p.audio == nil ? builtMentions(conversation, p.body) : nil
             return Entry(id: p.id, body: p.body, date: p.date, jpeg: p.jpeg, audio: p.audio, durationMs: p.durationMs,
@@ -95,7 +96,19 @@ enum OutboxStore {
             waiting[url] = entries
             guard first else { return }
             queue.asyncAfter(deadline: .now() + 0.3) {
-                if let e = waiting.removeValue(forKey: url) { write(e, url) }
+                // signed out during the 0.3 s: dropped (wipeAll may already have run)
+                if let e = waiting.removeValue(forKey: url), AccountGate.isCurrent(account: account) { write(e, url) }
+            }
+        }
+    }
+
+    /// Sign-out or a revoked session: every account's saved outbox goes, on the outbox's own queue, so a debounced write that
+    /// was still waiting is dropped instead of written after the wipe.
+    static func wipeAll() {
+        queue.sync { () -> Void in
+            waiting.removeAll()
+            if let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+                try? FileManager.default.removeItem(at: dir.appendingPathComponent("outbox", isDirectory: true))
             }
         }
     }
@@ -174,7 +187,8 @@ enum OutboxStore {
     }
 
     private static func mutate(_ account: String, _ conversation: String, _ change: (inout [Entry]) -> Void) {
-        guard let url = file(account, conversation) else { return }
+        // a send that finished after the sign-out changes nothing (and makes no folder for the old account again)
+        guard AccountGate.isCurrent(account: account), let url = file(account, conversation) else { return }
         queue.sync { () -> Void in
             if let e = waiting.removeValue(forKey: url) { write(e, url) }
             guard let data = try? Data(contentsOf: url), var entries = try? JSONDecoder().decode([Entry].self, from: data) else { return }
@@ -254,7 +268,7 @@ enum ChatDrafts {
     }
 
     static func set(account: String, conversation: String, _ text: String) {
-        guard !account.isEmpty else { return }
+        guard AccountGate.isCurrent(account: account) else { return }
         var all = (UserDefaults.standard.dictionary(forKey: key) as? [String: String]) ?? [:]
         let kept: String? = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : String(text.prefix(4000))
         all[name(account, conversation)] = kept

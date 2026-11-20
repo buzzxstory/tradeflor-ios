@@ -97,10 +97,14 @@ struct ChatListView: View {
         let at = ms ? secs * 1000 : secs
         guard at >= c.last_message_at else { return }
         let open = path.last?.conversation_id == c.conversation_id
+        // a `message` update for a message already counted (an edit, or a reply whose quote the server changed after an edit
+        // or a delete-for-everyone: audit IOS-MSG-2) is not a new unread message; a new one in the same second is counted by
+        // the reload that follows
+        let counted = (m.edited_at ?? 0) > 0 || at == c.last_message_at
         let patched = ConversationSummary(
             conversation_id: c.conversation_id, peer_id: c.peer_id, peer_username: c.peer_username,
             peer_display_name: c.peer_display_name, peer_avatar_id: c.peer_avatar_id, last_message: m.body,
-            last_message_at: at, last_message_mine: mine, unread_count: (mine || open) ? c.unread_count : c.unread_count + 1,
+            last_message_at: at, last_message_mine: mine, unread_count: (mine || open || counted) ? c.unread_count : c.unread_count + 1,
             last_message_kind: "text", last_file_type: nil, last_duration_ms: nil, last_message_status: nil,
             last_call_state: nil, disappear_secs: c.disappear_secs)
         var next = chats
@@ -552,6 +556,7 @@ struct ChatListView: View {
     /// The tab badge: unread chats the person can see and has not silenced (BadgeStore.counts, the same rule as the app icon).
     /// The tab's number (chats) and the icon's (messages), from the same rule.
     private func publishBadges() {
+        guard !token.isEmpty else { return } // a load that finished after the sign-out sets no badge for the old account
         let counted = countedChats()
         let n = counted.count
         let m = counted.reduce(0) { $0 + $1.unread_count }

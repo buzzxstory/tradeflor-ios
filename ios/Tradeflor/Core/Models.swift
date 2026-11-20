@@ -72,7 +72,9 @@ struct Message: Decodable, Identifiable, Equatable {
     let reply_to_id: String?
     let reply_sender_id: String?
     let mentions: String?
-    let reply_snippet: String?
+    /// The quote of the message this one answers, as the server stores it now. `var`: an edit or a delete of the quoted
+    /// message changes it on this phone too (MessageMerge.requote), before or without the server's own update.
+    var reply_snippet: String?
     let forwarded: Bool?
     let expires_at: Int64?
     let signal: String?
@@ -109,8 +111,9 @@ struct Message: Decodable, Identifiable, Equatable {
     private static let reactionLock = NSLock()
     private static var reactionMemo: [String: [Reaction]] = [:]
     let duration_ms: Int64?
-    let delivered_at: Int64?
-    let read_at: Int64?
+    /// `var`: ticks never go back (MessageMerge.keepingReceipts keeps the furthest state a copy of this message reached).
+    var delivered_at: Int64?
+    var read_at: Int64?
 
     var date: Date? { serverDate(created_at) }
     var isDeleted: Bool { (deleted_at ?? 0) > 0 }

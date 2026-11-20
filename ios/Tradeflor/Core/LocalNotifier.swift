@@ -222,6 +222,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
 
     private func enteringForeground() {
         endBackgroundTask()
+        sweepCallEndedNotices()
         // the counts and mutes as they are now (the socket may have been asleep); the icon at once, not after the lists
         Task { await refresh() }
     }
@@ -422,6 +423,42 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         }
     }
 
+    /// Calls answered on this phone (newest last, a few): the server's silent "Call ended" alert for them is not shown here.
+    private var answeredHere: [String] = []
+
+    /// This phone answered `callID`: the server sends every alert device of this account a silent "Call ended" (same
+    /// identifier as the call's "Incoming call") at that very moment, this phone included (contract section 7). It is
+    /// taken away as it lands; in front it is never shown anyway (willPresent shows no remote push).
+    func callAnsweredHere(callID: String) {
+        guard !callID.isEmpty else { return }
+        if !answeredHere.contains(callID) {
+            answeredHere.append(callID)
+            if answeredHere.count > 20 { answeredHere.removeFirst(answeredHere.count - 20) }
+        }
+        Task {
+            let bg = BackgroundTaskBox()
+            bg.id = UIApplication.shared.beginBackgroundTask(withName: "tf.callended") { bg.end() }
+            for ms in [0, 1_500, 4_000, 8_000, 15_000] as [UInt64] {
+                if ms > 0 { try? await Task.sleep(nanoseconds: ms * 1_000_000) }
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [callID])
+            }
+            bg.end()
+        }
+    }
+
+    /// Back in front: a "Call ended" alert for a call answered here that landed while the app was suspended goes.
+    private func sweepCallEndedNotices() {
+        let ids = Set(answeredHere)
+        guard !ids.isEmpty else { return }
+        let c = UNUserNotificationCenter.current()
+        c.getDeliveredNotifications { list in
+            let gone = list.filter { NotificationRouting.isCallEndedNotice(identifier: $0.request.identifier,
+                                                                          info: $0.request.content.userInfo, forCalls: ids) }
+                .map(\.request.identifier)
+            if !gone.isEmpty { c.removeDeliveredNotifications(withIdentifiers: gone) }
+        }
+    }
+
     /// Clears a chat's notifications once it is opened.
     func clear(conversation: String) {
         unread.remove(conversation)
@@ -471,6 +508,9 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     }
 
     private func handle(action: String, info: [String: Any], text: String?) async {
+        // a remote notice of an account no longer signed in here (its subscription id is not one this account was given):
+        // the tap only opens the app; no chat of another account opens, no Reply or Mark as Read is sent for it
+        guard NotificationRouting.belongsToCurrentAccount(info, knownSubscriptionIDs: PushKeys.knownIDs()) else { return }
         // a local notification carries the chat id itself; a remote one may carry it inside "tf" (never for a locked chat)
         let conv = (info["conversation_id"] as? String) ?? ((info["tf"] as? [String: Any])?["conversation_id"] as? String)
         switch action {
@@ -534,6 +574,27 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             completionHandler()
             bg.end()
         }
+    }
+}
+
+/// Decisions about delivered notifications that need nothing but their content (unit-tested: NotificationRoutingTests).
+enum NotificationRouting {
+    /// The server's silent "Call ended" alert (tf.kind "call-ended", identifier = the call id) for one of `calls`.
+    static func isCallEndedNotice(identifier: String, info: [AnyHashable: Any], forCalls calls: Set<String>) -> Bool {
+        let tf = info["tf"] as? [String: Any]
+        guard (tf?["kind"] as? String) == "call-ended" else { return false }
+        let call = (tf?["call_id"] as? String) ?? identifier
+        return calls.contains(call)
+    }
+
+    /// A notice may open a chat (or Reply / Mark as Read) only if it belongs to the account signed in now. A remote notice
+    /// carries no user id, only the subscription id (`tf.id`) it was sent to: it must be one this account was given on
+    /// this phone. A local notice was made by this account (all are removed at sign-out). A remote notice without an id
+    /// (an older payload) behaves as before.
+    static func belongsToCurrentAccount(_ info: [String: Any], knownSubscriptionIDs: Set<String>) -> Bool {
+        guard let tf = info["tf"] as? [String: Any] else { return true }
+        guard let id = tf["id"] as? String, !id.isEmpty else { return true }
+        return knownSubscriptionIDs.contains(id)
     }
 }
 

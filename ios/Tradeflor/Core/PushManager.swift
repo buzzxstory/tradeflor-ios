@@ -234,10 +234,49 @@ private func onMainNow(_ body: @MainActor () -> Void) {
 enum PushKeys {
     private static let service = "com.tradeflor.ios.push"
 
+    /// The id and secret of the latest register answer are the ones kept (a newer server returns the same pair for the same
+    /// account and token; an older one a new pair every time).
     static func save(_ kind: String, id: String, secret: String) {
         guard let data = try? JSONEncoder().encode(["id": id, "secret": secret]) else { return }
         delete(kind)
         SecItemAdd([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: kind,
+                    kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+                    kSecValueData as String: data] as CFDictionary, nil)
+        remember(id)
+    }
+
+    /// Every subscription id this account was given on this phone since it signed in (the older server hands out a new one
+    /// on each registration, so a notice delivered before the latest one carries an older id). A notice tapped is routed
+    /// only if its tf.id is one of these (NotificationRouting.belongsToCurrentAccount). Emptied at sign-out (clear()).
+    static func knownIDs() -> Set<String> {
+        var ids = Set(loadHistory())
+        // a build from before this list kept only the current pair
+        for kind in ["alert", "voip"] { if let id = load(kind)?["id"], !id.isEmpty { ids.insert(id) } }
+        return ids
+    }
+
+    private static let historyAccount = "ids"
+
+    private static func loadHistory() -> [String] {
+        var out: AnyObject?
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                kSecAttrAccount as String: historyAccount, kSecReturnData as String: true,
+                                kSecMatchLimit as String: kSecMatchLimitOne]
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return [] }
+        return (try? JSONDecoder().decode([String].self, from: data)) ?? []
+    }
+
+    private static func remember(_ id: String) {
+        guard !id.isEmpty else { return }
+        var list = loadHistory()
+        guard list.last != id else { return }
+        list.removeAll { $0 == id }
+        list.append(id)
+        if list.count > 40 { list.removeFirst(list.count - 40) }
+        guard let data = try? JSONEncoder().encode(list) else { return }
+        delete(historyAccount)
+        SecItemAdd([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                    kSecAttrAccount as String: historyAccount,
                     kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
                     kSecValueData as String: data] as CFDictionary, nil)
     }
@@ -255,7 +294,7 @@ enum PushKeys {
                        kSecAttrAccount as String: kind] as CFDictionary)
     }
 
-    static func clear() { delete("alert"); delete("voip") }
+    static func clear() { delete("alert"); delete("voip"); delete(historyAccount) }
 }
 
 /// Receives the system's token callbacks and starts push when the app is launched (also in the background by a push).

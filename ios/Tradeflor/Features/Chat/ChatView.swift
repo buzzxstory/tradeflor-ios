@@ -109,6 +109,8 @@ struct ChatView: View {
     /// Text and voice waiting to leave, in writing order (one at a time per conversation).
     @State private var sendQueue: [String] = []
     @State private var queueRunning = false
+    /// Voice notes that ran past their deadline, held out of the line until this time (the texts after them go first).
+    @State private var lineHold: [String: Date] = [:]
     /// The chat screen is not on screen: its line stops sending (OutboxFlusher takes over from the saved outbox).
     @State private var gone = false
     /// Server errors (5xx) seen per queued message: after five it is "Not sent" and the line goes on.
@@ -168,12 +170,16 @@ struct ChatView: View {
     @State private var showFocus = false
     /// A burst of incoming messages sends one read receipt, and a burst of changes reloads the page once.
     @State private var seenTask: Task<Void, Never>?
+    /// The newest message from someone else that the server has marked read (-1: nothing sent yet on this screen).
+    @State private var markedUpTo: Int64 = -1
     @State private var changeReload: Task<Void, Never>?
     /// Every message up to this seq is on screen (0: not known yet). Moved by page loads, and by a live message only when
     /// it is the very next one: a live message that arrives before the catch-up page must not hide the gap behind it.
     @State private var wholeUpTo: Int64 = 0
     /// The one retry of a quiet reload that failed (never more than one waiting).
     @State private var reloadRetry: Task<Void, Never>?
+    /// The oldest message shown from ChatMemo: the first load reads back down to it (Int64.max: nothing to read back).
+    @State private var memoFloor: Int64 = Int64.max
     private var focusOn: Bool { isGroup && (focusDoc?.focus.active ?? false) && !focusShowAll }
     /// What the list shows: everything, or (Smart Focus) the server's filtered history plus matching live messages.
     private var shown: [Message] {
@@ -960,11 +966,16 @@ struct ChatView: View {
         }
         .task {
             // the messages this chat showed last time (this app session, memory only): on screen at once, as in WhatsApp
-            if messages.isEmpty, let seen = ChatMemo.get(chat.conversation_id), !seen.isEmpty {
+            var fromMemo = false
+            if messages.isEmpty, let seen = ChatMemo.get(account: me, chat.conversation_id), !seen.isEmpty {
                 merge(seen)
                 wholeUpTo = seen.last?.seq ?? 0 // the memo only keeps the part known to be whole
+                // the first load reads the server's copy of every remembered message again (pruned): an edit, a deletion
+                // or a quote that changed while the chat was closed never stays on screen from the memo (IOS-MSG-2, SYNC-2)
+                memoFloor = seen.first?.seq ?? Int64.max
+                fromMemo = true
             }
-            await loadNewest()
+            await loadNewest(prune: fromMemo)
         }
         // after a dropped connection or a return to the app: catch up so nothing sent meanwhile is missing
         .onReceive(live.opened) { _ in
@@ -1109,7 +1120,8 @@ struct ChatView: View {
         .onDisappear {
             // only the part known to be whole is remembered (a live message beyond a gap is not: the next load fills it)
             let whole = wholeUpTo > 0 ? messages.filter { $0.seq <= wholeUpTo } : []
-            if !locked && !whole.isEmpty { ChatMemo.put(chat.conversation_id, Array(whole.suffix(80))) }
+            // one page: the first load when the chat opens again reads all of it back from the server
+            if !locked && !whole.isEmpty { ChatMemo.put(account: me, chat.conversation_id, Array(whole.suffix(pageSize))) }
             reloadRetry?.cancel()
             reloadRetry = nil
             TabChrome.shared.conversationClosed()
@@ -1876,7 +1888,9 @@ struct ChatView: View {
             // measured from the last message known to be whole, not from the last one on screen: a live message that came in
             // before this page (right after a reconnect) is newer than the gap and would hide it for good
             let known = wholeUpTo
-            if known > 0, !messages.isEmpty, let oldest = page.map(\.seq).min(), oldest > known + 1 {
+            // and, right after the memo was shown, down to its oldest message: every remembered one is read back
+            let readBack = min(known + 1, memoFloor)
+            if known > 0, !messages.isEmpty, let oldest = page.map(\.seq).min(), oldest > readBack {
                 var cursor = oldest
                 var met = false
                 for _ in 0..<10 {
@@ -1885,7 +1899,7 @@ struct ChatView: View {
                     guard let low = older.map(\.seq).min() else { met = true; break } // nothing older: the range is whole
                     page = older + page
                     cursor = low
-                    if low <= known + 1 { met = true; break }
+                    if low <= readBack { met = true; break }
                 }
                 if !met {
                     // too long a gap: start again from the newest messages (older ones load as the reader scrolls up)
@@ -1911,6 +1925,7 @@ struct ChatView: View {
             merge(page)
             // whole up to the newest message of this page (the gap, if any, was filled above or the list started again)
             if let top = page.map(\.seq).max() { wholeUpTo = max(wholeUpTo, top) }
+            memoFloor = Int64.max // the memo's messages were read back
             reloadRetry?.cancel()
             reloadRetry = nil
             if !unreadMarkSet && !page.isEmpty {
@@ -1986,7 +2001,8 @@ struct ChatView: View {
                 dropSent(incoming)
                 return
             }
-            // every one already here, at the same place (same seq): replaced where it stands
+            // every one already here, at the same place (same seq): replaced where it stands (a `message` update for a known
+            // id always replaces the copy: a new quote, an edit, a deletion, reactions; audit IOS-MSG-2)
             if incoming.allSatisfy(alive) {
                 var at: [String: Int] = [:]
                 for (i, m) in messages.enumerated() where at[m.id] == nil { at[m.id] = i }
@@ -1994,17 +2010,24 @@ struct ChatView: View {
                     var next = messages
                     var changed = false
                     for m in incoming {
-                        if let i = at[m.id], next[i] != m { next[i] = m; changed = true }
+                        guard let i = at[m.id] else { continue }
+                        // ticks never go back: an older copy arriving late keeps the receipts already shown
+                        let kept = MessageMerge.keepingReceipts(old: next[i], new: m)
+                        if next[i] != kept { next[i] = kept; changed = true }
                     }
-                    if changed { messages = next }
+                    // replies on screen lose the quote of a message deleted for everyone, or take its edited text (also when
+                    // the server, before its 2026-11-20 change, still sends the old quote)
+                    if let requoted = MessageMerge.requote(next, after: next) { next = requoted; changed = true }
+                    if changed && next != messages { messages = next }
                     dropSent(incoming)
                     return
                 }
             }
         }
         var byID = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        for m in incoming { byID[m.id] = m }
-        let next = byID.values.filter(alive).sorted { $0.seq < $1.seq }
+        for m in incoming { byID[m.id] = byID[m.id].map { MessageMerge.keepingReceipts(old: $0, new: m) } ?? m }
+        var next = byID.values.filter(alive).sorted { $0.seq < $1.seq }
+        if let requoted = MessageMerge.requote(next, after: next) { next = requoted }
         if next != messages { messages = next }
         dropSent(incoming)
     }
@@ -2014,6 +2037,15 @@ struct ChatView: View {
         if !pending.isEmpty {
             let keys = Set(incoming.compactMap { $0.client_key })
             if !keys.isEmpty { pending.removeAll { keys.contains($0.id) } }
+        }
+        // deleted for everyone: its pin leaves the bar now (the server also sends a `group` update, which re-reads the pins),
+        // and an open comments sheet of a deleted group post closes (the server deleted its comments; audit IOS-SYNC-2)
+        if !pins.isEmpty || commentsFor != nil {
+            let deleted = Set(incoming.filter(\.isDeleted).map(\.id))
+            if !deleted.isEmpty {
+                if pins.contains(where: { deleted.contains($0.message_id) }) { pins.removeAll { deleted.contains($0.message_id) } }
+                if let c = commentsFor, deleted.contains(c.id) { commentsFor = nil }
+            }
         }
     }
 
@@ -2208,11 +2240,18 @@ struct ChatView: View {
         // only while the app is in front: a reload in the background (a call's push reopening the socket, a change event
         // just after leaving the app) must not mark as read what nobody saw
         guard UIApplication.shared.applicationState == .active else { return }
+        // one request for the whole chat (read-all / group read, never a receipt per message), and none at all when nobody
+        // else wrote since the last one the server took: a reload for a receipt or a reaction no longer sends one (IOS-MSG-5)
+        let newest = messages.last(where: { $0.sender_id != me })?.seq ?? 0
+        guard ReadMark.due(newestIncoming: newest, marked: markedUpTo) else { return }
+        let ok: Bool
         if isGroup {
-            if let last = messages.last { await APIClient.shared.markGroupRead(token: token, groupID: chat.conversation_id, seq: last.seq) }
+            guard let last = messages.last else { return }
+            ok = await APIClient.shared.markGroupRead(token: token, groupID: chat.conversation_id, seq: last.seq)
         } else {
-            await APIClient.shared.markRead(token: token, conversationID: chat.conversation_id)
+            ok = await APIClient.shared.markRead(token: token, conversationID: chat.conversation_id)
         }
+        if ok { markedUpTo = max(markedUpTo, newest) }
     }
 
     private func react(_ m: Message, _ emoji: String) async {
@@ -2258,6 +2297,7 @@ struct ChatView: View {
             return
         }
         guard let i = pending.firstIndex(where: { $0.id == key }) else { return } // removed while it was prepared
+        guard AccountGate.isCurrent(account: me) else { return } // signed out meanwhile: no file kept for that account
         // sent like a video (kept as a file, same key on every retry, kept by the outbox across a restart); its own file
         // name is what makes it a video note, so it is kept with the pending row
         if let kept = ResumableUploader.keep(out.data, key: key, ext: "mp4") {
@@ -2312,6 +2352,7 @@ struct ChatView: View {
         }
         let out = (data: vdata, seconds: vseconds)
         guard let i = pending.firstIndex(where: { $0.id == key }) else { return } // cancelled (the X) while it was prepared
+        guard AccountGate.isCurrent(account: me) else { return } // signed out meanwhile: no file kept for that account
         // written once to a file kept on this device: sent in chunks from it when 4 MB or more (resumed after a drop, and by
         // Retry or the outbox after a restart, same key); kept in memory only if the file cannot be written
         if let kept = ResumableUploader.keep(out.data, key: key, ext: "mp4") {
@@ -2344,7 +2385,9 @@ struct ChatView: View {
     }
 
     /// Same idempotency key on every retry, so a message that did reach the server is never stored twice.
-    private enum SendOutcome { case sent, wait, failed }
+    /// `later`: a voice note ran past its deadline; it steps out of the line for a while (SendPolicy.laterHold) and the
+    /// messages behind it go first.
+    private enum SendOutcome { case sent, wait, failed, later }
 
     /// Text and voice are "lines": they leave one at a time per conversation, in the order they were written, so fast
     /// typing arrives in order (web 582418a). Photos, videos and documents keep their own uploads.
@@ -2360,7 +2403,10 @@ struct ChatView: View {
             sendQueue.sort { (order[$0] ?? .distantFuture) < (order[$1] ?? .distantFuture) }
             if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = false; pending[i].refused = false }
             // only the Retry button cuts a wait short (a new message does not: the server's Retry-After still stands)
-            if retry && queueRunning { queueWait?.cancel() }
+            if retry {
+                lineHold[p.id] = nil // a voice note that stepped aside goes again now
+                if queueRunning { queueWait?.cancel() }
+            }
             await runQueue()
         } else {
             _ = await sendOne(p, queued: false)
@@ -2374,8 +2420,25 @@ struct ChatView: View {
         queueRunning = true
         defer { queueRunning = false }
         var backoff: UInt64 = 1
-        while let id = sendQueue.first, !gone, !Task.isCancelled {
-            guard let p = pending.first(where: { $0.id == id }) else { sendQueue.removeFirst(); continue }
+        while !sendQueue.isEmpty, !gone, !Task.isCancelled {
+            guard let id = SendPolicy.nextInLine(sendQueue, held: lineHold, now: Date()) else {
+                // every message waiting is a voice note that stepped aside: wait until the first one may go again
+                let until = sendQueue.compactMap { lineHold[$0] }.min() ?? Date()
+                let secs = max(0.5, until.timeIntervalSinceNow)
+                let t = Task<Void, Never> { _ = try? await Task.sleep(nanoseconds: UInt64(secs * 1_000_000_000)) }
+                queueWait = t
+                await t.value
+                queueWait = nil
+                if gone || Task.isCancelled { return }
+                // Retry (or a reconnect) cut the wait short: the hold no longer stands
+                for held in sendQueue where (lineHold[held] ?? .distantPast) > Date() { lineHold[held] = nil }
+                continue
+            }
+            guard let p = pending.first(where: { $0.id == id }) else {
+                sendQueue.removeAll { $0 == id }
+                lineHold[id] = nil
+                continue
+            }
             let outcome = await sendOne(p, queued: true)
             // the screen went away meanwhile (a cancelled request looks like a lost connection): nothing is dropped, the
             // message stays in the saved outbox for OutboxFlusher
@@ -2383,7 +2446,11 @@ struct ChatView: View {
             switch outcome {
             case .sent, .failed:
                 sendQueue.removeAll { $0 == id }
+                lineHold[id] = nil
                 backoff = 1
+            case .later:
+                // stays in the line, held back: the texts written after it go now (audit IOS-MSG-3)
+                lineHold[id] = Date().addingTimeInterval(SendPolicy.laterHold)
             case .wait:
                 // never sooner than the server's Retry-After; a little jitter so devices don't retry together
                 let after = APIClient.shared.lastRetryAfter
@@ -2407,6 +2474,11 @@ struct ChatView: View {
     private func sendOneNow(_ p: PendingMessage, queued: Bool) async -> SendOutcome {
         if let v = p.video, v.isEmpty, p.file == nil { return .failed } // still being re-encoded, or the re-encode failed
         if uploads[p.id] != nil { return .failed } // already going (a second tap, or the outbox and a retry at once)
+        // removed (X or Delete) while it waited, was prepared or was offline: never sent after all (audit IOS-MSG-3)
+        if cancelledUploads.contains(p.id) || !pending.contains(where: { $0.id == p.id }) {
+            cancelledUploads.remove(p.id)
+            return .failed
+        }
         if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = false; pending[i].refused = false }
         do {
             let m: Message
@@ -2448,7 +2520,7 @@ struct ChatView: View {
                 }
             }
             // a sent photo shows from my own copy at once, at its shape (web seedPhoto)
-            if let fid = m.file_id, let jpeg = p.jpeg, !m.isViewOnce {
+            if let fid = m.file_id, let jpeg = p.jpeg, !m.isViewOnce, AccountGate.isCurrent(token: token) {
                 // the bubble's copy is the small preview, not the full (HD) JPEG
                 APIClient.shared.seedFile(fileID: fid, data: p.image?.jpegData(compressionQuality: 0.8) ?? jpeg)
                 if let img = p.image { MediaDims.shared.set(fid, img.size) }
@@ -2472,6 +2544,13 @@ struct ChatView: View {
                 cancelledUploads.remove(p.id)
                 if let f = p.file { try? FileManager.default.removeItem(at: f) }
                 return .failed
+            }
+            let decision = SendPolicy.decide(error)
+            // a voice note past its deadline steps out of the line (same key, tried again later); the texts behind it go
+            if queued, decision == .later { return .later }
+            if decision == .conflict {
+                // 409: this key was used for another conversation. A client bug: "Not sent", never retried by itself
+                NSLog("TF send: Idempotency-Key %@ already used for another conversation (409); marked Not sent", p.id)
             }
             // a line waits (rate limit, no connection, the server busy) and keeps its place; the same key makes it safe
             if queued, let a = error as? APIError {
@@ -2504,6 +2583,8 @@ struct ChatView: View {
             if case let .refused(why)? = error as? APIError, !why.isEmpty {
                 problem = why
                 flashText(why) // why it was not sent, also when the chat already has messages
+            } else if decision == .conflict {
+                flash("chat.action.failed")
             }
             return .failed
         }
@@ -3431,21 +3512,36 @@ struct DraftField: View {
 
 
 /// The last messages each chat showed, kept in memory for this app session only (never on disk): opening a chat again
-/// shows them at once while the newest are fetched. A locked chat and a sign-out drop them.
+/// shows them at once while the newest are fetched. Kept per account (two accounts can share a group: one never sees the
+/// other's copy), never written for an account that is no longer signed in (a chat screen closing after the sign-out). A
+/// locked chat and a sign-out drop them.
 @MainActor
 enum ChatMemo {
     private static var store: [String: [Message]] = [:]
     private static var order: [String] = []
 
-    static func get(_ id: String) -> [Message]? { store[id] }
+    private static func key(_ account: String, _ id: String) -> String { account + "|" + id }
 
-    static func put(_ id: String, _ list: [Message]) {
-        store[id] = list
-        order.removeAll { $0 == id }
-        order.append(id)
+    static func get(account: String, _ id: String) -> [Message]? {
+        guard !account.isEmpty else { return nil }
+        return store[key(account, id)]
+    }
+
+    static func put(account: String, _ id: String, _ list: [Message]) {
+        guard AccountGate.isCurrent(account: account) else { return }
+        let k = key(account, id)
+        store[k] = list
+        order.removeAll { $0 == k }
+        order.append(k)
         while order.count > 20 { store[order.removeFirst()] = nil }
     }
 
-    static func drop(_ id: String) { store[id] = nil; order.removeAll { $0 == id } }
+    /// This chat's copy, for every account.
+    static func drop(_ id: String) {
+        let suffix = "|" + id
+        for k in store.keys where k.hasSuffix(suffix) { store[k] = nil }
+        order.removeAll { $0.hasSuffix(suffix) }
+    }
+
     static func clear() { store = [:]; order = [] }
 }

@@ -194,7 +194,8 @@ enum ListCache {
     private static var lastSaved: [String: Data] = [:]
 
     static func save(_ kind: String, token: String, _ data: Data) {
-        guard let dir else { return }
+        // a list that arrives after the sign-out (or a 401) is not written: the next account never finds it on disk
+        guard let dir, AccountGate.isCurrent(token: token) else { return }
         let data = sealed(kind, token: token, data)
         // the same bytes as the last save of this list (a reload that changed nothing): no directory scan, no write
         let name = "\(kind)-\(tag(token)).json"

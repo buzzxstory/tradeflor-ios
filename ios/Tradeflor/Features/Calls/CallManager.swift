@@ -124,6 +124,18 @@ final class CallManager: NSObject, ObservableObject {
     /// Offers, answers and candidates are applied one at a time, in arrival order: WebRTC's asynchronous steps must not
     /// interleave (an offer applied while our own was half made is what broke renegotiation).
     private var negotiation: Task<Void, Never>?
+    /// The raw text of the last offer applied: the same offer again is answered with the answer already made (a web
+    /// caller re-sends its unanswered first offer; CallDecisions.isRepeatedOffer).
+    private var lastRemoteOffer: String?
+    /// Our first offer, sent again every 4 s (3 times) while unanswered (it may be lost in a socket gap).
+    private var offerResend: Task<Void, Never>?
+    /// The connecting timer already gave one more period because our media was up (CALL-1): the next one hangs up.
+    private var connectGraceUsed = false
+    /// TURN credentials refreshed during the call at 80 % of their lifetime (CallDecisions.iceRefreshDelay).
+    private var iceRefresh: Task<Void, Never>?
+    /// A ring that arrived while this phone was placing a call (our invite not yet on the server): asked about again with
+    /// call.sync if our call ends without connecting (CallDecisions.shouldRecheckIncoming).
+    private var pendingIncoming: (id: String, at: Date)?
 
     private let provider: CXProvider
     private let callController = CXCallController()
@@ -141,13 +153,14 @@ final class CallManager: NSObject, ObservableObject {
     /// call.sync, sent every time the socket opens. With the id of the call this phone holds (else of the ring a VoIP push
     /// started), the server can say what became of exactly that call (`ended`), and a call it restored after a restart is
     /// claimed back. A server that does not know the field ignores it.
-    private func sendSync() {
+    /// The server keeps a call through a socket gap only if the device names it here (contract section 6, "claim").
+    private func sendSync(remembered: String? = nil) {
+        var rings: [String: String] = [:]
+        for key in pushCalls { if let id = pushCallID[key] { rings[key] = id } }
         var data: [String: Any] = [:]
-        if lineInUse, let id = callID {
-            data["call_id"] = id // the call in hand wins over a push ring
-        } else if let key = lastPushKey, pushCalls.contains(key), let id = pushCallID[key] {
-            data["call_id"] = id
-        } else if let key = pushCalls.first(where: { pushCallID[$0] != nil }), let id = pushCallID[key] {
+        // the call in hand wins over a push ring, a push ring over a ring remembered while placing a call
+        if let id = CallDecisions.syncCallID(held: lineInUse ? callID : nil, pushRings: rings, lastPushKey: lastPushKey,
+                                             rememberedIncoming: remembered) {
             data["call_id"] = id
         }
         syncAsked = data["call_id"] as? String
@@ -349,6 +362,9 @@ final class CallManager: NSObject, ObservableObject {
         startedHere = false
         answering = false
         held = false
+        connectGraceUsed = false
+        lastRemoteOffer = nil
+        pendingIncoming = nil
     }
 
     // MARK: wiring
@@ -512,7 +528,10 @@ final class CallManager: NSObject, ObservableObject {
             // the call may have ended while the permission prompt was up
             guard phase == .connecting, callID == id else { return }
             send("call.accept", ["call_id": id])
-            arm(seconds: 45) { [weak self] in self?.localReason = "ice_timeout"; self?.hangUp() }
+            // the server sends this phone's devices a silent "Call ended" alert at this very moment (it replaces the
+            // "Incoming call" elsewhere): not on the phone that answered
+            LocalNotifier.shared.callAnsweredHere(callID: id)
+            arm(seconds: 45) { [weak self] in self?.connectTimedOut() }
         }
     }
 
@@ -622,11 +641,25 @@ final class CallManager: NSObject, ObservableObject {
     // MARK: server events
 
     private func handle(_ type: String, _ d: [String: Any]) {
+        // glare whose call.merged was lost: any summary of the merged call names our invite in merged_from (server
+        // b35bc5d7): our call continues as its callee (the summary is then handled under the adopted id)
+        if type != "call.sync", type != "call.merged", let s = CallDecisions.Server(d),
+           let into = CallDecisions.mergeTarget(server: s, placed: callID, phase: phase) {
+            adoptMerge(into: into)
+        }
         let cid = d["call_id"] as? String
         switch type {
         case "call.incoming":
+            guard (d["callee_id"] as? String) == me, let id = cid else { return }
+            guard !lineInUse else {
+                // ringing while this phone places a call (our invite was not on the server yet): kept, and asked about
+                // again if our call ends without connecting (finish)
+                if role == .caller, connectedAt == nil, phase == .outgoing || phase == .connecting, id != callID {
+                    pendingIncoming = (id, Date())
+                }
+                return
+            }
             // .ended (the "Call ended" linger) is free: a call back within 1.8 s was never shown (web busy() is false then)
-            guard !lineInUse, (d["callee_id"] as? String) == me, let id = cid else { return }
             ringIncoming(d, id: id)
         case "call.outgoing":
             let summary = (d["call"] as? [String: Any]) ?? d
@@ -637,14 +670,8 @@ final class CallManager: NSObject, ObservableObject {
             CallTones.shared.ringback(true)
             provider.reportOutgoingCall(with: uuid, startedConnectingAt: nil)
         case "call.merged":
-            guard cid == callID, let into = d["into"] as? String else { return }
-            callID = into
-            role = .callee
-            acknowledged = true
-            phase = .connecting
-            CallTones.shared.ringback(false)
-            arm(seconds: 45) { [weak self] in self?.localReason = "ice_timeout"; self?.hangUp() }
-            provider.reportOutgoingCall(with: uuid, startedConnectingAt: nil)
+            guard cid == callID, phase == .outgoing, let into = d["into"] as? String else { return }
+            adoptMerge(into: into)
         case "call.accepted":
             // hung up meanwhile: the server ends it (call.ended), nothing more to set up
             guard cid == callID, pc == nil, !userEnding else { return }
@@ -652,7 +679,7 @@ final class CallManager: NSObject, ObservableObject {
             if let r = d["role"] as? String { role = r == "caller" ? .caller : .callee }
             peerID = (role == .caller ? d["callee_id"] : d["caller_id"]) as? String ?? peerID
             phase = .connecting
-            arm(seconds: 45) { [weak self] in self?.localReason = "ice_timeout"; self?.hangUp() }
+            arm(seconds: 45) { [weak self] in self?.connectTimedOut() }
             serially { [weak self] in await self?.setUpPeerConnection() }
         case "call.active":
             guard cid == callID else { return }
@@ -705,37 +732,50 @@ final class CallManager: NSObject, ObservableObject {
                 pushCalls.remove(k)
                 pushCallID[k] = nil
             }
-            if call == nil {
-                // the server knows no call for this device: end ours, unless our invite was not acknowledged yet
-                // (not over the "Call ended" card either: finish() does nothing then, but the card's reason was overwritten)
-                if phase != .idle && phase != .ended && !(phase == .outgoing && !acknowledged) { endReason = "connection_lost"; finish() }
-                // our invite never reached the server (sent while the socket was down): send it now. The same call id, so
-                // a server that did get it answers with its state (call.outgoing / call.ended) instead of a second call.
-                if phase == .outgoing && !acknowledged { sendInvite() }
-            } else if let c = call, let id = c["call_id"] as? String, endedHere.contains(id), id != callID {
-                // we ended this call while offline: the server still has it
-                if (c["role"] as? String) == "callee" && (c["state"] as? String) == "ringing" { send("call.decline", ["call_id": id]) }
-                else if (c["role"] as? String) == "caller" && (c["state"] as? String) == "ringing" { send("call.cancel", ["call_id": id]) }
-                else { send("call.hangup", ["call_id": id]) }
-            } else if let c = call, !lineInUse, (c["state"] as? String) == "ringing", (c["role"] as? String) == "callee",
-                      let id = c["call_id"] as? String {
-                ringIncoming(c, id: id)
-            } else if let c = call, (c["call_id"] as? String) == callID {
-                // the socket came back and the server still has our call: what was sent or received while it was down is lost
-                let state = c["state"] as? String
-                if phase == .outgoing && state == "ringing" {
-                    if !acknowledged { acknowledged = true; CallTones.shared.ringback(true) }
-                } else if phase == .connecting && state == "ringing" && role == .callee {
-                    send("call.accept", ["call_id": callID ?? ""]) // our accept was lost: the server still rings us
-                } else if (phase == .outgoing || phase == .connecting || phase == .active)
-                            && (state == "connecting" || state == "active") {
-                    if pc == nil {
-                        // call.accepted was lost in the gap: it rang ("Ringing...") or connected with no peer connection
-                        // until the server's 30 s connect timeout
-                        handle("call.accepted", c)
-                    } else {
-                        resumeAfterSocketGap()
+            // what the socket gap may have lost, decided in CallDecisions.syncActions (unit-tested there)
+            let server = CallDecisions.Server(call)
+            let ice = pc?.iceConnectionState
+            let local = CallDecisions.Local(callID: callID, phase: phase, role: role, acknowledged: acknowledged,
+                                            hasPeerConnection: pc != nil, mediaUp: ice == .connected || ice == .completed,
+                                            endedHere: endedHere)
+            for action in CallDecisions.syncActions(server: server, local: local) {
+                switch action {
+                case .endLost:
+                    // the server knows no call for this device (not over the "Call ended" card: syncActions checks)
+                    endReason = "connection_lost"
+                    finish()
+                case .resendInvite:
+                    // our invite never reached the server (sent while the socket was down): the same call id, so a
+                    // server that did get it answers with its state (call.outgoing / call.ended) instead of a second call
+                    sendInvite()
+                case .close(let op, let id):
+                    // a call we ended while offline, or one left from before the app was killed (no peer connection
+                    // survives a relaunch): closed now, not after the server's grace, and no CallKit call stays for it
+                    send(op, ["call_id": id])
+                    if let u = CallManager.callUUID(id), !(lineInUse && u == uuid) {
+                        provider.reportCall(with: u, endedAt: Date(), reason: .remoteEnded)
                     }
+                case .ring:
+                    if let c = call, let id = server?.id { ringIncoming(c, id: id) }
+                case .adoptMerge(let into):
+                    adoptMerge(into: into)
+                case .acknowledge:
+                    acknowledged = true
+                    CallTones.shared.ringback(true)
+                case .resendAccept:
+                    send("call.accept", ["call_id": callID ?? ""]) // our accept was lost: the server still rings us
+                case .acceptedLost:
+                    // call.accepted was lost in the gap: it rang ("Ringing...") or connected with no peer connection
+                    // until the server's 30 s connect timeout
+                    if let c = call { handle("call.accepted", c) }
+                case .resume:
+                    resumeAfterSocketGap()
+                case .markActive:
+                    // call.active was lost: the server has the call active, the connecting timer must not hang it up
+                    markActive()
+                case .resendConnected:
+                    // call.connected was lost: without it the server fails the call at 30 s (failed/ice_timeout)
+                    sendConnected()
                 }
             }
         case "call.error":
@@ -818,7 +858,8 @@ final class CallManager: NSObject, ObservableObject {
 
     private func setUpPeerConnection() async {
         guard pc == nil, let id = callID else { return }
-        let ice = (try? await APIClient.shared.iceServers(token: token)) ?? []
+        let iceConfig = try? await APIClient.shared.iceConfig(token: token)
+        let ice = iceConfig?.servers ?? []
         // the call may have ended while the TURN credentials were on their way
         guard pc == nil, callID == id, phase == .connecting || phase == .active else { return }
         let cfg = RTCConfiguration()
@@ -828,11 +869,20 @@ final class CallManager: NSObject, ObservableObject {
         cfg.sdpSemantics = .unifiedPlan
         cfg.continualGatheringPolicy = .gatherContinually
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-        guard let conn = Self.factory.peerConnection(with: cfg, constraints: constraints, delegate: self) else {
+        var made = Self.factory.peerConnection(with: cfg, constraints: constraints, delegate: self)
+        if made == nil && !ice.isEmpty {
+            // WebRTC refused the server list (the URLs are already checked with the server's own rule): the call goes on
+            // without STUN/TURN (direct and local routes only) instead of failing
+            callLog.error("call: ICE server list refused by WebRTC, connecting without it")
+            cfg.iceServers = []
+            made = Self.factory.peerConnection(with: cfg, constraints: constraints, delegate: self)
+        }
+        guard let conn = made else {
             fail("negotiation_failed")
             return
         }
         pc = conn
+        scheduleIceRefresh(conn, after: CallDecisions.iceRefreshDelay(ttl: iceConfig?.ttl))
         let source = Self.factory.audioSource(with: RTCMediaConstraints(
             mandatoryConstraints: ["googEchoCancellation": "true", "googNoiseSuppression": "true", "googAutoGainControl": "true"],
             optionalConstraints: nil))
@@ -860,9 +910,51 @@ final class CallManager: NSObject, ObservableObject {
             guard pc === conn, conn.signalingState == .stable else { return }
             try await conn.tfSetLocal(offer)
             sendDescription(offer)
+            // the first offer (never answered yet) may be lost in a socket gap: sent again while unanswered
+            if conn.remoteDescription == nil { resendFirstOfferWhileUnanswered(conn) }
         } catch {
             print("call: offer failed: \(error)")
         }
+    }
+
+    /// Every 4 s, at most 3 times, while our first offer has no answer (web callEngine does the same; the other side
+    /// answers a repeated offer with its existing answer, see applySignal).
+    private func resendFirstOfferWhileUnanswered(_ conn: RTCPeerConnection) {
+        offerResend?.cancel()
+        offerResend = Task { @MainActor [weak self] in
+            for seconds in CallDecisions.offerResendDelays {
+                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                guard let self, !Task.isCancelled, self.pc === conn, conn.remoteDescription == nil,
+                      conn.signalingState == .haveLocalOffer, let offer = conn.localDescription else { return }
+                self.sendDescription(offer)
+            }
+        }
+    }
+
+    /// Fresh TURN credentials during the call, before the old ones expire (server ttl_seconds; 600 s today, 12 h later):
+    /// setConfiguration with the other settings kept, no ICE restart (media that flows is not touched).
+    private func scheduleIceRefresh(_ conn: RTCPeerConnection, after delay: TimeInterval?) {
+        iceRefresh?.cancel()
+        iceRefresh = nil
+        guard let delay else { return } // an older server gives no lifetime: no refresh, as before
+        iceRefresh = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, !Task.isCancelled, self.pc === conn else { return }
+            let fresh = try? await APIClient.shared.iceConfig(token: self.token)
+            guard !Task.isCancelled, self.pc === conn else { return }
+            guard let fresh, !fresh.servers.isEmpty else {
+                self.scheduleIceRefresh(conn, after: 30) // offline or refused: again in 30 s
+                return
+            }
+            self.applyIceServers(fresh.servers, to: conn)
+            self.scheduleIceRefresh(conn, after: CallDecisions.iceRefreshDelay(ttl: fresh.ttl))
+        }
+    }
+
+    private func applyIceServers(_ servers: [RTCIceServer], to conn: RTCPeerConnection) {
+        let cfg = conn.configuration
+        cfg.iceServers = servers
+        if !conn.setConfiguration(cfg) { callLog.error("call: new ICE servers refused by WebRTC, the old ones stay") }
     }
 
     private func applySignal(_ d: [String: Any]) async {
@@ -878,6 +970,13 @@ final class CallManager: NSObject, ObservableObject {
         let sdp = (payload["sdp"] as? String) ?? ""
         do {
             if t == "offer" {
+                // the same offer again (the web caller re-sends an offer whose answer it has not had): the answer already
+                // made goes again; nothing is renegotiated, the connection stays as it is
+                if CallDecisions.isRepeatedOffer(sdp, lastApplied: lastRemoteOffer, stable: pc.signalingState == .stable),
+                   let answer = pc.localDescription, answer.type == .answer {
+                    sendDescription(answer)
+                    return
+                }
                 // both sides restarting ICE at once (both saw the same network blip) is normal: perfect negotiation
                 let collision = makingOffer || pc.signalingState != .stable
                 if collision && role == .caller { return } // impolite: ignore theirs, ours wins
@@ -885,6 +984,7 @@ final class CallManager: NSObject, ObservableObject {
                     try await pc.tfSetLocal(RTCSessionDescription(type: .rollback, sdp: "")) // polite: drop ours
                 }
                 try await pc.tfSetRemote(RTCSessionDescription(type: .offer, sdp: sdp))
+                lastRemoteOffer = sdp
                 attachMicIfNeeded()
                 let answer = try await pc.tfAnswer()
                 try await pc.tfSetLocal(answer)
@@ -936,10 +1036,10 @@ final class CallManager: NSObject, ObservableObject {
         switch state {
         case .connected:
             recovered()
-            if !sentConnected, let id = callID {
-                sentConnected = true
-                send("call.connected", ["call_id": id])
-                if muted { send("call.media", ["call_id": id, "muted": true]) }
+            if !sentConnected, callID != nil {
+                // counted as sent only when the socket took it: a lost one is sent again (sync, connect timer), or the
+                // server fails a call whose audio flows at 30 s
+                sendConnected()
                 markActive()
             }
         case .failed:
@@ -1109,6 +1209,43 @@ final class CallManager: NSObject, ObservableObject {
         finish()
     }
 
+    /// `call.connected` (our media is up), and our mute state with it.
+    private func sendConnected() {
+        guard let id = callID else { return }
+        if send("call.connected", ["call_id": id]) { sentConnected = true }
+        if muted { send("call.media", ["call_id": id, "muted": true]) }
+    }
+
+    /// Glare: our invite became the answer to the other person's call `into` (call.merged, or merged_from in a summary
+    /// when call.merged was lost): this phone continues as its callee.
+    private func adoptMerge(into: String) {
+        callID = into
+        role = .callee
+        acknowledged = true
+        phase = .connecting
+        CallTones.shared.ringback(false)
+        arm(seconds: 45) { [weak self] in self?.connectTimedOut() }
+        provider.reportOutgoingCall(with: uuid, startedConnectingAt: nil)
+        // the server answered the other person's call with our invite: its "Call ended" alert follows, as for an answer
+        LocalNotifier.shared.callAnsweredHere(callID: into)
+    }
+
+    /// The 45 s connecting timer ran out. A call whose own media is up only lost its call.active / call.connected on the
+    /// way (a socket blip): call.connected again, a call.sync naming it, and one more period, instead of hanging up a
+    /// call that works.
+    private func connectTimedOut() {
+        if phase == .connecting, !connectGraceUsed, let pc,
+           pc.iceConnectionState == .connected || pc.iceConnectionState == .completed {
+            connectGraceUsed = true
+            sendConnected()
+            sendSync()
+            arm(seconds: 45) { [weak self] in self?.connectTimedOut() }
+            return
+        }
+        localReason = "ice_timeout"
+        hangUp()
+    }
+
     private func markActive() {
         // End was pressed: the 5 s fallback that ends the call if call.ended never comes must not be cancelled here
         guard phase != .active, !userEnding else { return }
@@ -1142,9 +1279,9 @@ final class CallManager: NSObject, ObservableObject {
     /// switched its audio on (`generation`, checked and applied under the same lock that a new call's activation takes).
     nonisolated private static func tearDown(_ oldPC: AnyObject?, close: (AnyObject?) -> Void, resetSpeaker: Bool,
                                              releaseSession: Bool, generation: Int) {
+        // the audio first: the microphone (and the orange dot) stops at once, whatever the close below takes (it can take
+        // seconds with TURN over TCP/TLS)
         let t0 = CACurrentMediaTime()
-        close(oldPC)
-        let t1 = CACurrentMediaTime()
         let applied = audioGeneration.ifCurrent(generation) {
             let s = RTCAudioSession.sharedInstance()
             if resetSpeaker {
@@ -1161,9 +1298,11 @@ final class CallManager: NSObject, ObservableObject {
                 s.unlockForConfiguration()
             }
         }
+        let t1 = CACurrentMediaTime()
+        close(oldPC)
         let t2 = CACurrentMediaTime()
         let note = applied ? "" : " (skipped: a new call has the audio)"
-        callLog.info("call end: peer connection closed in \(Int((t1 - t0) * 1000)) ms, audio reset in \(Int((t2 - t1) * 1000)) ms\(note, privacy: .public)")
+        callLog.info("call end: audio reset in \(Int((t1 - t0) * 1000)) ms\(note, privacy: .public), peer connection closed in \(Int((t2 - t1) * 1000)) ms")
     }
 
     #if DEBUG
@@ -1213,6 +1352,15 @@ final class CallManager: NSObject, ObservableObject {
         socketWaits = 0
         negotiation = nil
         restartPending = false
+        offerResend?.cancel(); offerResend = nil
+        iceRefresh?.cancel(); iceRefresh = nil
+        lastRemoteOffer = nil
+        connectGraceUsed = false
+        // a ring that came in while this phone placed this call: asked about again if ours never connected (CALL-7)
+        let recheck = pendingIncoming.flatMap { p in
+            CallDecisions.shouldRecheckIncoming(rememberedAt: p.at, now: Date(), ourCallConnected: connectedAt != nil) ? p.id : nil
+        }
+        pendingIncoming = nil
         // the peer connection leaves this object now (its late delegate callbacks are ignored: they check `pc ===`) and is
         // closed in the background with the audio session (tearDown)
         let oldPC = pc
@@ -1264,6 +1412,8 @@ final class CallManager: NSObject, ObservableObject {
             while endedOrder.count > 50 { endedHere.remove(endedOrder.removeFirst()) }
         }
         callID = nil
+        // still ringing on the server? call.sync names it; its answer rings it here (syncActions .ring: no call in hand now)
+        if let recheck { sendSync(remembered: recheck) }
         linger?.cancel()
         linger = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_800_000_000)
@@ -1490,9 +1640,38 @@ extension RTCPeerConnection {
 // MARK: call REST endpoints
 
 private struct CallsConfig: Decodable { let enabled: Bool }
+/// GET /calls/ice-servers: {ice_servers:[{urls,username,credential}], ttl_seconds, relay}. Read tolerantly: `urls` as a list
+/// or one string, `ttl_seconds` missing (older server) or a number of any kind.
 private struct IceServersResponse: Decodable {
-    struct Server: Decodable { let urls: [String]; let username: String?; let credential: String? }
+    struct Server: Decodable {
+        let urls: [String]
+        let username: String?
+        let credential: String?
+        private enum CodingKeys: String, CodingKey { case urls, username, credential }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            if let many = try? c.decode([String].self, forKey: .urls) { urls = many }
+            else if let one = try? c.decode(String.self, forKey: .urls) { urls = [one] }
+            else { urls = [] }
+            username = try? c.decodeIfPresent(String.self, forKey: .username)
+            credential = try? c.decodeIfPresent(String.self, forKey: .credential)
+        }
+    }
     let ice_servers: [Server]
+    let ttl_seconds: Int?
+    private enum CodingKeys: String, CodingKey { case ice_servers, ttl_seconds }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ice_servers = (try? c.decode([Server].self, forKey: .ice_servers)) ?? []
+        if let d = try? c.decodeIfPresent(Double.self, forKey: .ttl_seconds) { ttl_seconds = Int(d) } else { ttl_seconds = nil }
+    }
+}
+
+/// The ICE servers of one connection and how long their TURN credentials last.
+struct ICEConfig {
+    let servers: [RTCIceServer]
+    /// seconds; nil from an older server
+    let ttl: Int?
 }
 
 extension APIClient {
@@ -1504,8 +1683,19 @@ extension APIClient {
 
     /// GET /calls/ice-servers: STUN and short-lived TURN credentials, fetched fresh for every connection.
     func iceServers(token: String) async throws -> [RTCIceServer] {
+        try await iceConfig(token: token).servers
+    }
+
+    /// The same, with the credentials' lifetime. A URL WebRTC would refuse (malformed) is dropped and the others kept; a
+    /// `turns:…?transport=tcp` (TLS over TCP 443, coming) is kept like any other.
+    func iceConfig(token: String) async throws -> ICEConfig {
         let data = try await getJSON("calls/ice-servers", token: token)
         let out = try JSONDecoder().decode(IceServersResponse.self, from: data)
-        return out.ice_servers.map { RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential) }
+        let servers: [RTCIceServer] = out.ice_servers.compactMap { s in
+            let urls = s.urls.filter(CallDecisions.validICEURL)
+            guard !urls.isEmpty else { return nil }
+            return RTCIceServer(urlStrings: urls, username: s.username, credential: s.credential)
+        }
+        return ICEConfig(servers: servers, ttl: out.ttl_seconds)
     }
 }
