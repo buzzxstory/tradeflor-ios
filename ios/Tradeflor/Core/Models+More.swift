@@ -30,6 +30,8 @@ struct GroupMemberFull: Decodable, Identifiable {
 struct ChatSettings: Decodable {
     let disappear_secs: Int
     let restricted: Bool
+    /// Screenshots blocked in this chat (ScreenGuard); nil on a server from before the feature.
+    var no_screenshots: Bool? = nil
 }
 
 struct ScheduledMessage: Decodable, Identifiable {

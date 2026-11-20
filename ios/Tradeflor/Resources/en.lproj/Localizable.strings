@@ -2057,3 +2057,8 @@
 "location.updated" = "updated %@";
 "location.ago.s" = "%d s ago";
 "location.ago.m" = "%d min ago";
+"shot.row" = "Block screenshots";
+"shot.row.sub" = "Hides this chat from screenshots and screen recordings, for both of you";
+"shot.on.toast" = "Screenshots are blocked in this chat";
+"shot.off.toast" = "Screenshots are allowed again in this chat";
+"shot.taken.toast" = "Screenshots are blocked here. The other person was told.";

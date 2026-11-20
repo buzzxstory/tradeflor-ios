@@ -17,6 +17,19 @@ struct ContactInfoView: View {
     @ObservedObject private var calls = CallManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var profile: Profile?
+    /// Screenshots blocked in this chat (both people).
+    @State private var noShots = false
+
+    private func setNoShots(_ on: Bool) async {
+        let old = noShots
+        noShots = on
+        do {
+            try await APIClient.shared.setNoScreenshots(token: token, conversationID: chat.conversation_id, on: on)
+            LiveConnection.shared.changes.send(chat.conversation_id) // the open chat reads it at once
+        } catch {
+            noShots = old
+        }
+    }
     @State private var identity: IdentityDetail?
     @State private var disappear = 0
     @State private var restricted = false
@@ -354,6 +367,12 @@ struct ContactInfoView: View {
             }
             .accessibilityValue(Text(verbatim: tr(locked ? "ci.on" : "ci.off")))
             CIV3Divider()
+            // Block screenshots: on for both people in this chat (ScreenGuard)
+            Button { Task { await setNoShots(!noShots) } } label: {
+                CIV3Row(icon: "camera.metering.none", title: tr("shot.row"), subtitle: tr("shot.row.sub"), toggle: noShots)
+            }
+            .accessibilityValue(Text(verbatim: tr(noShots ? "ci.on" : "ci.off")))
+            CIV3Divider()
             NavigationLink { RestrictedPage(conversationID: chat.conversation_id, on: $restricted) } label: {
                 CIV3Row(icon: "checkmark.shield", title: tr("ci.restricted"), subtitle: tr("ci.restricted.sub"),
                         value: tr(restricted ? "ci.on" : "ci.off"))
@@ -439,6 +458,7 @@ struct ContactInfoView: View {
         if let set = try? await s {
             disappear = set.disappear_secs
             restricted = set.restricted
+            noShots = set.blocksScreenshots
         }
         blocked = ((try? await b) ?? []).contains(chat.peer_id)
         if let m = await st {

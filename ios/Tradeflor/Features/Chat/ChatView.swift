@@ -203,6 +203,24 @@ struct ChatView: View {
 
     @Environment(\.dismiss) private var dismissView
     private let pageSize = 50
+    /// Screenshots blocked in this chat (chat settings "no_screenshots").
+    @State private var noScreenshots = false
+
+    private func readScreenshotSetting() async {
+        guard let s = try? await APIClient.shared.chatSettings(token: token, conversationID: chat.conversation_id) else { return }
+        let on = s.blocksScreenshots
+        guard on != noScreenshots else { return }
+        noScreenshots = on
+        if on { ScreenGuard.shared.protect(chat.conversation_id) } else { ScreenGuard.shared.release(chat.conversation_id) }
+        flash(on ? "shot.on.toast" : "shot.off.toast")
+    }
+
+    private func screenshotTaken() {
+        guard noScreenshots, ScreenGuard.shared.protected.contains(chat.conversation_id) else { return }
+        flash("shot.taken.toast")
+        let t = token, c = chat.conversation_id
+        Task { await APIClient.shared.reportScreenshot(token: t, conversationID: c) }
+    }
     private var me: String { store.session?.userID ?? "" }
     private var token: String { store.session?.token ?? "" }
 
@@ -1111,7 +1129,20 @@ struct ChatView: View {
         .fullScreenCover(item: $watching) { v in
             mediaViewer(v)
         }
+        // Block screenshots (ScreenGuard): the app is hidden from screenshots and recordings while this chat is on screen,
+        // and a screenshot or a recording that starts here is reported to the chat
+        .task(id: chat.conversation_id) { await readScreenshotSetting() }
+        .onReceive(LiveConnection.shared.changes) { id in
+            if id == chat.conversation_id { Task { await readScreenshotSetting() } }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.userDidTakeScreenshotNotification)) { _ in
+            screenshotTaken()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in
+            if UIScreen.main.isCaptured { screenshotTaken() }
+        }
         .onAppear {
+            if noScreenshots { ScreenGuard.shared.protect(chat.conversation_id) }
             TabChrome.shared.conversationOpened() // the dock steps aside inside a conversation (web: one region at a time)
             box.onEmptyChange = { e in draftEmpty = e }
             box.onMentionChange = { q in mentionQ = q }
@@ -1134,6 +1165,7 @@ struct ChatView: View {
             reloadRetry?.cancel()
             reloadRetry = nil
             TabChrome.shared.conversationClosed()
+            ScreenGuard.shared.release(chat.conversation_id)
             if LocalNotifier.shared.openConversation == chat.conversation_id { LocalNotifier.shared.openConversation = nil }
             saveDraft()
             // this screen stops sending; what is still waiting is sent from the saved outbox
