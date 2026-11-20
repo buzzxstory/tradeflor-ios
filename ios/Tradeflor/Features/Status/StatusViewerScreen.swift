@@ -837,8 +837,10 @@ struct StatusViewerScreen: View {
         }
         do {
             let conv = try await APIClient.shared.directConversation(token: token, with: group.user_id)
-            _ = try await APIClient.shared.sendText(token: token, conversationID: conv, body: "\(emoji) Reacted to your status · \(what)",
-                                                    key: UUID().uuidString.lowercased())
+            // the emoji alone, with the status: the chat draws the status small and the reaction big (WhatsApp)
+            _ = what
+            _ = try await APIClient.shared.sendText(token: token, conversationID: conv, body: emoji,
+                                                    key: UUID().uuidString.lowercased(), statusID: post.id, statusReact: true)
             return true
         } catch {
             return false
@@ -860,10 +862,12 @@ struct StatusViewerScreen: View {
             case "voice": what = "🎤"
             default: what = "📷"
             }
-            let body = String(format: NSLocalizedString("stx.reply.quote", comment: ""), what) + "\n" + text
+            _ = what
             let key = replyKey ?? UUID().uuidString.lowercased()
             replyKey = key
-            _ = try await APIClient.shared.sendText(token: token, conversationID: conv, body: body, key: key)
+            // the reply text alone, with the status: the chat draws the status small above it (WhatsApp)
+            _ = try await APIClient.shared.sendText(token: token, conversationID: conv, body: text, key: key,
+                                                    statusID: post.id, statusReact: false)
             // the viewer moved on to another story while it was sending: the reply is sent, nothing more happens here
             guard self.post?.id == post.id, !closing else { return }
             reply = ""

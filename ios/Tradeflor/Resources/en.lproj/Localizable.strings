@@ -2072,3 +2072,7 @@
 "chat.deleted.byme.admin" = "You deleted this message as admin";
 "chat.deleted.by.admin" = "This message was deleted by admin %@";
 "chat.deleted.someadmin" = "an admin";
+"sq.status" = "Status";
+"sq.photo" = "Photo";
+"sq.video" = "Video";
+"sq.voice" = "Voice status";

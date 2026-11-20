@@ -65,6 +65,8 @@ struct Message: Decodable, Identifiable, Equatable {
     let deleted_at: Int64?
     /// Who deleted it, when that was not the sender (an owner or admin); absent otherwise and for old deletions.
     var deleted_by: String? = nil
+    /// A reaction or reply to a status: which status (drawn as WhatsApp's quote card). Absent on deleted messages.
+    var status_quote: StatusQuote? = nil
     let client_key: String?
     let file_name: String?
     let file_id: String?

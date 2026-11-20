@@ -2206,6 +2206,10 @@ struct ChatView: View {
             Text(noticeText(m)).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .padding(.horizontal, 12).padding(.vertical, 5).background(Theme.surface, in: Capsule())
                 .frame(maxWidth: .infinity)
+        } else if let q = m.status_quote, !m.isDeleted {
+            StatusQuoteBubble(token: token, message: m, quote: q, mine: m.sender_id == me, me: me,
+                              ownerName: isGroup ? (memberNames[q.owner_id] ?? chat.title) : chat.title,
+                              state: m.sender_id == me ? receipt(m) : nil)
         } else if m.kind == "location", !m.isDeleted {
             LocationCard(token: token, message: m, mine: m.sender_id == me)
         } else if VideoNotePrep.isNote(m), let fid = m.file_id, !m.isDeleted {

@@ -591,9 +591,12 @@ final class APIClient {
     }
 
     /// `key` makes a retry safe: the server stores a message once per key.
-    func sendText(token: String, conversationID: String, body: String, key: String, replyTo: String = "") async throws -> Message {
-        var req = request("messages", method: "POST", token: token,
-                          body: ["ConversationID": conversationID, "Body": body, "ReplyToID": replyTo])
+    func sendText(token: String, conversationID: String, body: String, key: String, replyTo: String = "",
+                  statusID: String? = nil, statusReact: Bool = false) async throws -> Message {
+        var fields: [String: Any] = ["ConversationID": conversationID, "Body": body, "ReplyToID": replyTo]
+        // a reaction or reply to a status: the server attaches the status as status_quote (WhatsApp's quote card)
+        if let statusID { fields["StatusID"] = statusID; fields["StatusReact"] = statusReact }
+        var req = request("messages", method: "POST", token: token, body: fields)
         req.setValue(key, forHTTPHeaderField: "Idempotency-Key")
         let (data, http) = try await send(req)
         try check(http, data)
