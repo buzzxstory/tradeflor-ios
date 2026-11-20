@@ -5,6 +5,11 @@ import CallKit
 import UserNotifications
 import UIKit
 import WebRTC
+import os
+
+/// Call timing (Console: subsystem com.tradeflor.ios, category call): how long after the tap the call screen closed, and
+/// how long the peer connection and audio teardown took in the background.
+private let callLog = Logger(subsystem: "com.tradeflor.ios", category: "call")
 
 /// 1-to-1 voice calls, interoperable with the website's call engine (desktop/src/features/calls/callEngine.ts) and the
 /// server's call service. The rules that matter for interop:
@@ -43,6 +48,11 @@ final class CallManager: NSObject, ObservableObject {
     @Published private(set) var peerID: String?
     /// How long the call that just ended lasted (shown on the end-of-call card).
     @Published private(set) var lastDuration: TimeInterval?
+    /// The call that just ended was ended on this phone by the person (End, Cancel, Decline, or the system call screen's
+    /// End): no end-of-call notice then (website: nothing shows when you end it yourself). Cleared with the linger.
+    @Published private(set) var endedByMe = false
+    /// When End / Decline was pressed (CACurrentMediaTime), for the timing log in finish().
+    private var endTappedAt: CFTimeInterval?
     /// A call holds the phone's audio: voice notes and videos must not change or switch off the audio session meanwhile
     /// (a .playback category or setActive(false) cuts the call's microphone and sound).
     var lineInUse: Bool { phase != .idle && phase != .ended }
@@ -319,7 +329,11 @@ final class CallManager: NSObject, ObservableObject {
     /// Clears what the previous call left (its "Call ended" linger may still be on) before a new call starts.
     private func beginCall() {
         linger?.cancel(); linger = nil
+        // a previous call's teardown still queued in the background must not switch this call's audio off
+        audioGeneration.bump()
         if phase == .ended { phase = .idle }
+        endedByMe = false
+        endTappedAt = nil
         connectedAt = nil
         muted = false
         speaker = false
@@ -504,6 +518,7 @@ final class CallManager: NSObject, ObservableObject {
 
     func decline() {
         guard phase == .incoming, let id = callID else { return }
+        if endTappedAt == nil { endTappedAt = CACurrentMediaTime() }
         userEnding = true
         send("call.decline", ["call_id": id])
         endReason = "declined"
@@ -513,6 +528,7 @@ final class CallManager: NSObject, ObservableObject {
     func hangUp() {
         // still ringing here: a decline (offline it ended with no reason and posted "Missed voice call" for a call the
         // person turned down)
+        if endTappedAt == nil { endTappedAt = CACurrentMediaTime() }
         if phase == .incoming { decline(); return }
         userEnding = true
         guard let id = callID else { finish(); return }
@@ -545,6 +561,7 @@ final class CallManager: NSObject, ObservableObject {
     private func audioWithoutCallKit() {
         guard !ownAudio else { return }
         ownAudio = true
+        audioGeneration.bump() // after a queued teardown's audio reset, never before it
         CallManager.configureAudioSession()
         let s = RTCAudioSession.sharedInstance()
         s.lockForConfiguration()
@@ -1112,13 +1129,75 @@ final class CallManager: NSObject, ObservableObject {
         }
     }
 
-    /// Ends locally: closes media, tells CallKit, and shows "Call ended" briefly.
+    /// Tests only: replaces the peer connection's close (which blocks until WebRTC's threads are done) to see where and
+    /// that it runs. Called on the teardown queue, never on the main thread.
+    static var closePeerConnection: (AnyObject?) -> Void = { ($0 as? RTCPeerConnection)?.close() }
+
+    /// Closing a peer connection and resetting the audio session block for a while (hundreds of ms with TURN over TCP/TLS):
+    /// done here, one call's teardown after the other, never on the main thread.
+    private static let teardownQueue = DispatchQueue(label: "tf.call.teardown", qos: .userInitiated)
+
+    /// The background half of finish(): the old peer connection is closed and the audio session put back. Touches nothing
+    /// but what it is given and the shared audio session, and the audio part only while no newer call has started or
+    /// switched its audio on (`generation`, checked and applied under the same lock that a new call's activation takes).
+    nonisolated private static func tearDown(_ oldPC: AnyObject?, close: (AnyObject?) -> Void, resetSpeaker: Bool,
+                                             releaseSession: Bool, generation: Int) {
+        let t0 = CACurrentMediaTime()
+        close(oldPC)
+        let t1 = CACurrentMediaTime()
+        let applied = audioGeneration.ifCurrent(generation) {
+            let s = RTCAudioSession.sharedInstance()
+            if resetSpeaker {
+                // the loudspeaker override outlives the call otherwise (the next call or voice note on the speaker)
+                s.lockForConfiguration()
+                try? s.overrideOutputAudioPort(.none)
+                s.unlockForConfiguration()
+            }
+            // the microphone stops even if CallKit never sends didDeactivate (the orange dot stayed on)
+            s.isAudioEnabled = false
+            if releaseSession {
+                s.lockForConfiguration()
+                try? s.setActive(false)
+                s.unlockForConfiguration()
+            }
+        }
+        let t2 = CACurrentMediaTime()
+        let note = applied ? "" : " (skipped: a new call has the audio)"
+        callLog.info("call end: peer connection closed in \(Int((t1 - t0) * 1000)) ms, audio reset in \(Int((t2 - t1) * 1000)) ms\(note, privacy: .public)")
+    }
+
+    #if DEBUG
+    /// Unit tests only (CallTeardownTests): a call on screen with no call id, peer connection, CallKit call or socket behind
+    /// it, so hangUp() runs finish() without any system side effect.
+    func testOnlyPretendCallOnScreen() {
+        beginCall()
+        phase = .connecting
+        showScreen = true
+    }
+    #endif
+
+    /// Ends locally: the screen goes at once, the microphone stops, CallKit is told; the peer connection and the audio
+    /// session are taken down in the background (they block for a while).
     private func finish() {
         guard phase != .ended else { return }
+        let started = CACurrentMediaTime()
         let hadCall = callID != nil
         // rang here and nobody answered on this phone: "Missed voice call" (not when declined or answered elsewhere)
         let wasMissed = hadCall && phase == .incoming && role == .callee && endReason != "declined"
             && endReason != "answered_elsewhere" && endReason != "mic_denied"
+        // the microphone first (privacy): no more samples leave, whatever the teardown below takes
+        audioTrack?.isEnabled = false
+        // what the person sees, before anything slow. The compact notice under the header (RootView) says how a call ended
+        // that the other side, the server or the network ended; nothing when this phone's own End did it (website).
+        endedByMe = userEnding && localReason == nil
+        lastDuration = connectedAt.map { Date().timeIntervalSince($0) }
+        phase = .ended
+        // the microphone refusal keeps its screen for the linger: its "Settings" button lives there (no teardown is slow
+        // then: nothing was connected)
+        if endReason != "mic_denied" { showScreen = false }
+        let tapped = endTappedAt ?? started
+        endTappedAt = nil
+        callLog.info("call end: screen closed \(Int((CACurrentMediaTime() - tapped) * 1000)) ms after the tap")
         if wasMissed {
             LocalNotifier.shared.missedCall(name: peerName, peerID: peerID, conversationID: conversationID, callID: callID ?? "")
         }
@@ -1134,10 +1213,22 @@ final class CallManager: NSObject, ObservableObject {
         socketWaits = 0
         negotiation = nil
         restartPending = false
-        pc?.close()
+        // the peer connection leaves this object now (its late delegate callbacks are ignored: they check `pc ===`) and is
+        // closed in the background with the audio session (tearDown)
+        let oldPC = pc
         pc = nil
         audioTrack = nil
         remoteTrack = nil
+        let resetSpeaker = speaker || wantSpeaker
+        wantSpeaker = false
+        let releaseSession = ownAudio
+        ownAudio = false
+        let generation = audioGeneration.value
+        let close = Self.closePeerConnection
+        Self.teardownQueue.async {
+            CallManager.tearDown(oldPC, close: close, resetSpeaker: resetSpeaker, releaseSession: releaseSession,
+                                 generation: generation)
+        }
         micAttached = false
         makingOffer = false
         pendingSignals = []
@@ -1146,22 +1237,6 @@ final class CallManager: NSObject, ObservableObject {
         restarts = 0
         held = false
         answering = false
-        let s = RTCAudioSession.sharedInstance()
-        if speaker || wantSpeaker {
-            // the loudspeaker override outlives the call otherwise (the next call or voice note on the speaker)
-            wantSpeaker = false
-            s.lockForConfiguration()
-            try? s.overrideOutputAudioPort(.none)
-            s.unlockForConfiguration()
-        }
-        // the microphone stops now even if CallKit never sends didDeactivate (the orange dot stayed on)
-        s.isAudioEnabled = false
-        if ownAudio {
-            ownAudio = false
-            s.lockForConfiguration()
-            try? s.setActive(false)
-            s.unlockForConfiguration()
-        }
         if hadCall {
             // CallKit hears of the end exactly once: a transaction when this phone ended it, a report when the other side,
             // the server or a timeout did (both were sent, the second always failing)
@@ -1189,14 +1264,13 @@ final class CallManager: NSObject, ObservableObject {
             while endedOrder.count > 50 { endedHere.remove(endedOrder.removeFirst()) }
         }
         callID = nil
-        lastDuration = connectedAt.map { Date().timeIntervalSince($0) }
-        phase = .ended
         linger?.cancel()
         linger = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 1_800_000_000)
             if !Task.isCancelled && phase == .ended {
                 phase = .idle
                 showScreen = false
+                endedByMe = false
                 connectedAt = nil
                 muted = false
                 speaker = false
@@ -1219,6 +1293,8 @@ extension CallManager: RTCPeerConnectionDelegate {
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
         guard let t = rtpReceiver.track as? RTCAudioTrack else { return }
         Task { @MainActor in
+            // a connection that is not the current one (closing in the background after finish()) is ignored
+            guard self.pc === peerConnection else { return }
             self.remoteTrack = t
             self.applyRemoteVolume()
         }
@@ -1304,6 +1380,8 @@ extension CallManager: CXProviderDelegate {
         action.fulfill()
     }
     nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
+        // a previous call's teardown still queued must not switch this audio off (it waits here if it is resetting right now)
+        audioGeneration.bump()
         let s = RTCAudioSession.sharedInstance()
         s.audioSessionDidActivate(audioSession)
         s.isAudioEnabled = true
@@ -1329,6 +1407,27 @@ extension CallManager: CXProviderDelegate {
 /// CallManager.ownAudio for CallKit's audio callbacks, which must decide at once (not after a hop to the main actor:
 /// a deactivate and an activate in a row, as on hold and resume, would run in the wrong order).
 private let callAudioOwned = LockedFlag()
+
+/// Bumped whenever a call starts or switches its audio on: a teardown queued by finish() for an earlier call resets the audio
+/// session only while the number is still the one it saw (see CallManager.tearDown).
+private let audioGeneration = AudioGeneration()
+
+/// A counter readable from any thread. The check and the reset that depends on it run under the same lock as a bump, so a
+/// new call's audio activation can never fall between them.
+private final class AudioGeneration: @unchecked Sendable {
+    private let lock = NSLock()
+    private var v = 0
+    var value: Int { lock.lock(); defer { lock.unlock() }; return v }
+    func bump() { lock.lock(); v &+= 1; lock.unlock() }
+    /// Runs `body` only if no bump happened since `generation` was read; true when it ran.
+    @discardableResult
+    func ifCurrent(_ generation: Int, _ body: () -> Void) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard v == generation else { return false }
+        body()
+        return true
+    }
+}
 
 /// A Bool readable from any thread (CallKit's delegate callbacks are nonisolated).
 private final class LockedFlag: @unchecked Sendable {

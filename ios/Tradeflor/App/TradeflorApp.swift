@@ -154,8 +154,9 @@ struct RootView: View {
         // screens inside the tab bar and navigation stacks: the chat header was hidden under the bar)
         .modifier(CallBarSpace(calls: calls))
         .safeAreaInset(edge: .top, spacing: 0) {
-            if !calls.showScreen && !calls.lineInUse && calls.phase == .ended {
-                // end-of-call notice (website CallOverlay): a compact card with the person's picture, name and outcome
+            if !calls.showScreen && !calls.lineInUse && calls.phase == .ended && !calls.endedByMe {
+                // end-of-call notice (website CallOverlay): a compact card with the person's picture, name and outcome, when
+                // the other side, the server or the network ended the call (nothing when this phone's own End did)
                 HStack(spacing: 10) {
                     if let pid = calls.peerID {
                         Avatar(token: store.session?.token ?? "", userID: pid, avatarID: nil, title: calls.peerName, size: 36)
