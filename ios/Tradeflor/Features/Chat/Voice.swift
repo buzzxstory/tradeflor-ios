@@ -249,7 +249,14 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published private(set) var current: String?
     @Published private(set) var playing = false
     @Published private(set) var loading = false
-    @Published private(set) var progress: Double = 0
+    /// Where the note playing is (0...1). Not published here: the many voice bubbles of a chat would all redraw
+    /// 30 times a second; only the bubble playing observes `clock`.
+    private(set) var progress: Double = 0 {
+        didSet { if abs(clock.progress - progress) > 0.0005 || progress == 0 { clock.progress = progress } }
+    }
+    let clock = VoiceClock()
+    /// The note playing was started (playing or paused part-way): its bubble shows the speed button and the time played.
+    @Published private(set) var begun = false
     @Published private(set) var failed: Set<String> = []
     /// The playback speed for every voice note (website tf.voiceSpeed).
     @Published private(set) var speed: Double = VoicePlayer.savedSpeed()
@@ -275,6 +282,10 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     nonisolated private static let playedKey = "tf.vnPlayed"
 
     private var interruptionLink: AnyCancellable?
+    private var routeLink: AnyCancellable?
+    /// A media ticket for website (WebM) notes, reused for 40 s (the server's is good for one minute).
+    private var ticket: (value: String, at: Date)?
+    private var prefetching = Set<String>()
 
     override init() {
         super.init()
@@ -285,6 +296,16 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
                 let began = raw == AVAudioSession.InterruptionType.began.rawValue
                 Task { @MainActor in
                     guard began, let self, self.playing else { return }
+                    self.pause()
+                }
+            }
+        // headphones or AirPods taken out: pause (as WhatsApp), never carry on out loud from the speaker
+        routeLink = NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
+            .sink { [weak self] n in
+                let raw = n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+                guard raw == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else { return }
+                Task { @MainActor in
+                    guard let self, self.playing else { return }
                     self.pause()
                 }
             }
@@ -308,6 +329,20 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             registry = registry.filter { $0.value.message.conversation_id == message.conversation_id }
         }
         registry[message.id] = Registered(token: token, message: message)
+    }
+
+    /// A voice bubble came on screen: an iPhone-recorded note (small) is downloaded now, so a tap plays it at once.
+    func prefetch(token: String, message: Message) {
+        guard let id = message.audio_id, !message.isDeleted, !message.isViewOnce, !token.isEmpty,
+              !prefetching.contains(id), !failed.contains(id), !APIClient.shared.hasVoice(audioID: id) else { return }
+        let mime = message.mime_type ?? ""
+        guard mime.contains("mp4") || mime.contains("aac") || mime.contains("m4a"),
+              (message.duration_ms ?? 0) < 10 * 60 * 1000 else { return }
+        prefetching.insert(id)
+        Task(priority: .utility) {
+            _ = await APIClient.shared.voice(token: token, audioID: id)
+            prefetching.remove(id)
+        }
     }
 
     /// Play / pause by audio id only (shared media list): no auto-play of the next note.
@@ -340,6 +375,7 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             return
         }
         progress = f
+        if f > 0 { begun = true }
         if loading { startAt = f }
         if let p = player {
             if p.duration > 0 { p.currentTime = min(p.duration, f * p.duration) }
@@ -364,6 +400,7 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         startAt = fraction
         knownDuration = Double(durationMs ?? 0) / 1000
         progress = fraction
+        begun = true
         loading = true
         if let message { markPlayed(message.id) }
         let isMP4 = (mime ?? "").contains("mp4") || (mime ?? "").contains("aac") || (mime ?? "").contains("m4a")
@@ -381,22 +418,29 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         UserDefaults.standard.set(list, forKey: Self.playedKey)
     }
 
-    private func activateSession() {
+    /// The audio session for playback. Setting it blocks for a moment (up to a few hundred ms), so it runs off the main
+    /// thread, and only when the category is not already right (a call, the recorder or a status changed it).
+    private func activateSession() async {
         // during a call a .playback category would cut the call's microphone: play through the call's session instead
         guard !CallManager.shared.lineInUse else { return }
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        await Task.detached(priority: .userInitiated) {
+            let s = AVAudioSession.sharedInstance()
+            if s.category != .playback || s.mode != .spokenAudio { try? s.setCategory(.playback, mode: .spokenAudio) }
+            try? s.setActive(true)
+        }.value
     }
 
     private func playNative(token: String, audioID: String) async {
+        // the session and the download at the same time (a prefetched note is already here)
+        async let session: Void = activateSession()
         let data = await APIClient.shared.voice(token: token, audioID: audioID)
+        await session
         // another note was started (or this one stopped) while it downloaded: nothing failed, it is just no longer wanted
         guard current == audioID else { return }
         guard let data, let p = try? AVAudioPlayer(data: data) else {
             markFailed(audioID)
             return
         }
-        activateSession()
         p.delegate = self
         p.enableRate = true
         p.prepareToPlay()
@@ -411,13 +455,16 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func playWeb(token: String, audioID: String) async {
-        let ticket = try? await APIClient.shared.mediaTicket(token: token)
+        async let session: Void = activateSession()
+        var ticket: String?
+        if let t = self.ticket, Date().timeIntervalSince(t.at) < 40 { ticket = t.value }
+        else if let fresh = try? await APIClient.shared.mediaTicket(token: token) { ticket = fresh; self.ticket = (fresh, Date()) }
+        await session
         guard current == audioID else { return } // no longer wanted: not a failure
         guard let ticket else {
             markFailed(audioID)
             return
         }
-        activateSession()
         let src = APIClient.shared.voiceURL(audioID: audioID, ticket: ticket).absoluteString
         let w = webView()
         let html = """
@@ -479,6 +526,11 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     private func resume() {
+        // a call, the recorder or a status may have taken the audio session while paused
+        if !CallManager.shared.lineInUse && AVAudioSession.sharedInstance().category != .playback {
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
+            try? AVAudioSession.sharedInstance().setActive(true)
+        }
         if let player {
             player.rate = Float(speed)
             player.play()
@@ -500,6 +552,7 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         currentSpot = nil
         startAt = 0
         progress = 0
+        begun = false
     }
 
     private func markFailed(_ id: String) {
@@ -509,12 +562,15 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
 
     private func startTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        // 30 times a second and in the common run loop mode: smooth, and it keeps moving while the chat is scrolled
+        let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let p = self.player, p.duration > 0 else { return }
-                self.progress = p.currentTime / p.duration
+                guard let self, let p = self.player, p.duration > 0, p.isPlaying else { return }
+                self.progress = min(1, p.currentTime / p.duration)
             }
         }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     /// The next voice note after the one playing, in the same conversation, among the bubbles shown so far.
@@ -545,6 +601,19 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
             self.finished()
         }
     }
+}
+
+/// The play position of the note playing, observed only by that note's bubble.
+@MainActor
+final class VoiceClock: ObservableObject {
+    @Published var progress: Double = 0
+}
+
+/// Reads the clock for the bubble that is playing (the other bubbles do not observe it).
+private struct VoiceClockReader<Content: View>: View {
+    @ObservedObject var clock: VoiceClock
+    let content: (Double) -> Content
+    var body: some View { content(clock.progress) }
 }
 
 /// WKScriptMessageHandler retains its handler; this small bridge keeps the player out of that cycle.
@@ -593,7 +662,7 @@ struct VoiceBubble: View {
 
     private var isCurrent: Bool { player.current == message.audio_id }
     /// Playing or paused part-way: the speed button shows instead of the picture, the time played instead of the length.
-    private var started: Bool { isCurrent && (player.playing || player.progress > 0) }
+    private var started: Bool { isCurrent && (player.playing || player.begun) }
     /// Decoded once per message (every voice bubble redraws 10 times a second while any note plays).
     private static var sampleMemo: [String: [Double]] = [:]
     private var samples: [Double] {
@@ -630,8 +699,13 @@ struct VoiceBubble: View {
                             Text("chat.voice.failed")
                         } else {
                             let total = message.duration_ms ?? 0
-                            Text(Self.length(started ? Int64(Double(total) * player.progress) : total))
-                                .monospacedDigit()
+                            if started {
+                                VoiceClockReader(clock: player.clock) { p in
+                                    Text(Self.length(Int64(Double(total) * p))).monospacedDigit()
+                                }
+                            } else {
+                                Text(Self.length(total)).monospacedDigit()
+                            }
                         }
                         Spacer(minLength: 6)
                         if let d = message.date { Text(d, style: .time) }
@@ -651,6 +725,7 @@ struct VoiceBubble: View {
         }
         .onAppear {
             player.register(token: token, message: message)
+            player.prefetch(token: token, message: message)
             if avatarID == nil { faces.load(token: token, userID: message.sender_id) }
         }
     }
@@ -676,9 +751,16 @@ struct VoiceBubble: View {
     }
 
     /// The waveform: played part coloured, a dot at the play position; tap or drag along it to seek.
-    private var wave: some View {
-        let progress = isCurrent ? player.progress : 0
-        return Waveform(samples: samples, progress: progress, color: Self.barColor,
+    @ViewBuilder private var wave: some View {
+        if isCurrent {
+            VoiceClockReader(clock: player.clock) { p in waveAt(p) }
+        } else {
+            waveAt(0)
+        }
+    }
+
+    private func waveAt(_ progress: Double) -> some View {
+        Waveform(samples: samples, progress: progress, color: Self.barColor,
                         playedColor: mine ? Self.playedMine : Self.playedTheirs,
                         dot: mine ? Self.playedMine : Self.playedTheirs)
             .frame(width: 150, height: 26)

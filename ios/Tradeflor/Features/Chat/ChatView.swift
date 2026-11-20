@@ -2404,6 +2404,7 @@ struct ChatView: View {
             if let audio = p.audio, let ms = p.durationMs {
                 m = try await APIClient.shared.sendVoice(token: token, conversationID: chat.conversation_id, audio: audio,
                                                          durationMs: ms, waveform: p.waveform, key: p.id)
+                if let aid = m.audio_id, !m.isViewOnce { APIClient.shared.keepVoice(audioID: aid, data: audio) }
             } else if p.video != nil || !p.docName.isEmpty {
                 // a video or a document: 4 MB or more in chunks from its file (progress, resumed after a drop and by Retry with
                 // the same key; an older server: the one request); smaller in one request, as before

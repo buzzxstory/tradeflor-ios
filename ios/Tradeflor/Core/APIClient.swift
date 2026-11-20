@@ -688,6 +688,26 @@ final class APIClient {
     func voice(token: String, audioID: String) async -> Data? {
         let key = "voice/\(audioID)" as NSString
         if let hit = avatarCache.object(forKey: key) { return hit as Data }
+        // a prefetch already on its way: the tap waits for it instead of downloading the note a second time
+        voiceLock.lock()
+        if let running = voiceInFlight[audioID] { voiceLock.unlock(); return await running.value }
+        let task = Task<Data?, Never> { await self.fetchVoice(token: token, audioID: audioID, key: key) }
+        voiceInFlight[audioID] = task
+        voiceLock.unlock()
+        let out = await task.value
+        voiceLock.lock(); voiceInFlight[audioID] = nil; voiceLock.unlock()
+        return out
+    }
+
+    /// The bytes of a voice note this phone just recorded and sent: it plays at once, with no download.
+    func keepVoice(audioID: String, data: Data) {
+        guard !data.isEmpty else { return }
+        avatarCache.setObject(data as NSData, forKey: "voice/\(audioID)" as NSString, cost: data.count)
+    }
+
+    func hasVoice(audioID: String) -> Bool { avatarCache.object(forKey: "voice/\(audioID)" as NSString) != nil }
+
+    private func fetchVoice(token: String, audioID: String, key: NSString) async -> Data? {
         var req = URLRequest(url: base.appendingPathComponent("media").appendingPathComponent("voice").appendingPathComponent(audioID))
         req.timeoutInterval = 60
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -828,6 +848,10 @@ final class APIClient {
 
     /// The last Retry-After the server sent with a 429 (seconds), read by the send line.
     var lastRetryAfter: Double = 0
+
+    /// Voice notes being downloaded (prefetch or tap), so each is fetched once.
+    private var voiceInFlight: [String: Task<Data?, Never>] = [:]
+    private let voiceLock = NSLock()
 
     let avatarCache: NSCache<NSString, NSData> = {
         let c = NSCache<NSString, NSData>()
