@@ -59,8 +59,8 @@ struct StatusStrip: View {
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.top, 8)
-            .padding(.bottom, 4)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
         }
         .task {
             let k = "strip|" + token

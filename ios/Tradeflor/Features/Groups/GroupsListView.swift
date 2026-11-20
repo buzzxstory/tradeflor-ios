@@ -265,39 +265,51 @@ struct GroupsListView: View {
             let ordered = Array((pinned + rest.filter { isUnread($0) } + rest.filter { !isUnread($0) }).prefix(10))
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 10) {
+                    // the same size and form as the Chats status row (StatusStrip): a 52 pt ring box, a 43 pt picture, a 2 pt
+                    // ring inside it, a 60 pt item, the name 11 pt on a 15 pt line
                     Button { showCreate = true } label: {
                         VStack(spacing: 4) {
-                            ZStack(alignment: .bottomTrailing) {
-                                GroupPlusGlyph().frame(width: 24, height: 24).foregroundStyle(Theme.hex(0x8FF6F8))
-                                    .frame(width: 48, height: 48)
-                                    .background(Theme.hex(0x0A3440), in: Circle())
-                                    .overlay(Circle().stroke(Theme.hex(0x40E2EC, 0.35), style: StrokeStyle(lineWidth: 1.5, dash: [3, 3])))
-                                    .padding(2)
-                                Image(systemName: "plus").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x00181B))
-                                    .frame(width: 20, height: 20).background(Theme.accent, in: Circle())
-                                    .overlay(Circle().stroke(Theme.soul, lineWidth: 2))
-                            }
-                            Text("grp.new").font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(1)
+                            GroupPlusGlyph().frame(width: 22, height: 22).foregroundStyle(Theme.hex(0x8FF6F8))
+                                .frame(width: 43, height: 43)
+                                .background(Theme.hex(0x0A3440), in: Circle())
+                                .frame(width: 52, height: 52)
+                                .overlay(Circle().strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [4, 3])).foregroundStyle(Theme.hex(0x288CAF, 0.55)))
+                            Text("grp.new").font(.system(size: 11)).foregroundStyle(Theme.faint)
+                                .lineLimit(1).truncationMode(.tail).frame(height: 15).frame(maxWidth: 60)
                         }
                         .frame(width: 60)
+                        .overlay(alignment: .topTrailing) {
+                            Image(systemName: "plus").font(.system(size: 11, weight: .heavy)).foregroundStyle(Theme.onAccent)
+                                .frame(width: 21, height: 21).background(Theme.accent, in: Circle())
+                                .overlay(Circle().stroke(Theme.panel, lineWidth: 2))
+                                .padding(4.5)
+                                .offset(x: -0.5, y: 32.5)
+                        }
                     }
-                    .buttonStyle(ListPressStyle())
+                    .buttonStyle(.plain)
                     .accessibilityLabel(Text("grp.new"))
                     ForEach(ordered) { g in
+                        let unread = isUnread(g)
                         Button { path = [g] } label: {
                             VStack(spacing: 4) {
-                                ListAvatarRing(seen: !isUnread(g)) {
-                                    Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id, size: 45)
-                                }
-                                Text(g.name).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                                Avatar(token: token, userID: "", avatarID: g.avatar_id, title: g.name, groupID: g.conversation_id, size: 43)
+                                    .frame(width: 43, height: 43)
+                                    .frame(width: 52, height: 52)
+                                    .overlay(
+                                        Circle().strokeBorder(style: StrokeStyle(lineWidth: 2))
+                                            .foregroundStyle(unread ? Theme.accent : Theme.hex(0xA9B9C5, 0.35))
+                                            .shadow(color: unread ? Theme.hex(0x00D4DF, 0.3) : .clear, radius: 5)
+                                    )
+                                Text(g.name).font(.system(size: 11)).foregroundStyle(Theme.faint)
+                                    .lineLimit(1).truncationMode(.tail).frame(height: 15).frame(maxWidth: 60)
                             }
                             .frame(width: 60)
                         }
-                        .buttonStyle(ListPressStyle())
+                        .buttonStyle(.plain)
                         .accessibilityLabel(Text(g.name))
                     }
                 }
-                .padding(.horizontal, 14).padding(.top, 8).padding(.bottom, 4)
+                .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
             }
         }
     }
