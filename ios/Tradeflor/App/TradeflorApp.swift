@@ -68,28 +68,23 @@ struct RootView: View {
                 // the web's phone dock (MobileTabBar) instead of the system tab bar
                 TabView(selection: $tab) {
                     ChatListView()
-                        .modifier(DockSpace())
                         .toolbar(.hidden, for: .tabBar)
                         .tag("chats")
                     GroupsListView()
-                        .modifier(DockSpace())
                         .toolbar(.hidden, for: .tabBar)
                         .tag("groups")
                     TradeFlorView()
-                        .modifier(DockSpace())
                         .toolbar(.hidden, for: .tabBar)
                         .tag("tradeflor")
                     CalendarView()
-                        .modifier(DockSpace())
                         .toolbar(.hidden, for: .tabBar)
                         .tag("calendar")
                     SettingsView()
-                        .modifier(DockSpace())
                         .toolbar(.hidden, for: .tabBar)
                         .tag("settings")
                 }
-                // the dock floats over the tabs; each tab keeps room for it (DockSpace), so no row or "Load more" hides
-                // under it (a safe-area inset on a TabView does not reach its pages' scroll views)
+                // the dock floats over the tabs; every scroll view of a tab keeps room for it (DockSpace on the scroll view
+                // itself), so no row hides under it: an inset here, outside each tab's NavigationStack, never reached them
                 // the animation belongs to the dock alone: on the whole TabView it also animated every tab's bottom room
                 // (DockSpace) while a chat was being pushed or the keyboard came up
                 .overlay(alignment: .bottom) {

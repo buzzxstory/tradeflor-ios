@@ -42,4 +42,17 @@ final class WhatsAppParityTests: XCTestCase {
         let push = try source("Tradeflor/Core/PushManager.swift")
         XCTAssertTrue(push.contains("PushKeys.mirrorShared()"))
     }
+
+    /// The floating dock never covers the last row or the last line of a page (owner, 2026-11-20: the last chat and the
+    /// end of Settings > Notifications stayed under the dock). The room sits on each scroll view itself.
+    func testEveryTabScrollViewKeepsRoomForTheDock() throws {
+        for f in ["Tradeflor/Features/Chats/ChatListView.swift", "Tradeflor/Features/Groups/GroupsListView.swift",
+                  "Tradeflor/Features/Status/CalendarView.swift", "Tradeflor/Features/Status/TradeFlorView.swift",
+                  "Tradeflor/Features/Settings/LinkedDevicesView.swift"] {
+            XCTAssertTrue(try source(f).contains(".modifier(DockSpace())"), "\(f) has no room for the dock")
+        }
+        let settings = try source("Tradeflor/Features/Settings/SettingsView.swift")
+        XCTAssertGreaterThanOrEqual(settings.components(separatedBy: ".modifier(DockSpace())").count - 1, 3,
+                                    "Settings and both SettingsPage looks need room for the dock")
+    }
 }

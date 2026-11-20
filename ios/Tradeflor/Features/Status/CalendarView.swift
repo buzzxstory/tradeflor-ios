@@ -160,6 +160,7 @@ struct CalendarView: View {
                 .padding(.top, 4)
                 .padding(.bottom, 24)
             }
+            .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
             .refreshable {
                 await load(manual: true)
                 await loadNext()

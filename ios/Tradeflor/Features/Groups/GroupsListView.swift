@@ -141,6 +141,7 @@ struct GroupsListView: View {
                             .padding(.bottom, 12)
                     }
                 }
+                .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
                 .modifier(ListNoBounce())
             }
             .simultaneousGesture(TapGesture().onEnded { if TabChrome.shared.keyboard { TabChrome.dismissKeyboard() } })

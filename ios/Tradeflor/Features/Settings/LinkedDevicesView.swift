@@ -212,6 +212,7 @@ struct LinkedDevicesView: View {
                 .padding(.top, 4)
                 .padding(.bottom, 24)
             }
+            .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
             .scrollDismissesKeyboard(.interactively)
             .refreshable { await load() }
             .onChange(of: problem) { p in

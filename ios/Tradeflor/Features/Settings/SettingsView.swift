@@ -131,6 +131,7 @@ struct SettingsView: View {
                 .padding(.top, 18)
                 .padding(.bottom, 32)
             }
+            .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
             .buttonStyle(.plain)
             // back from a page (Live location's Stop, My Profile, My Identity): the count and the card read again; the
             // first appearance is the .task below
@@ -536,6 +537,7 @@ struct SettingsPage<Content: View>: View {
             }
             .padding(16)
         }
+        .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
         .scrollDismissesKeyboard(.interactively)
         .background(Starfield())
         .navigationTitle(title)
@@ -572,6 +574,7 @@ struct SettingsPage<Content: View>: View {
             .padding(.top, 4)
             .padding(.bottom, 32)
         }
+        .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
         .scrollDismissesKeyboard(.interactively)
         .background(SettingsBackground())
         .navigationTitle("")

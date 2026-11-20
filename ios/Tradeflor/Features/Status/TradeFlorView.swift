@@ -87,6 +87,7 @@ struct TradeFlorView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 28)
             }
+            .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
             .scrollDismissesKeyboard(.interactively)
             .refreshable { await load() }
             .background(
