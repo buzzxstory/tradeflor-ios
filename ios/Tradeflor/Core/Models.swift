@@ -32,6 +32,8 @@ struct ConversationSummary: Decodable, Identifiable, Hashable {
     var last_message_status: String? = nil
     var last_call_state: String? = nil
     var disappear_secs: Int? = nil
+    /// Screenshots blocked in this private chat (server: only present when on).
+    var no_screenshots: Bool? = nil
 
     var id: String { conversation_id }
 

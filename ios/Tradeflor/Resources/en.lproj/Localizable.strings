@@ -2062,3 +2062,10 @@
 "shot.on.toast" = "Screenshots are blocked in this chat";
 "shot.off.toast" = "Screenshots are allowed again in this chat";
 "shot.taken.toast" = "Screenshots are blocked here. The other person was told.";
+"shot.row.group.sub" = "Hides this group from screenshots and screen recordings, for every member";
+"shot.notice.on.you" = "You blocked screenshots in this chat.";
+"shot.notice.off.you" = "You allowed screenshots again in this chat.";
+"shot.notice.on" = "%@ blocked screenshots in this chat.";
+"shot.notice.off" = "%@ allowed screenshots again in this chat.";
+"shot.notice.taken" = "%@ took a screenshot of this chat.";
+"shot.notice.taken.you" = "You took a screenshot of this chat.";

@@ -209,10 +209,9 @@ struct ChatView: View {
     private func readScreenshotSetting() async {
         guard let s = try? await APIClient.shared.chatSettings(token: token, conversationID: chat.conversation_id) else { return }
         let on = s.blocksScreenshots
+        if on { ScreenGuard.shared.protect(chat.conversation_id) } else { ScreenGuard.shared.release(chat.conversation_id) }
         guard on != noScreenshots else { return }
         noScreenshots = on
-        if on { ScreenGuard.shared.protect(chat.conversation_id) } else { ScreenGuard.shared.release(chat.conversation_id) }
-        flash(on ? "shot.on.toast" : "shot.off.toast")
     }
 
     private func screenshotTaken() {
@@ -244,6 +243,16 @@ struct ChatView: View {
 
     @ViewBuilder private var chatHeader: some View {
         topBar
+        if noScreenshots {
+            HStack(spacing: 6) {
+                Image(systemName: "camera.metering.none").font(.system(size: 11, weight: .semibold))
+                Text("shot.on.toast").font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(Theme.accent)
+            .frame(maxWidth: .infinity).frame(height: 26)
+            .background(barColor)
+            .overlay(alignment: .bottom) { Rectangle().fill(Theme.borderStrong).frame(height: 1) }
+        }
         if searchOpen { searchBar }
         if isGroup && (focusDoc?.focus.active ?? false) && !selecting {
             FocusBanner(showingAll: focusShowAll, onToggle: { focusShowAll.toggle() }, onEdit: { showFocus = true })
@@ -1141,7 +1150,15 @@ struct ChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in
             if UIScreen.main.isCaptured { screenshotTaken() }
         }
+        // a notice about screenshots (on, off, someone took one) in this chat: the setting is read again at once
+        .onReceive(LiveConnection.shared.messages) { m in
+            if m.conversation_id == chat.conversation_id, m.kind == "notice", (m.signal ?? "").contains("\"screenshots\"") {
+                Task { await readScreenshotSetting() }
+            }
+        }
         .onAppear {
+            // a private chat knows it from the list, before its settings are read: protected from the first frame
+            if chat.no_screenshots == true && !noScreenshots { noScreenshots = true }
             if noScreenshots { ScreenGuard.shared.protect(chat.conversation_id) }
             TabChrome.shared.conversationOpened() // the dock steps aside inside a conversation (web: one region at a time)
             box.onEmptyChange = { e in draftEmpty = e }
@@ -2367,6 +2384,19 @@ struct ChatView: View {
     private func readNotice(_ m: Message, _ s: String) -> String {
         guard let d = s.data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return m.body }
+        // Block screenshots (server contract): who turned it on or off, who took a screenshot
+        if let ev = o["event"] as? String, ev == "screenshots" || ev == "screenshot" {
+            let by = (o["by"] as? String) ?? ""
+            let mine = by == me
+            let name = mine ? "" : (isGroup ? (memberNames[by] ?? chat.title) : chat.title)
+            if ev == "screenshot" {
+                return mine ? NSLocalizedString("shot.notice.taken.you", comment: "")
+                    : String(format: NSLocalizedString("shot.notice.taken", comment: ""), name)
+            }
+            let on = (o["on"] as? Bool) ?? false
+            if mine { return NSLocalizedString(on ? "shot.notice.on.you" : "shot.notice.off.you", comment: "") }
+            return String(format: NSLocalizedString(on ? "shot.notice.on" : "shot.notice.off", comment: ""), name)
+        }
         if (o["event"] as? String) == "disappearing" {
             let secs = (o["secs"] as? Int) ?? 0
             return secs == 0 ? NSLocalizedString("notice.disappear.off", comment: "")

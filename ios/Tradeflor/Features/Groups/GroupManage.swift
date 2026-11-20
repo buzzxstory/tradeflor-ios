@@ -444,6 +444,8 @@ struct GroupInfoView: View {
     private var token: String { store.session?.token ?? "" }
     private var me: String { store.session?.userID ?? "" }
     private var admin: Bool { group?.isAdmin ?? false }
+    /// Screenshots blocked in this group (read with the group).
+    @State private var noShots = false
     private var owner: Bool { group?.isOwner ?? false }
     private var canInvite: Bool { admin || group?.can_invite == true }
     /// Invite friends is offered when there is a link to share: a public group's permanent link, or the right to make invites.
@@ -1252,6 +1254,14 @@ struct GroupInfoView: View {
             toggleRow("grp.approve.new", pendingFlags["approval"] ?? g.join_approval ?? false) { v in
                 await setFlag("approval", v) { try await APIClient.shared.grpUpdate(token: token, id: groupID, joinApproval: v) }
             }
+            // Block screenshots for every member (owner / admins): the setting lives in conversations/settings
+            toggleRow("shot.row", pendingFlags["shots"] ?? noShots, sub: "shot.row.group.sub") { v in
+                await setFlag("shots", v) {
+                    try await APIClient.shared.setNoScreenshots(token: token, conversationID: groupID, on: v)
+                    noShots = v
+                    LiveConnection.shared.changes.send(groupID)
+                }
+            }
             toggleRow("grp.comments", pendingFlags["comments"] ?? g.comments ?? false, sub: "grp.comments.sub") { v in
                 await setFlag("comments", v) { try await APIClient.shared.grpUpdate(token: token, id: groupID, comments: v) }
             }
@@ -1647,6 +1657,7 @@ struct GroupInfoView: View {
         // a failed request leaves the list as it was (it used to turn into an empty list)
         if g.isAdmin || g.can_invite == true, let l = await APIClient.shared.grpInvitesIfOK(token: token, id: groupID) { invites = l }
         if g.isAdmin, let l = await APIClient.shared.grpBansIfOK(token: token, id: groupID) { bans = l }
+        if let s = try? await APIClient.shared.chatSettings(token: token, conversationID: groupID) { noShots = s.blocksScreenshots }
         if g.isOwner || g.isAdmin {
             if let l = await APIClient.shared.grpJoinRequestsIfOK(token: token, id: groupID) { requests = l }
             if let l = await APIClient.shared.grpAuditIfOK(token: token, id: groupID) { audit = l }
