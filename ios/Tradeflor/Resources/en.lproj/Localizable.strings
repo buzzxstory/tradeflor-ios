@@ -1926,3 +1926,5 @@
 "stv.who" = "Who viewed this status";
 "chat.media.missing" = "This photo or video is no longer on this phone, so it was not sent.";
 "chat.media.missing.tap" = "Tap to remove";
+"pe.name" = "Display Name";
+"pe.title" = "Edit Profile";

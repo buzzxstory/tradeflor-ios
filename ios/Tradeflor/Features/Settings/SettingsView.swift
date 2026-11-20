@@ -683,8 +683,13 @@ enum TFQR {
     }
 }
 
+/// Edit Profile, full screen: the glowing curved light lines, a close pill, the title, a Save pill, the picture with its ring
+/// and camera badge, and three glass cards (Display Name, Username with its availability, About with its counter).
 struct EditProfileSheet: View {
     let profile: Profile
+    var token = ""
+    /// The camera badge: the caller closes this screen and opens the photo picker.
+    var onPhoto: (() -> Void)? = nil
     let onSave: (String, String, String) async -> String?
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
@@ -692,59 +697,207 @@ struct EditProfileSheet: View {
     @State private var bio = ""
     @State private var saving = false
     @State private var problem: String?
+    private enum Avail { case same, checking, ok, taken, unknown }
+    @State private var avail = Avail.same
+    @FocusState private var focus: Field?
+    private enum Field { case name, username, bio }
+
+    private var edge: Color { Theme.accent.opacity(0.55) }
+    private static let azure = Theme.hex(0x5AA8FF)
 
     var body: some View {
-        NavigationStack {
-            Form {
-                // the server's limits (auth/profile.go: name 64, username 2-32, bio 200, counted in Unicode scalars, so an
-                // emoji made of several counts as several): a longer text was refused with an English line
-                Section(header: Text("settings.name")) {
-                    TextField("set.name.ph", text: $name).textContentType(.name)
-                        .onChange(of: name) { v in let c = Self.clip(v, 64); if c != v { name = c } }
-                }
-                .listRowBackground(Theme.surface)
-                Section(header: Text("signup.username")) {
-                    TextField("signup.username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .onChange(of: username) { v in let c = Self.clip(v, 24); if c != v { username = c } }
-                }
-                .listRowBackground(Theme.surface)
-                Section(header: Text("settings.bio"), footer: Text(verbatim: "\(bio.unicodeScalars.count)/200")) {
-                    TextField("set.bio.ph", text: $bio, axis: .vertical).lineLimit(3...6)
-                        .onChange(of: bio) { v in let c = Self.clip(v, 200); if c != v { bio = c } }
-                }
-                .listRowBackground(Theme.surface)
-                if let problem { Section { Text(problem).foregroundStyle(Theme.danger).font(.footnote) }.listRowBackground(Theme.surface) }
-            }
-            .scrollContentBackground(.hidden)
-            .background(Theme.ground.ignoresSafeArea())
-            .navigationTitle(Text("set.edit.profile"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    if saving { ProgressView() } else {
-                        Button("settings.save") {
-                            // set before the task starts: a quick double tap saved the profile twice
-                            guard !saving else { return }
-                            saving = true
-                            Task {
-                                problem = await onSave(name.trimmingCharacters(in: .whitespacesAndNewlines),
-                                                       username.trimmingCharacters(in: .whitespacesAndNewlines),
-                                                       bio.trimmingCharacters(in: .whitespacesAndNewlines))
-                                saving = false
-                                if problem == nil { dismiss() }
-                            }
+        ZStack {
+            LinearGradient(colors: [Theme.hex(0x02242F), Theme.hex(0x00131B), Theme.hex(0x000F16)], startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
+            // the glowing curves: one behind the picture, one rising at the bottom (as the design)
+            ProfileHeroLines().frame(height: 300).frame(maxHeight: .infinity, alignment: .top).opacity(0.9).ignoresSafeArea()
+            ProfileHeroLines().frame(height: 260).frame(maxHeight: .infinity, alignment: .bottom).opacity(0.8).ignoresSafeArea()
+            VStack(spacing: 0) {
+                topBar
+                ScrollView {
+                    VStack(spacing: 18) {
+                        avatar
+                        card(icon: "person", label: "pe.name") {
+                            TextField("set.name.ph", text: $name).textContentType(.name).focused($focus, equals: .name)
+                                .font(.system(size: 22)).foregroundStyle(.white)
+                                .onChange(of: name) { v in let c = Self.clip(v, 64); if c != v { name = c } }
                         }
-                        .bold()
+                        card(icon: "at", label: "signup.username", trailing: { availView }) {
+                            TextField("signup.username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .focused($focus, equals: .username)
+                                .font(.system(size: 22)).foregroundStyle(.white)
+                                .onChange(of: username) { v in let c = Self.clip(v, 24); if c != v { username = c } }
+                        }
+                        aboutCard
+                        if let problem {
+                            Text(problem).font(.system(size: 14)).foregroundStyle(Theme.hex(0xFFB3B3)).multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity).padding(.horizontal, 12)
+                        }
                     }
+                    .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 40)
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
         }
+        .environment(\.colorScheme, .dark)
         .onAppear {
             name = profile.display_name
             username = profile.username
             bio = profile.bio
         }
+        // the name is checked 0.45 s after the last key; unchanged = no check
+        .task(id: username) {
+            let u = username.trimmingCharacters(in: CharacterSet(charactersIn: "@＠ ")).lowercased()
+            if u == profile.username.lowercased() || u.isEmpty { avail = .same; return }
+            avail = .checking
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            if Task.isCancelled { return }
+            if let r = await APIClient.shared.stUsernameAvailable(token: token, u) { avail = r.available ? .ok : .taken } else { avail = .unknown }
+        }
+    }
+
+    // MARK: pieces
+
+    private var topBar: some View {
+        HStack {
+            Button { dismiss() } label: {
+                Label("chat.close", systemImage: "xmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text)
+                    .padding(.horizontal, 16).frame(height: 44)
+                    .background(Theme.accent.opacity(0.08), in: Capsule())
+                    .overlay(Capsule().stroke(edge, lineWidth: 1.2))
+            }
+            .buttonStyle(.plain)
+            Spacer(minLength: 6)
+            HStack(spacing: 8) {
+                Text("pe.title").font(.system(size: 20, weight: .bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
+                Image(systemName: "person").font(.system(size: 18)).foregroundStyle(Theme.accent)
+                    .overlay(alignment: .bottomTrailing) { Image(systemName: "pencil").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.accent).offset(x: 5, y: 3) }
+            }
+            Spacer(minLength: 6)
+            Button { Task { await save() } } label: {
+                Group {
+                    if saving { ProgressView().tint(Theme.onAccent) }
+                    else { Label("settings.save", systemImage: "checkmark").labelStyle(SaveLabel()) }
+                }
+                .font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.onAccent)
+                .padding(.horizontal, 18).frame(height: 44)
+                .background(LinearGradient(colors: [Theme.hex(0x12E6E8), Theme.hex(0x0AB8C4)], startPoint: .leading, endPoint: .trailing), in: Capsule())
+                .shadow(color: Theme.accent.opacity(0.55), radius: 10)
+            }
+            .buttonStyle(.plain)
+            .disabled(saving)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+    }
+
+    private struct SaveLabel: LabelStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            HStack(spacing: 8) { configuration.title; configuration.icon }
+        }
+    }
+
+    private var avatar: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Avatar(token: token, userID: profile.user_id, avatarID: profile.avatar_id.isEmpty ? nil : profile.avatar_id,
+                   title: profile.display_name.isEmpty ? profile.username : profile.display_name, size: 150)
+                .padding(6)
+                .overlay(Circle().stroke(Theme.accent.opacity(0.9), lineWidth: 3))
+                .shadow(color: Theme.accent.opacity(0.6), radius: 18)
+            if let onPhoto {
+                Button { onPhoto() } label: {
+                    Image(systemName: "camera.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.text)
+                        .frame(width: 48, height: 48)
+                        .background(Theme.hex(0x062B36), in: Circle())
+                        .overlay(Circle().stroke(Theme.accent, lineWidth: 2))
+                        .shadow(color: Theme.accent.opacity(0.5), radius: 8)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("set.photo.change"))
+                .offset(x: 2, y: 2)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    @ViewBuilder private var availView: some View {
+        switch avail {
+        case .ok:
+            Image(systemName: "checkmark").font(.system(size: 14, weight: .heavy)).foregroundStyle(.black)
+                .frame(width: 38, height: 38).background(Theme.hex(0x14D95A), in: Circle())
+                .shadow(color: Theme.hex(0x14D95A, 0.5), radius: 6)
+        case .taken:
+            Image(systemName: "xmark").font(.system(size: 14, weight: .heavy)).foregroundStyle(.white)
+                .frame(width: 38, height: 38).background(Theme.hex(0xE5484D), in: Circle())
+        case .checking:
+            ProgressView().tint(Theme.accent)
+        case .same:
+            Image(systemName: "checkmark").font(.system(size: 14, weight: .heavy)).foregroundStyle(.black)
+                .frame(width: 38, height: 38).background(Theme.hex(0x14D95A), in: Circle())
+        case .unknown:
+            EmptyView()
+        }
+    }
+
+    /// A glass card: its icon, a small label over the value (the field), an optional mark on the right.
+    private func card<C: View>(icon: String, label: String, @ViewBuilder content: () -> C) -> some View {
+        card(icon: icon, label: label, trailing: { EmptyView() }, content: content)
+    }
+
+    private func card<C: View, T: View>(icon: String, label: String, @ViewBuilder trailing: () -> T,
+                                        @ViewBuilder content: () -> C) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon).font(.system(size: 26, weight: .regular)).foregroundStyle(Theme.accent).frame(width: 36)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(LocalizedStringKey(label)).font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text)
+                content()
+            }
+            Spacer(minLength: 4)
+            trailing()
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
+        .background(glass)
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(edge, lineWidth: 1.2))
+        .shadow(color: Theme.accent.opacity(0.25), radius: 10)
+    }
+
+    private var glass: some View {
+        RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .fill(LinearGradient(colors: [Theme.hex(0x08323F, 0.75), Theme.hex(0x04202B, 0.75)], startPoint: .top, endPoint: .bottom))
+    }
+
+    private var aboutCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 14) {
+                Image(systemName: "doc.text").font(.system(size: 26)).foregroundStyle(Theme.accent).frame(width: 36)
+                Text("settings.bio").font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text)
+            }
+            TextField("set.bio.ph", text: $bio, axis: .vertical).lineLimit(4...10).focused($focus, equals: .bio)
+                .font(.system(size: 19)).foregroundStyle(.white).lineSpacing(3)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.accent.opacity(0.4), lineWidth: 1))
+                .onChange(of: bio) { v in let c = Self.clip(v, 200); if c != v { bio = c } }
+            Text(verbatim: "\(bio.unicodeScalars.count) / 200").font(.system(size: 16)).monospacedDigit().foregroundStyle(Theme.muted)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(16)
+        .background(glass)
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(edge, lineWidth: 1.2))
+        .shadow(color: Theme.accent.opacity(0.25), radius: 10)
+    }
+
+    private func save() async {
+        // set before the task starts: a quick double tap saved the profile twice
+        guard !saving else { return }
+        focus = nil
+        saving = true
+        problem = await onSave(name.trimmingCharacters(in: .whitespacesAndNewlines),
+                               username.trimmingCharacters(in: .whitespacesAndNewlines),
+                               bio.trimmingCharacters(in: .whitespacesAndNewlines))
+        saving = false
+        if problem == nil { dismiss() }
     }
 
     /// At most `max` Unicode scalars (the server's count), never cutting a character in half.

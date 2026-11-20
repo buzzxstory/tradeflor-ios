@@ -18,6 +18,7 @@ struct MyProfilePage: View {
     @State private var confirmRemove = false
     @State private var note: String?
     @State private var busy = false
+    @State private var showPhotoPicker = false
     @State private var groupsCount: Int?
     @State private var chatsCount: Int?
     @EnvironmentObject private var live: LiveConnection
@@ -56,9 +57,14 @@ struct MyProfilePage: View {
         }
         .overlay { if busy { ProgressView().tint(Theme.accent) } }
         .task { await load() }
-        .sheet(isPresented: $editing) {
+        .photosPicker(isPresented: $showPhotoPicker, selection: $picked, matching: .images)
+        .fullScreenCover(isPresented: $editing) {
             if let profile {
-                EditProfileSheet(profile: profile) { n, u, b in
+                EditProfileSheet(profile: profile, token: token, onPhoto: {
+                    // the picture is chosen on this page: the edit screen closes first, then the picker opens
+                    editing = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { showPhotoPicker = true }
+                }) { n, u, b in
                     do {
                         // the @username goes to the server only when it was changed (the server applies its rename rules to it)
                         let clean = u.trimmingCharacters(in: CharacterSet(charactersIn: "@＠ ")).lowercased()
