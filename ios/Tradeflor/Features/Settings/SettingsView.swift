@@ -28,6 +28,9 @@ struct SettingsView: View {
     @AppStorage("tf.night") private var night = true
     @ObservedObject private var calls = CallManager.shared
     @State private var appeared = false
+    /// My note over my picture (WhatsApp's About note, TRADEFLOR's look): the row under the card and its editor.
+    @ObservedObject private var notes = NoteStore.shared
+    @State private var editingNote = false
 
     private var token: String { store.session?.token ?? "" }
     private var username: String { profile?.username ?? store.session?.username ?? "" }
@@ -43,6 +46,7 @@ struct SettingsView: View {
                     header
                     NavigationLink { MyProfilePage(onChange: { Task { await load(retryAdmin: false) } }) } label: { profileCard }
                         .padding(.top, 4)
+                    noteRow
 
                     group("settings.sec.account") {
                         NavigationLink { AccountPage() } label: {
@@ -193,6 +197,48 @@ struct SettingsView: View {
 
     /// .s-profile: avatar 62 with a turquoise edge and the green presence dot, name 19, @handle 14, "● Online" 13;
     /// "My Profile ›" pill (36 high); the quiet turquoise sweep on the right.
+    /// My note: what it says, how long it stays and who sees it; "Add a note" when there is none. Tapping opens the editor.
+    private var noteRow: some View {
+        let n = notes.mine.flatMap { $0.isLive() ? $0 : nil }
+        return Button { editingNote = true } label: {
+            HStack(spacing: 12) {
+                Text(n.map { $0.emoji.isEmpty ? "💬" : $0.emoji } ?? "✨").font(.system(size: 22))
+                    .frame(width: 44, height: 44)
+                    .background(Theme.dyn(0x08D9D9, 0x00A8B5, 0.12, 0.12), in: Circle())
+                    .overlay(Circle().stroke(Theme.dyn(0x35E6F2, 0x00A8B5, 0.35, 0.4), lineWidth: 1))
+                VStack(alignment: .leading, spacing: 2) {
+                    if let n {
+                        Text(verbatim: n.text.isEmpty ? n.emoji : n.text)
+                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(SetUI.text).lineLimit(1)
+                        HStack(spacing: 5) {
+                            Image(systemName: NoteAudience(rawValue: n.audience ?? "")?.icon ?? "person.2")
+                            Text(verbatim: n.timeLeft())
+                        }
+                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(SetUI.sub)
+                    } else {
+                        Text("note.add").font(.system(size: 16, weight: .semibold)).foregroundStyle(SetUI.text)
+                        Text("note.add.sub").font(.system(size: 12.5)).foregroundStyle(SetUI.sub).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 6)
+                Image(systemName: n == nil ? "plus" : "pencil").font(.system(size: 14, weight: .bold)).foregroundStyle(SetUI.accent)
+                    .frame(width: 32, height: 32)
+                    .background(Theme.dyn(0x031E28, 0x0A8FA0, 0.7, 0.08), in: Circle())
+                    .overlay(Circle().stroke(Theme.dyn(0x08D9D9, 0x0A8FA0, 0.3, 0.25), lineWidth: 1))
+            }
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .sCardChrome()
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .fullScreenCover(isPresented: $editingNote) {
+            AboutNoteEditor(token: token, userID: profile?.user_id ?? (store.session?.userID ?? ""),
+                            avatarID: (profile?.avatar_id.isEmpty ?? true) ? nil : profile?.avatar_id, name: name)
+        }
+        .task(id: token) { await notes.load(token: token) }
+    }
+
     private var profileCard: some View {
         let on = steady
         return HStack(spacing: 14) {

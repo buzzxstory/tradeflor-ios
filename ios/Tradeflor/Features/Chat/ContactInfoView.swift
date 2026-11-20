@@ -153,8 +153,13 @@ struct ContactInfoView: View {
                     .padding(4)
                     .overlay(Circle().stroke(Theme.dyn(0x35E6F2, 0x00A8B5, 0.75, 0.7), lineWidth: 2))
                     .shadow(color: Theme.dyn(0x35E6F2, 0x0B5E68, 0.18, 0.14), radius: 9)
+                    // their note (WhatsApp's About note) as a bubble over the picture, while it lasts
+                    .overlay(alignment: .top) {
+                        if let n = profile?.note, n.isLive() { NoteBubble(note: n).offset(y: -30) }
+                    }
             }
             .buttonStyle(.plain)
+            .padding(.top, profile?.note?.isLive() == true ? 34 : 0) // room for the note bubble over the picture
             .accessibilityLabel(Text(verbatim: String(format: tr("civ3.picture.view"), name)))
             Text(verbatim: name)
                 .font(.system(size: 26, weight: .bold))

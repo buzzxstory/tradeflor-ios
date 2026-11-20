@@ -191,6 +191,8 @@ struct Profile: Decodable, Equatable {
     let display_name: String
     let bio: String
     let avatar_id: String
+    /// Their note while it lasts and they show it to me (server: "note" in GET /users/{id}/profile; absent otherwise).
+    var note: AboutNote? = nil
 }
 
 struct LinkedDevice: Decodable, Identifiable {

@@ -159,6 +159,7 @@ final class SessionStore: ObservableObject {
         BadgeStore.forgetHidden()
         ChatDrafts.clearAll() // what was typed and not sent
         MediaLog.clear() // the status video log names this account's statuses (audit IOS-LC-2)
+        NoteStore.shared.forget() // my note belongs to this account
         LiveConnection.shared.forgetPresence() // who was online, last seen, hidden presence (audit IOS-PRES-7)
         // attachments opened for Quick Look or sharing (decrypted copies, also from locked chats)
         try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("tf-files", isDirectory: true))
