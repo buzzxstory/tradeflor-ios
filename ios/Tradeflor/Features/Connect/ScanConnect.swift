@@ -241,11 +241,11 @@ struct ConnectionRequestSheet: View {
                     .padding(22)
                 }
             }
+            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .background(Theme.soul.ignoresSafeArea())
             .navigationTitle(Text(LocalizedStringKey(peer == nil ? "sc.request.title" : "sc.connected.nav")))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Theme.soul, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button { close() } label: { Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)) }

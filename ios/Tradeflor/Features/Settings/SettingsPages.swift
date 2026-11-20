@@ -39,13 +39,13 @@ struct MyProfilePage: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 20)
         }
+        .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
         .background(Starfield())
         .navigationTitle(Text("set.myprofile.title"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
         // the bar has the page's own colour (the top of the star-field), not a second darker band
-        .toolbarBackground(Theme.dyn(0x02242F, 0xF3F7FA), for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .modifier(DockSpace()) // the last rows are not hidden behind the floating dock
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {

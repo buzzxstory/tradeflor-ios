@@ -161,6 +161,7 @@ struct CalendarView: View {
                 .padding(.bottom, 24)
             }
             .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
+            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .refreshable {
                 await load(manual: true)
                 await loadNext()
@@ -176,7 +177,6 @@ struct CalendarView: View {
                 }
             )
             .toolbar(.hidden, for: .navigationBar)
-            .modifier(StatusBarScrim()) // rows scrolled up pass under a frosted status bar, not through the clock
             .overlay(alignment: .bottom) {
                 if let toast {
                     Text(toast).font(.system(size: 13.5, weight: .semibold)).foregroundStyle(P.tx).padding(.horizontal, 18).padding(.vertical, 12)

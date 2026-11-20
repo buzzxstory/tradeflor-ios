@@ -48,10 +48,10 @@ struct FlashConnectView: View {
                 }
                 .padding(16)
             }
+            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .background(Starfield())
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Theme.header, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
             .navigationDestination(isPresented: Binding(get: { target != nil }, set: { if !$0 { target = nil } })) {
                 if let t = target { ScanResultView(target: t, onOpen: open, onDone: { dismiss() }) }
@@ -201,12 +201,11 @@ struct ScanResultView: View {
     var body: some View {
         if case .mutual(let tok) = target {
             // Scan & Connect: confirm first (Connect / Cancel); never connect on scan
-            ScrollView { MutualGuestView(tok: tok, onOpen: onOpen, onDone: { (onDone ?? { dismiss() })() }) }
+            ScrollView { MutualGuestView(tok: tok, onOpen: onOpen, onDone: { (onDone ?? { dismiss() })() }) }.clipped()
                 .background(Theme.soul.ignoresSafeArea())
                 .navigationTitle(Text("sc.connect.title"))
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbarBackground(Theme.soul, for: .navigationBar)
-                .toolbarBackground(.visible, for: .navigationBar)
+                .toolbarBackground(.hidden, for: .navigationBar)
         } else {
             other
         }

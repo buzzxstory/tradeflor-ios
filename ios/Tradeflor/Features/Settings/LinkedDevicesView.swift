@@ -213,6 +213,7 @@ struct LinkedDevicesView: View {
                 .padding(.bottom, 24)
             }
             .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
+            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .scrollDismissesKeyboard(.interactively)
             .refreshable { await load() }
             .onChange(of: problem) { p in
@@ -226,7 +227,6 @@ struct LinkedDevicesView: View {
         .animation(.easeOut(duration: 0.18), value: toast)
         .buttonStyle(.plain)
         .toolbar(.hidden, for: .navigationBar)
-        .modifier(StatusBarScrim()) // rows scrolled up pass under a frosted status bar, not through the clock
         .task { await load() }
         // live: the server says "sessions changed" (a sign-in, a sign-out, a rename on any device), or the socket came back
         .onReceive(live.sessionsChanged) { _ in Task { await load() } }

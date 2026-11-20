@@ -81,13 +81,13 @@ struct ContactInfoView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 36)
             }
+            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .buttonStyle(.plain)
             .background(Starfield())
             .navigationTitle(Text("info.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar(.visible, for: .navigationBar)
-            .toolbarBackground(Theme.soul, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button { dismiss() } label: {

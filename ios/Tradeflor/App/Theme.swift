@@ -345,12 +345,4 @@ extension View {
     func tfColorScheme() -> some View { modifier(TFColorScheme()) }
 }
 
-/// For pages with no navigation bar whose content scrolls to the top edge: a frosted strip behind the status bar
-/// (the clock, the battery), so text scrolled up goes under it instead of running through it. Takes no room.
-struct StatusBarScrim: ViewModifier {
-    func body(content: Content) -> some View {
-        content.safeAreaInset(edge: .top, spacing: 0) {
-            Color.clear.frame(height: 0).background(.ultraThinMaterial, ignoresSafeAreaEdges: .top)
-        }
-    }
-}
+

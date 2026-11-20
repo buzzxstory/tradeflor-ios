@@ -66,4 +66,19 @@ final class WhatsAppParityTests: XCTestCase {
         let root = try source("Tradeflor/App/TradeflorApp.swift")
         XCTAssertFalse(root.contains(".modifier(DockSpace())"))
     }
+
+    /// The top bar and the status bar always show the page's own colour (owner, 2026-11-20: a darker or frosted band at
+    /// the top of Settings and its pages). No screen paints a bar colour of its own or a frosted strip.
+    func testTopBarsShowThePageItself() throws {
+        for f in ["Tradeflor/Features/Settings/SettingsView.swift", "Tradeflor/Features/Settings/SettingsPages.swift",
+                  "Tradeflor/Features/Chat/ContactInfoView.swift", "Tradeflor/Features/Groups/GroupManage.swift",
+                  "Tradeflor/Features/Connect/FlashConnectView.swift", "Tradeflor/Features/Connect/ScanConnect.swift",
+                  "Tradeflor/Features/Status/CalendarView.swift", "Tradeflor/Features/Status/TradeFlorView.swift",
+                  "Tradeflor/Features/Settings/LinkedDevicesView.swift", "Tradeflor/Features/Contacts/ContactsPanel.swift"] {
+            let s = try source(f)
+            XCTAssertFalse(s.contains(".toolbarBackground(.visible, for: .navigationBar)"), "\(f): a bar colour of its own")
+            XCTAssertFalse(s.contains("StatusBarScrim"), "\(f): a frosted strip at the top")
+            XCTAssertTrue(s.contains(".clipped() // the bar and status bar show the page itself"), "\(f): rows would pass under the bar")
+        }
+    }
 }

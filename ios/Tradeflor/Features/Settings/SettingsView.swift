@@ -132,6 +132,7 @@ struct SettingsView: View {
                 .padding(.bottom, 32)
             }
             .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
+            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .buttonStyle(.plain)
             // back from a page (Live location's Stop, My Profile, My Identity): the count and the card read again; the
             // first appearance is the .task below
@@ -143,7 +144,6 @@ struct SettingsView: View {
             .refreshable { await load(retryAdmin: false) }
             .background(SettingsBackground())
             .toolbar(.hidden, for: .navigationBar)
-            .modifier(StatusBarScrim()) // rows scrolled up pass under a frosted status bar, not through the clock
         }
         .task {
             // a tab entered again within 20 s is not read again (as Chats and Groups); the first read always happens
@@ -538,13 +538,13 @@ struct SettingsPage<Content: View>: View {
             .padding(16)
         }
         .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
+        .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
         .scrollDismissesKeyboard(.interactively)
         .background(Starfield())
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        .toolbarBackground(Theme.header, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbarBackground(.hidden, for: .navigationBar)
     }
 
     private var web: some View {
@@ -575,14 +575,14 @@ struct SettingsPage<Content: View>: View {
             .padding(.bottom, 32)
         }
         .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
+        .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
         .scrollDismissesKeyboard(.interactively)
         .background(SettingsBackground())
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
-        // a solid bar in the page's own top colour: the rows scroll under it, never through the Back button and the clock
-        .toolbarBackground(Theme.dyn(0x011E29, 0xEEF3F7), for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        // no bar colour of its own: the page shows behind Back and the clock, and the rows stop under the bar (.clipped)
+        .toolbarBackground(.hidden, for: .navigationBar)
     }
 }
 

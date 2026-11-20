@@ -99,10 +99,10 @@ struct ContactsPanel: View {
                 .padding(.top, 14)
                 .padding(.bottom, 24)
             }
+            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .scrollDismissesKeyboard(.interactively)
             .background(CV3.background)
             .toolbar(.hidden, for: .navigationBar)
-            .modifier(StatusBarScrim()) // rows scrolled up pass under a frosted status bar, not through the clock
             .overlay { if opening { ProgressView().tint(Theme.accent) } }
             .navigationDestination(for: ConversationSummary.self) { c in ChatView(chat: c) }
             .navigationDestination(isPresented: Binding(get: { scanTarget != nil }, set: { if !$0 { scanTarget = nil } })) {

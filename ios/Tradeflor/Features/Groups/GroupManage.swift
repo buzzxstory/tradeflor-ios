@@ -190,12 +190,12 @@ struct CreateGroupView: View {
                 }
                 .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 20)
             }
+            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .scrollDismissesKeyboard(.interactively)
             .background(sheetGround)
             .navigationTitle(Text(LocalizedStringKey(isEdit ? "grp.edit.title" : "grp.new.title")))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Theme.dyn(0x03202B, 0xF6F9FC), for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button { dismiss() } label: {
@@ -484,11 +484,11 @@ struct GroupInfoView: View {
                 }
                 .padding(.horizontal, tg ? 0 : 14)
             }
+            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .background(Theme.soul.ignoresSafeArea())
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(Theme.soul, for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
                 // the chat header's title (ChatView: 18 pt semibold, Theme.text) on the soul bar
                 ToolbarItem(placement: .principal) {

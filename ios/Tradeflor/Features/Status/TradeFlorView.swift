@@ -88,6 +88,7 @@ struct TradeFlorView: View {
                 .padding(.bottom, 28)
             }
             .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
+            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .scrollDismissesKeyboard(.interactively)
             .refreshable { await load() }
             .background(
@@ -100,7 +101,6 @@ struct TradeFlorView: View {
                 }
             )
             .toolbar(.hidden, for: .navigationBar)
-            .modifier(StatusBarScrim()) // rows scrolled up pass under a frosted status bar, not through the clock
         }
         .task {
             // a tab entered again within 20 s is not read again (as Chats and Groups); the first read always happens
