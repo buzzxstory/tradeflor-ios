@@ -95,7 +95,9 @@ final class LiveConnection: ObservableObject {
                 if self.offline && !self.connected { self.steadyConnected = false }
                 guard satisfied, before != nil, self.token != nil else { return }
                 // back online, or on another network: a fresh socket now (the old one is dead or about to be)
-                if (wasOffline && !self.connected) || before?.first != kinds.first { self.reconnectNow() }
+                // during a call also a socket that still looks open after an offline spell: it may be dead, and the call's
+                // ICE restart needs it at once
+                if (wasOffline && (!self.connected || self.callInProgress)) || before?.first != kinds.first { self.reconnectNow() }
             }
         }
         path.start(queue: DispatchQueue(label: "tf.live.path"))
@@ -154,9 +156,33 @@ final class LiveConnection: ObservableObject {
         if !connected || Date().timeIntervalSince(lastPong) > 35 {
             start(tokenForcing: token)
         } else {
-            sendPing()
+            // the answer is checked here (the heartbeat's next round could be 35 s away): no pong in 5 s = a new socket
+            checkPong(within: 5)
         }
     }
+
+    /// A call lost its media (ICE disconnected or failed): the ICE restart's offer travels on this socket, so a socket that
+    /// only looks open is found out in 3 s instead of at the heartbeat's next round (up to 35 s, by when the restarts have
+    /// run out). A socket that is already being replaced is left alone (the loop retries every second during a call).
+    func proveForCall() {
+        guard token != nil, connected else { return }
+        checkPong(within: 3)
+    }
+
+    /// Pings now; no pong within `seconds` on this same socket = a new socket.
+    private func checkPong(within seconds: Double) {
+        let sent = Date()
+        let gen = generation
+        sendPing()
+        probeCheck?.cancel()
+        probeCheck = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self, !Task.isCancelled, gen == self.generation, self.connected, self.lastPong < sent else { return }
+            self.reconnectNow()
+        }
+    }
+    /// The one pending check of a probe's ping.
+    private var probeCheck: Task<Void, Never>?
 
     /// Replaces the socket at once (no backoff). The server keeps this device's call through the gap and `opened` sends
     /// call.sync when the new socket is up.
@@ -219,6 +245,9 @@ final class LiveConnection: ObservableObject {
     private func receive(_ ws: URLSessionWebSocketTask) async throws {
         while !Task.isCancelled {
             let msg = try await ws.receive()
+            // a frame of a socket that was replaced meanwhile (stop() ran while this frame was on its way here): it must not
+            // mark the new connection "connected" or fire `opened` before the new socket is up
+            guard !Task.isCancelled, task === ws else { return }
             if !connected {
                 connected = true
                 opened.send(())

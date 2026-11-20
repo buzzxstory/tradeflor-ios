@@ -23,6 +23,8 @@ enum OutboxStore {
         var poster: Data?
         /// The server refused it for good (not a passing error): kept as "Not sent", never sent again by itself.
         var failed: Bool?
+        /// A video note's file name (optional: entries saved before this field still load).
+        var noteName: String?
     }
 
     private static func file(_ account: String, _ conversation: String) -> URL? {
@@ -52,7 +54,7 @@ enum OutboxStore {
                   waveform: $0.waveform, replyTo: $0.replyTo, fileName: $0.file?.lastPathComponent,
                   isVideo: $0.file != nil ? $0.video != nil : nil, docName: $0.docName.isEmpty ? nil : $0.docName,
                   docMime: $0.docMime.isEmpty ? nil : $0.docMime, poster: $0.poster,
-                  failed: $0.refused ? true : nil)
+                  failed: $0.refused ? true : nil, noteName: $0.noteName.isEmpty ? nil : $0.noteName)
         }
         queue.async {
             let first = waiting[url] == nil
@@ -166,6 +168,7 @@ enum OutboxStore {
                 if e.isVideo == true { p.video = Data() }
                 p.docName = e.docName ?? ""
                 p.docMime = e.docMime ?? ""
+                p.noteName = e.noteName ?? ""
                 p.poster = e.poster
                 if let poster = e.poster { p.image = UIImage(data: poster) }
             }

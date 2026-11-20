@@ -130,8 +130,9 @@ struct RootView: View {
             }
         }
         .onChange(of: notifier.tappedConversation) { id in
-            // a tapped notification: the right tab; the list there opens the chat
-            if let id { tab = id.hasPrefix("grp_") ? "groups" : "chats" }
+            // a tapped notification: the right tab; the list there opens the chat. A sheet that is up (Contacts, Contact info,
+            // New chat...) is closed first: the chat opened underneath it and nothing was seen
+            if let id { afterSheets { tab = id.hasPrefix("grp_") ? "groups" : "chats" } }
         }
         .confirmationDialog(Text(String(format: NSLocalizedString("call.confirm.title", comment: ""), calls.confirming?.peerName ?? "")),
                             isPresented: $askCall,

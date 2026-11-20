@@ -142,7 +142,13 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         unread = []; unreadCounts = [:]; settings = [:]; mutedUntil = [:]; titles = [:]; names = [:]; peers = [:]; loadedGroups = []; notified = []; lockedChats = []; archivedChats = []; blockedPeers = []; hiddenChats = []
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
-        setIconBadge(0)
+        // directly: setIconBadge() does nothing once the token is gone, so the account's number stayed on the icon
+        refreshedAt = .distantPast
+        if #available(iOS 17.0, *) {
+            UNUserNotificationCenter.current().setBadgeCount(0, withCompletionHandler: nil)
+        } else {
+            UIApplication.shared.applicationIconBadgeNumber = 0
+        }
     }
 
     private func flag(_ k: String) -> Bool { settings[k] ?? Self.defaults[k] ?? false }
@@ -375,6 +381,16 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         content.userInfo = info
         Task {
             try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "missed|\(callID)", content: content, trigger: nil))
+            // the server sends its own "Missed call" alert for the same call (no name; its identifier is the call id) a moment
+            // later: with the app alive behind, both stayed. The named one is kept, the server's copy is taken away.
+            guard !callID.isEmpty else { return }
+            let bg = BackgroundTaskBox()
+            bg.id = UIApplication.shared.beginBackgroundTask(withName: "tf.missed") { bg.end() }
+            for ms in [1_500, 4_000] as [UInt64] {
+                try? await Task.sleep(nanoseconds: ms * 1_000_000)
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [callID])
+            }
+            bg.end()
         }
     }
 

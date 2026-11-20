@@ -127,7 +127,7 @@ final class CallManager: NSObject, ObservableObject {
                 UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [callID])
             }
         }
-        let id = UUID(uuidString: callID) ?? UUID()
+        let id = CallManager.callUUID(callID) ?? UUID()
         let update = callCapabilities()
         let name = (self.callID == callID && !peerName.isEmpty) ? peerName : "Tradeflor"
         update.remoteHandle = CXHandle(type: .generic, value: name)
@@ -137,10 +137,28 @@ final class CallManager: NSObject, ObservableObject {
             guard err == nil else { return } // already ringing from the socket, or the system refused (Do Not Disturb)
             Task { @MainActor in
                 guard let self else { return }
+                if self.endedHere.contains(callID) {
+                    // a late push for a call the socket already saw end (cancelled, declined, answered elsewhere): it was
+                    // reported as iOS demands and ends at once, instead of ringing 25 s for nobody (in front the socket
+                    // is healthy, so no call.sync comes to end it)
+                    self.provider.reportCall(with: id, endedAt: Date(), reason: .remoteEnded)
+                    return
+                }
                 self.pushCalls.insert(key)
                 self.guardPushCall(key: key, uuid: id)
             }
         }
+    }
+
+    /// The CallKit UUID of a call id, the same for the VoIP push and the socket. Call ids are normally UUIDs; a browser
+    /// without crypto.randomUUID (and the server's own tools) make 32 hex digits without dashes, which is the same value
+    /// written differently. nil for anything else (the caller then makes a random one).
+    nonisolated static func callUUID(_ id: String) -> UUID? {
+        if let u = UUID(uuidString: id) { return u }
+        guard id.count == 32, id.utf8.count == 32 else { return nil }
+        var s = id
+        for offset in [20, 16, 12, 8] { s.insert("-", at: s.index(s.startIndex, offsetBy: offset)) }
+        return UUID(uuidString: s)
     }
 
     private func guardPushCall(key: String, uuid: UUID) {
@@ -483,6 +501,8 @@ final class CallManager: NSObject, ObservableObject {
     /// Calls this phone ended (declined, cancelled, hung up) whose message may not have reached the server (socket down):
     /// a later sync that still lists one is closed again, and never rings.
     private var endedHere: Set<String> = []
+    /// The same ids, oldest first (only finish() adds to the two, together).
+    private var endedOrder: [String] = []
 
     private var ownAudio = false { didSet { callAudioOwned.value = ownAudio } }
     private func audioWithoutCallKit() {
@@ -597,14 +617,15 @@ final class CallManager: NSObject, ObservableObject {
         case "call.sync":
             let call = d["call"] as? [String: Any]
             // a ring a VoIP push started for a call the server does not have (cancelled, answered elsewhere) ends now
-            let live = (call?["call_id"] as? String).flatMap { UUID(uuidString: $0)?.uuidString }
+            let live = (call?["call_id"] as? String).flatMap { CallManager.callUUID($0)?.uuidString }
             for k in pushCalls where k != live {
                 if let u = UUID(uuidString: k) { provider.reportCall(with: u, endedAt: Date(), reason: .remoteEnded) }
                 pushCalls.remove(k)
             }
             if call == nil {
                 // the server knows no call for this device: end ours, unless our invite was not acknowledged yet
-                if phase != .idle && !(phase == .outgoing && !acknowledged) { endReason = "connection_lost"; finish() }
+                // (not over the "Call ended" card either: finish() does nothing then, but the card's reason was overwritten)
+                if phase != .idle && phase != .ended && !(phase == .outgoing && !acknowledged) { endReason = "connection_lost"; finish() }
                 // our invite never reached the server (sent while the socket was down): send it now. The same call id, so
                 // a server that did get it answers with its state (call.outgoing / call.ended) instead of a second call.
                 if phase == .outgoing && !acknowledged { sendInvite() }
@@ -660,7 +681,7 @@ final class CallManager: NSObject, ObservableObject {
         conversationID = d["conversation_id"] as? String
         role = .callee
         peerID = d["caller_id"] as? String
-        uuid = UUID(uuidString: id) ?? UUID()
+        uuid = CallManager.callUUID(id) ?? UUID()
         phase = .incoming
         peerName = NSLocalizedString("call.someone", comment: "")
         if let caller = d["caller_id"] as? String { Task { await lookUpName(caller) } }
@@ -861,6 +882,9 @@ final class CallManager: NSObject, ObservableObject {
             if pc?.connectionState == .connected { recovered() }
         case .disconnected, .failed:
             guard phase == .connecting || phase == .active else { return }
+            // the restart's offer goes over the live socket: prove it now (a dead one that still looks open swallowed every
+            // offer until the heartbeat noticed, up to 35 s later, by when the restarts had run out)
+            if restartTimer == nil { live?.proveForCall() }
             if phase == .active && !reconnecting {
                 if state == .failed {
                     reconnecting = true
@@ -1042,7 +1066,11 @@ final class CallManager: NSObject, ObservableObject {
                 provider.reportCall(with: ended, endedAt: Date(), reason: reason)
             }
         }
-        if let id = callID { endedHere.insert(id); if endedHere.count > 20 { endedHere.removeFirst() } }
+        if let id = callID, endedHere.insert(id).inserted {
+            endedOrder.append(id)
+            // the oldest goes (a Set's removeFirst() took any entry, possibly the one just added)
+            while endedOrder.count > 50 { endedHere.remove(endedOrder.removeFirst()) }
+        }
         callID = nil
         lastDuration = connectedAt.map { Date().timeIntervalSince($0) }
         phase = .ended
@@ -1126,7 +1154,8 @@ extension CallManager: CXProviderDelegate {
         CallManager.configureAudioSession()
         let u = action.callUUID
         Task { @MainActor in
-            if self.phase == .incoming { self.doAccept() }
+            // only the call this action is for: a push ring the socket does not know must not answer another call
+            if self.phase == .incoming, self.uuid == u { self.doAccept() }
             else if self.pushCalls.contains(u.uuidString) { self.pendingAnswer = u } // the socket has not told the app yet
         }
         action.fulfill()
@@ -1134,9 +1163,13 @@ extension CallManager: CXProviderDelegate {
     nonisolated func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         let u = action.callUUID
         Task { @MainActor in
-            if self.phase == .idle || self.phase == .ended, self.pushCalls.contains(u.uuidString) { self.pendingEnd = u }
+            // the app's own call only when the action names it: ending a push ring the socket does not know must not
+            // decline or hang up another call
+            if self.uuid != u || self.phase == .idle || self.phase == .ended {
+                if self.pushCalls.contains(u.uuidString) { self.pendingEnd = u }
+            }
             else if self.phase == .incoming { self.decline() }
-            else if self.phase != .ended && self.phase != .idle {
+            else {
                 if self.phase == .outgoing && !self.userEnding { self.localReason = "system_end" }
                 self.hangUp()
             }

@@ -168,6 +168,11 @@ struct ChatView: View {
     /// A burst of incoming messages sends one read receipt, and a burst of changes reloads the page once.
     @State private var seenTask: Task<Void, Never>?
     @State private var changeReload: Task<Void, Never>?
+    /// Every message up to this seq is on screen (0: not known yet). Moved by page loads, and by a live message only when
+    /// it is the very next one: a live message that arrives before the catch-up page must not hide the gap behind it.
+    @State private var wholeUpTo: Int64 = 0
+    /// The one retry of a quiet reload that failed (never more than one waiting).
+    @State private var reloadRetry: Task<Void, Never>?
     private var focusOn: Bool { isGroup && (focusDoc?.focus.active ?? false) && !focusShowAll }
     /// What the list shows: everything, or (Smart Focus) the server's filtered history plus matching live messages.
     private var shown: [Message] {
@@ -901,12 +906,23 @@ struct ChatView: View {
         }
         .task {
             // the messages this chat showed last time (this app session, memory only): on screen at once, as in WhatsApp
-            if messages.isEmpty, let seen = ChatMemo.get(chat.conversation_id), !seen.isEmpty { merge(seen) }
+            if messages.isEmpty, let seen = ChatMemo.get(chat.conversation_id), !seen.isEmpty {
+                merge(seen)
+                wholeUpTo = seen.last?.seq ?? 0 // the memo only keeps the part known to be whole
+            }
             await loadNewest()
         }
         // after a dropped connection or a return to the app: catch up so nothing sent meanwhile is missing
         .onReceive(live.opened) { _ in
             queueWait?.cancel() // the connection is back: a waiting line tries now
+            // photos / videos / documents that gave up on a passing error go again by themselves (same key)
+            if !gone {
+                for p in pending where p.failed && !p.refused && !p.missing && !isLine(p) && uploads[p.id] == nil {
+                    if let v = p.video, v.isEmpty, p.file == nil { continue } // nothing to send (the re-encode failed)
+                    fileRetries[p.id] = nil
+                    Task { await deliver(p) }
+                }
+            }
             Task { await loadNewest(quiet: true) }
         }
         .onChange(of: scenePhase) { p in
@@ -933,6 +949,18 @@ struct ChatView: View {
             let isNew = !messages.contains { $0.id == m.id }
             merge([m])
             pending.removeAll { $0.id == m.client_key }
+            // the very next message keeps the history whole; one further on means messages were missed in between (a
+            // connection that was down): the catch-up reads them (loadNewest fills from wholeUpTo, not from this one)
+            if m.seq == wholeUpTo + 1 {
+                wholeUpTo = m.seq
+            } else if wholeUpTo > 0, m.seq > wholeUpTo + 1 {
+                changeReload?.cancel()
+                changeReload = Task {
+                    try? await Task.sleep(nanoseconds: 400_000_000)
+                    if Task.isCancelled { return }
+                    await loadNewest(quiet: true)
+                }
+            }
             if isNew && !flags.bottomVisible && m.sender_id != me && m.kind != "notice" {
                 flags.unseenBelow.append(m.id)
                 if isGroup && ChatEdit.mentions(m, me: me) { flags.unseenMentions.append(m.id) }
@@ -1024,7 +1052,11 @@ struct ChatView: View {
             }
         }
         .onDisappear {
-            if !locked && !messages.isEmpty { ChatMemo.put(chat.conversation_id, Array(messages.suffix(80))) }
+            // only the part known to be whole is remembered (a live message beyond a gap is not: the next load fills it)
+            let whole = wholeUpTo > 0 ? messages.filter { $0.seq <= wholeUpTo } : []
+            if !locked && !whole.isEmpty { ChatMemo.put(chat.conversation_id, Array(whole.suffix(80))) }
+            reloadRetry?.cancel()
+            reloadRetry = nil
             TabChrome.shared.conversationClosed()
             if LocalNotifier.shared.openConversation == chat.conversation_id { LocalNotifier.shared.openConversation = nil }
             saveDraft()
@@ -1819,32 +1851,25 @@ struct ChatView: View {
     private func sendDocument(_ url: URL) async {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
-        // 4 MB or more: copied to this device's upload folder (never read into memory) and sent in chunks as a pending row
-        // with progress, resumed after a drop and by Retry (same key)
-        let size = ResumableUploader.fileSize(url)
-        if size >= ResumableUploader.minBytes {
-            if size > 25_000_000 { flash("attach.too.big"); return }
-            let key = UUID().uuidString.lowercased()
-            guard let kept = ResumableUploader.keepCopy(of: url, key: key) else { flash("chat.action.failed"); return }
-            var p = PendingMessage(id: key, body: "", date: Date())
-            p.file = kept
-            p.docName = url.lastPathComponent
-            p.docMime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-            pending.append(p)
-            await deliver(p)
+        // every document, small or large: copied to this device's upload folder (never read into memory) and sent as a
+        // pending row with ONE key -- retried by itself and by Retry, kept across a restart, never stored twice. 4 MB or more
+        // goes in chunks with progress; smaller in one request (ResumableUploader.send picks).
+        if ResumableUploader.fileSize(url) > 25_000_000 { flash("attach.too.big"); return }
+        let key = UUID().uuidString.lowercased()
+        guard let kept = ResumableUploader.keepCopy(of: url, key: key) else { flash("chat.action.failed"); return }
+        // measured on the copy (the size of a file from another app's provider is not always readable before it is copied)
+        let size = ResumableUploader.fileSize(kept)
+        if size <= 0 || size > 25_000_000 {
+            try? FileManager.default.removeItem(at: kept)
+            flash(size > 25_000_000 ? "attach.too.big" : "chat.action.failed")
             return
         }
-        guard let data = try? Data(contentsOf: url) else { flash("chat.action.failed"); return }
-        if data.count > 25_000_000 { flash("attach.too.big"); return }
-        let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-        do {
-            let m = try await APIClient.shared.chSendDocument(token: token, conversationID: chat.conversation_id, data: data,
-                                                             fileName: url.lastPathComponent, mime: mime, caption: "", key: UUID().uuidString.lowercased())
-            merge([m])
-        } catch APIError.refused(let why) {
-            // a timed toast (it was set without one and stayed on screen for good)
-            flashText(why.isEmpty ? NSLocalizedString("chat.action.failed", comment: "") : why)
-        } catch { flash("chat.action.failed") }
+        var p = PendingMessage(id: key, body: "", date: Date())
+        p.file = kept
+        p.docName = url.lastPathComponent
+        p.docMime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        pending.append(p)
+        await deliver(p)
     }
 
     /// Export Chat History: every page as plain text, shared as a .txt file.
@@ -1886,7 +1911,10 @@ struct ChatView: View {
             var page = try await APIClient.shared.messages(token: token, conversationID: chat.conversation_id, limit: pageSize)
             // messages came in while this phone was away (a dropped connection, a long time in the background): when the newest
             // page does not reach back to the last one on screen, the pages in between are fetched too, so no hole stays
-            if let known = messages.last?.seq, let oldest = page.map(\.seq).min(), oldest > known + 1 {
+            // measured from the last message known to be whole, not from the last one on screen: a live message that came in
+            // before this page (right after a reconnect) is newer than the gap and would hide it for good
+            let known = wholeUpTo
+            if known > 0, !messages.isEmpty, let oldest = page.map(\.seq).min(), oldest > known + 1 {
                 var cursor = oldest
                 var met = false
                 for _ in 0..<10 {
@@ -1909,6 +1937,10 @@ struct ChatView: View {
                 reachedStart = page.isEmpty || (page.map(\.seq).min() ?? 2) <= 1
             }
             merge(page)
+            // whole up to the newest message of this page (the gap, if any, was filled above or the list started again)
+            if let top = page.map(\.seq).max() { wholeUpTo = max(wholeUpTo, top) }
+            reloadRetry?.cancel()
+            reloadRetry = nil
             if !unreadMarkSet && !page.isEmpty {
                 // "N unread messages" where the unread start (website unreadMark.ts), once, when the chat opens
                 unreadMarkSet = true
@@ -1924,10 +1956,21 @@ struct ChatView: View {
             // a locked chat never shows what this phone remembered
             ChatMemo.drop(chat.conversation_id)
             messages = []
+            wholeUpTo = 0
             locked = true
             if !showUnlock && BiometricPIN.isSaved { showUnlock = true } // Face ID straight away
         } catch {
             if messages.isEmpty { problem = NSLocalizedString("chats.error", comment: "") }
+            // a catch-up that failed (the network was not quite back) is tried again, one retry waiting at a time, while
+            // the socket is up and this chat is on screen; the next socket opening or return to the app asks anyway
+            if quiet, !gone, reloadRetry == nil, transient(error), LiveConnection.shared.connected {
+                reloadRetry = Task {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    if Task.isCancelled { return }
+                    reloadRetry = nil
+                    await loadNewest(quiet: true)
+                }
+            }
         }
     }
 
@@ -2154,6 +2197,9 @@ struct ChatView: View {
     }
 
     private func markSeen() async {
+        // only while the app is in front: a reload in the background (a call's push reopening the socket, a change event
+        // just after leaving the app) must not mark as read what nobody saw
+        guard UIApplication.shared.applicationState == .active else { return }
         if isGroup {
             if let last = messages.last { await APIClient.shared.markGroupRead(token: token, groupID: chat.conversation_id, seq: last.seq) }
         } else {
@@ -2203,15 +2249,16 @@ struct ChatView: View {
             if let i = pending.firstIndex(where: { $0.id == key }) { pending[i].failed = true }
             return
         }
-        do {
-            let m = try await APIClient.shared.sendImage(token: token, conversationID: chat.conversation_id, jpeg: out.data,
-                                                         caption: "", key: key, fileName: VideoNotePrep.fileName(ms: out.ms),
-                                                         mime: "video/mp4")
-            merge([m])
-            pending.removeAll { $0.id == key }
-        } catch {
-            if let i = pending.firstIndex(where: { $0.id == key }) { pending[i].failed = true }
+        guard let i = pending.firstIndex(where: { $0.id == key }) else { return } // removed while it was prepared
+        // sent like a video (kept as a file, same key on every retry, kept by the outbox across a restart); its own file
+        // name is what makes it a video note, so it is kept with the pending row
+        if let kept = ResumableUploader.keep(out.data, key: key, ext: "mp4") {
+            pending[i].file = kept
+        } else {
+            pending[i].video = out.data
         }
+        pending[i].noteName = VideoNotePrep.fileName(ms: out.ms)
+        if let p = pending.first(where: { $0.id == key }) { await deliver(p) }
     }
 
     /// "notice" messages: chat setting changes (disappearing messages, restricted chat), shown centred.
@@ -2345,6 +2392,11 @@ struct ChatView: View {
     }
 
     private func sendOne(_ p: PendingMessage, queued: Bool) async -> SendOutcome {
+        // time to finish if the person leaves the app while it is on its way (it waited for the next time the app opened)
+        await BackgroundTime.run("tf.send") { await sendOneNow(p, queued: queued) }
+    }
+
+    private func sendOneNow(_ p: PendingMessage, queued: Bool) async -> SendOutcome {
         if let v = p.video, v.isEmpty, p.file == nil { return .failed } // still being re-encoded, or the re-encode failed
         if uploads[p.id] != nil { return .failed } // already going (a second tap, or the outbox and a retry at once)
         if let i = pending.firstIndex(where: { $0.id == p.id }) { pending[i].failed = false; pending[i].refused = false }
@@ -2361,7 +2413,7 @@ struct ChatView: View {
                 let isVideo = p.video != nil
                 let data = p.video.flatMap { $0.isEmpty ? nil : $0 }
                 let t = Task { try await ResumableUploader.shared.send(token: tok, conversationID: conv, file: p.file, data: data,
-                                                                       fileName: isVideo ? "video.mp4" : p.docName,
+                                                                       fileName: isVideo ? (p.noteName.isEmpty ? "video.mp4" : p.noteName) : p.docName,
                                                                        mime: isVideo ? "video/mp4" : p.docMime,
                                                                        caption: p.body, key: p.id, replyTo: p.replyTo,
                                                                        poster: isVideo ? p.poster : nil) }
@@ -2394,7 +2446,12 @@ struct ChatView: View {
                 if let img = p.image { MediaDims.shared.set(fid, img.size) }
             }
             merge([m])
+            if m.seq == wholeUpTo + 1 { wholeUpTo = m.seq } // my own message is the very next one: the history stays whole
             pending.removeAll { $0.id == p.id }
+            // it also leaves the saved outbox here: when this screen was closed while it was on its way, the change of
+            // `pending` above no longer saves anything, and the entry stayed (sent again, or shown as a missing file)
+            let account = me, conversation = chat.conversation_id, sentID = p.id
+            Task.detached(priority: .utility) { OutboxStore.remove(account: account, conversation: conversation, id: sentID) }
             fileRetries[p.id] = nil
             serverRetries[p.id] = nil
             if let f = p.file { try? FileManager.default.removeItem(at: f) } // sent: this device's copy is no longer needed
@@ -2697,6 +2754,8 @@ struct PendingMessage: Identifiable, Equatable {
     /// A document's own name and type (empty for every other kind).
     var docName = ""
     var docMime = ""
+    /// A video note's file name ("videonote_…mp4": what makes the server's message a video note); empty for every other kind.
+    var noteName = ""
     /// The server refused it for good (kept in the saved outbox as such).
     var refused = false
     /// A photo, video or document whose file is no longer on this phone (cleaned up, storage freed): it cannot be sent. It shows

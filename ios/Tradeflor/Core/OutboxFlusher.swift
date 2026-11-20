@@ -1,6 +1,31 @@
 import Combine
 import UIKit
 
+/// A background task that is ended once, whichever comes first: the work finishing or iOS's time running out.
+@MainActor
+private final class BackgroundTimeBox {
+    var id = UIBackgroundTaskIdentifier.invalid
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
+}
+
+/// Runs `work` with background time: a message on its way when the person leaves the app is still sent instead of
+/// waiting, half sent, for the next time the app opens (iOS gives about 30 s; a send cut off there is retried with the
+/// same key).
+@MainActor
+enum BackgroundTime {
+    static func run<T>(_ name: String, _ work: () async -> T) async -> T {
+        let box = BackgroundTimeBox()
+        box.id = UIApplication.shared.beginBackgroundTask(withName: name) { box.end() }
+        let out = await work()
+        box.end()
+        return out
+    }
+}
+
 /// Sends the texts and voice notes a chat screen left in the saved outbox (OutboxStore), when no chat screen is there to do
 /// it: after a restart that stays on the lists, after leaving a chat while it was still retrying. Runs on sign-in, when the
 /// live connection opens and when the app comes to the front. Same idempotency key as the chat screen, so a message the
@@ -13,6 +38,8 @@ final class OutboxFlusher {
     private var token = ""
     private var account = ""
     private var running = false
+    /// A flush was asked for while one was running: it runs once more when that one ends.
+    private var wanted = false
     private var again: Task<Void, Never>?
     /// Server errors (5xx) seen per message in this session: after five it is marked "Not sent" and the next one goes on.
     private var serverFails: [String: Int] = [:]
@@ -35,14 +62,27 @@ final class OutboxFlusher {
         token = ""
         account = ""
         serverFails = [:]
+        wanted = false
     }
 
     func flushSoon() { Task { await flush() } }
 
     private func flush() async {
-        guard !running, !token.isEmpty, !account.isEmpty else { return }
+        guard !token.isEmpty, !account.isEmpty else { return }
+        // asked for while one is running (a chat was just left while another chat's message is on its way): run again
+        // afterwards, so what was saved meanwhile does not wait for the next connection or return to the app
+        guard !running else { wanted = true; return }
         running = true
-        defer { running = false }
+        // time to finish if the person leaves the app while a message is on its way
+        await BackgroundTime.run("tf.outbox") { await self.flushNow() }
+        running = false
+        if wanted {
+            wanted = false
+            flushSoon()
+        }
+    }
+
+    private func flushNow() async {
         let tok = token, acct = account
         var waiting = false
         var delay = 20.0

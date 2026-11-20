@@ -197,11 +197,35 @@ extension PushManager: PKPushRegistryDelegate {
         guard type == .voIP else { completion(); return }
         let tf = payload.dictionaryPayload["tf"] as? [String: Any]
         let callID = (tf?["call_id"] as? String) ?? ""
-        Task { @MainActor in
-            // CallKit first (iOS kills an app that does not report), then the socket so the call can be named
+        // No Task here: a Task runs after this method has returned, and iOS wants the CallKit report before that (it kills an
+        // app that has not reported, and then stops delivering VoIP pushes). The registry's queue is the main queue, so the
+        // main-actor code runs right here.
+        onMainNow {
+            // CallKit first, then the socket so the call can be named
             CallManager.shared.reportPushCall(callID: callID)
             PushManager.shared.ensureConnected()
-            completion()
+        }
+        completion()
+    }
+}
+
+/// Runs main-actor code synchronously from a callback that is not isolated but is called on the main thread (PushKit with
+/// `queue: .main`). What `MainActor.assumeIsolated` does, without needing a newer iOS; from another thread it waits for the
+/// main thread instead.
+private func onMainNow(_ body: @MainActor () -> Void) {
+    typealias Isolated = @MainActor () -> Void
+    typealias Plain = () -> Void
+    if Thread.isMainThread {
+        withoutActuallyEscaping(body) { (fn: @escaping Isolated) -> Void in
+            let raw = unsafeBitCast(fn, to: Plain.self)
+            raw()
+        }
+    } else {
+        DispatchQueue.main.sync {
+            withoutActuallyEscaping(body) { (fn: @escaping Isolated) -> Void in
+                let raw = unsafeBitCast(fn, to: Plain.self)
+                raw()
+            }
         }
     }
 }
