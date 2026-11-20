@@ -3,7 +3,7 @@ import AudioToolbox
 import UserNotifications
 import AVFoundation
 
-/// Tradeflor's own message sound (Resources/tf_message.wav: a rising glassy C6, G6, E7 figure) for notifications, and a
+/// Tradeflor's own message sound (Resources/tf_message.wav: the owner's sound of 2026-11-20, 0.69 s) for notifications, and a
 /// soft one-note tick (tf_inchat.wav) for a message that arrives in the chat on screen. System sounds follow the ring /
 /// silent switch. Vibration is a light haptic and can be turned off on this phone.
 @MainActor
