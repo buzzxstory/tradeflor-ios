@@ -511,8 +511,10 @@ final class CallManager: NSObject, ObservableObject {
             // a video call only when the camera really opened: a refused or failed camera calls with sound (protocol)
             if wantVideo {
                 video.markVideo()
-                if !(await video.openCamera()) { video.reset() }
-                guard !lineInUse || phase == .idle || phase == .ended else { return }
+                let opened = await video.openCamera()
+                // a call rang in meanwhile: it owns the call state now (its video flag included); ours is dropped
+                guard !lineInUse else { if opened { video.stopCapture() }; return }
+                if !opened { video.reset() }
                 if video.isVideo { wantSpeaker = true; speaker = true }
             }
             let id = UUID()
@@ -697,7 +699,12 @@ final class CallManager: NSObject, ObservableObject {
     func toggleCamera() {
         let want = !video.cameraOn
         Task {
-            let renegotiate = await video.setCamera(want, pc: pc)
+            // the callee before the caller's first offer: the camera opens now and goes on the offered line in the answer
+            // (an offer of its own then collided and left its line unlinked)
+            let usable = (role == .caller || pc?.remoteDescription != nil) ? pc : nil
+            let renegotiate = await video.setCamera(want, pc: usable)
+            // the call ended while the camera was asked for or starting: it never stays on
+            guard phase == .connecting || phase == .active else { video.stopCapture(); return }
             if renegotiate, let conn = pc { serially { [weak self] in await self?.makeOffer(conn) } }
             if want && video.cameraOn && !speaker && !wantSpeaker { wantSpeaker = true; speaker = true; reapplySpeakerSoon() }
             if video.isVideo { provider.reportCall(with: uuid, updated: callCapabilities()) }

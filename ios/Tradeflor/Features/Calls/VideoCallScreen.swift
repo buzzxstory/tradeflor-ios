@@ -84,6 +84,8 @@ struct VideoCallScreen: View {
                     if calls.phase == .incoming { incomingControls } else { controlBar }
                 }
                 .opacity(controlsShown || calls.phase != .active ? 1 : 0)
+                // faded controls take no taps: a tap on the picture brings them back, it never hangs up
+                .allowsHitTesting(controlsShown || calls.phase != .active)
                 .animation(.easeInOut(duration: 0.25), value: controlsShown)
             }
             .contentShape(Rectangle())

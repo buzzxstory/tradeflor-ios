@@ -209,13 +209,15 @@ struct ChatView: View {
     private func readScreenshotSetting() async {
         guard let s = try? await APIClient.shared.chatSettings(token: token, conversationID: chat.conversation_id) else { return }
         let on = s.blocksScreenshots
-        if on { ScreenGuard.shared.protect(chat.conversation_id) } else { ScreenGuard.shared.release(chat.conversation_id) }
+        // read after the chat was left: the switch is remembered, nothing is protected for a chat that is not on screen
+        if on && !gone { ScreenGuard.shared.protect(chat.conversation_id) } else if !on { ScreenGuard.shared.release(chat.conversation_id) }
         guard on != noScreenshots else { return }
         noScreenshots = on
     }
 
     private func screenshotTaken() {
-        guard noScreenshots, ScreenGuard.shared.protected.contains(chat.conversation_id) else { return }
+        let guarded = ScreenGuard.shared.protected
+        guard noScreenshots, guarded.contains(chat.conversation_id) || guarded.contains(chat.conversation_id + "#cover") else { return }
         flash("shot.taken.toast")
         let t = token, c = chat.conversation_id
         Task { await APIClient.shared.reportScreenshot(token: t, conversationID: c) }
@@ -872,7 +874,7 @@ struct ChatView: View {
 
     private func chatMiddle<V: View>(_ v: V) -> some View {
         v
-        .fullScreenCover(item: $openDoc) { d in DocumentPreview(url: d.url).ignoresSafeArea() }
+        .fullScreenCover(item: $openDoc) { d in DocumentPreview(url: d.url).ignoresSafeArea().modifier(ScreenGuardCover(id: chat.conversation_id, on: noScreenshots)) }
         .fullScreenCover(isPresented: $showFocus) {
             if let doc = focusDoc {
                 SmartFocusSheet(groupID: chat.conversation_id, members: members, me: me, initial: doc, roles: memberRoles) { saved in
@@ -1128,8 +1130,9 @@ struct ChatView: View {
         }
         .fullScreenCover(item: $viewing) { v in
             mediaViewer(v)
+            .modifier(ScreenGuardCover(id: chat.conversation_id, on: noScreenshots))
         }
-        .fullScreenCover(item: $openingOnce, onDismiss: { onceTick += 1 }) { m in ViewOnceViewer(message: m, token: token) }
+        .fullScreenCover(item: $openingOnce, onDismiss: { onceTick += 1 }) { m in ViewOnceViewer(message: m, token: token).modifier(ScreenGuardCover(id: chat.conversation_id, on: noScreenshots)) }
         .sheet(isPresented: $showUnlock) {
             UnlockSheet(token: token) { Task { await loadNewest() } }
                 .presentationDetents([.large])
@@ -1137,6 +1140,7 @@ struct ChatView: View {
         }
         .fullScreenCover(item: $watching) { v in
             mediaViewer(v)
+            .modifier(ScreenGuardCover(id: chat.conversation_id, on: noScreenshots))
         }
         // Block screenshots (ScreenGuard): the app is hidden from screenshots and recordings while this chat is on screen,
         // and a screenshot or a recording that starts here is reported to the chat

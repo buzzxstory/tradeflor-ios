@@ -85,3 +85,16 @@ extension APIClient {
         _ = try? await postJSON("conversations/screenshot", token: token, body: ["conversation_id": conversationID])
     }
 }
+
+/// A screen presented over a protected chat (its photos, videos, documents, a view-once): protected too, under its own key,
+/// since presenting it makes the chat itself "disappear" for SwiftUI (which releases the chat's key).
+struct ScreenGuardCover: ViewModifier {
+    let id: String
+    let on: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { if on { ScreenGuard.shared.protect(id + "#cover") } }
+            .onDisappear { ScreenGuard.shared.release(id + "#cover") }
+    }
+}

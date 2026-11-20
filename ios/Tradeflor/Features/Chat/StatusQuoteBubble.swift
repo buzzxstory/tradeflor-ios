@@ -23,9 +23,19 @@ struct StatusQuotePreview: Decodable {
 }
 
 extension APIClient {
-    func statusQuote(token: String, id: String) async -> StatusQuotePreview? {
-        guard let d = try? await getJSON("status/\(id)/quote", token: token) else { return nil }
-        return try? JSONDecoder().decode(StatusQuotePreview.self, from: d)
+    enum StatusQuoteAnswer { case preview(StatusQuotePreview), gone, unknown }
+
+    /// gone = the server said 404 (expired, deleted, not allowed); unknown = offline, timeout, cancelled: tried again later.
+    func statusQuote(token: String, id: String) async -> StatusQuoteAnswer {
+        do {
+            let d = try await getJSON("status/\(id)/quote", token: token)
+            guard let p = try? JSONDecoder().decode(StatusQuotePreview.self, from: d) else { return .unknown }
+            return .preview(p)
+        } catch APIError.server(let s) where s == 404 {
+            return .gone
+        } catch {
+            return .unknown
+        }
     }
 }
 
@@ -148,13 +158,18 @@ struct StatusQuoteBubble: View {
     private func load() async {
         let cache = StatusQuoteCache.shared
         if cache.gone.contains(quote.id) { gone = true; return }
-        if let p = cache.previews[quote.id] { preview = p } else if let p = await APIClient.shared.statusQuote(token: token, id: quote.id) {
-            cache.previews[quote.id] = p
-            preview = p
-        } else {
-            cache.gone.insert(quote.id)
-            gone = true
-            return
+        if let p = cache.previews[quote.id] { preview = p } else {
+            switch await APIClient.shared.statusQuote(token: token, id: quote.id) {
+            case .preview(let p):
+                cache.previews[quote.id] = p
+                preview = p
+            case .gone:
+                cache.gone.insert(quote.id)
+                gone = true
+                return
+            case .unknown:
+                return // offline or cancelled: the card keeps its icon now and loads next time
+            }
         }
         if let t = cache.thumbs[quote.id] { thumb = t; return }
         let wantsImage = quote.kind == "image" || (quote.kind == "video" && preview?.poster == true)

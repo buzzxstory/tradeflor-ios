@@ -22,16 +22,17 @@ final class CallPiP: NSObject, AVPictureInPictureControllerDelegate {
         guard let track else { detach(); return }
         if source === view, self.track === track, controller != nil { return }
         detach()
-        let r = SampleBufferRenderer()
-        track.add(r)
         let content = AVPictureInPictureVideoCallViewController()
         content.preferredContentSize = CGSize(width: 1080, height: 1920)
-        r.layer.frame = content.view.bounds
-        r.layer.videoGravity = .resizeAspect
-        content.view.layer.addSublayer(r.layer)
-        r.onSize = { [weak content, weak r] size in
-            DispatchQueue.main.async { content?.preferredContentSize = size; r?.layer.frame = content?.view.bounds ?? .zero }
+        // a view that fills the window and follows its size (a bare sublayer kept the first frame: a cropped piece)
+        let host = PiPPictureView(frame: content.view.bounds)
+        host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        content.view.addSubview(host)
+        let r = SampleBufferRenderer(view: host)
+        r.onSize = { [weak content] size in
+            DispatchQueue.main.async { content?.preferredContentSize = size }
         }
+        track.add(r)
         let src = AVPictureInPictureController.ContentSource(activeVideoCallSourceView: view, contentViewController: content)
         let c = AVPictureInPictureController(contentSource: src)
         c.canStartPictureInPictureAutomaticallyFromInline = true
@@ -65,9 +66,17 @@ final class CallPiP: NSObject, AVPictureInPictureControllerDelegate {
 /// Draws WebRTC frames into an AVSampleBufferDisplayLayer for PiP. Hardware-decoded frames (H.264 through VideoToolbox)
 /// are CVPixelBuffers and go in as they are; other frames are skipped (the window keeps the last picture).
 final class SampleBufferRenderer: NSObject, RTCVideoRenderer {
-    let layer = AVSampleBufferDisplayLayer()
+    private weak var view: PiPPictureView?
+    private let layer: AVSampleBufferDisplayLayer
     var onSize: ((CGSize) -> Void)?
     private var lastSize: CGSize = .zero
+    private var lastRotation: RTCVideoRotation = ._0
+
+    init(view: PiPPictureView) {
+        self.view = view
+        layer = view.picture.displayLayer
+        super.init()
+    }
 
     func setSize(_ size: CGSize) {
         guard size != lastSize, size.width > 0, size.height > 0 else { return }
@@ -77,6 +86,12 @@ final class SampleBufferRenderer: NSObject, RTCVideoRenderer {
 
     func renderFrame(_ frame: RTCVideoFrame?) {
         guard let frame, let cv = frame.buffer as? RTCCVPixelBuffer else { return }
+        // phones send portrait pictures unrotated with an orientation mark: the view is turned to match
+        if frame.rotation != lastRotation {
+            lastRotation = frame.rotation
+            let rotation = frame.rotation
+            DispatchQueue.main.async { [weak view] in view?.rotation = rotation }
+        }
         let pixel = cv.pixelBuffer
         var format: CMVideoFormatDescription?
         guard CMVideoFormatDescriptionCreateForImageBuffer(allocator: kCFAllocatorDefault, imageBuffer: pixel,
@@ -95,4 +110,41 @@ final class SampleBufferRenderer: NSObject, RTCVideoRenderer {
         if layer.status == .failed { layer.flush() }
         layer.enqueue(sample)
     }
+}
+
+/// The PiP window's content: the picture view, sized and turned for the frame's rotation.
+final class PiPPictureView: UIView {
+    let picture = SampleBufferView()
+    var rotation: RTCVideoRotation = ._0 { didSet { setNeedsLayout() } }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+        picture.displayLayer.videoGravity = .resizeAspect
+        addSubview(picture)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let sideways = rotation == ._90 || rotation == ._270
+        picture.transform = .identity
+        picture.bounds = CGRect(x: 0, y: 0, width: sideways ? bounds.height : bounds.width, height: sideways ? bounds.width : bounds.height)
+        picture.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let angle: CGFloat
+        switch rotation {
+        case ._90: angle = .pi / 2
+        case ._180: angle = .pi
+        case ._270: angle = -.pi / 2
+        default: angle = 0
+        }
+        picture.transform = CGAffineTransform(rotationAngle: angle)
+    }
+}
+
+/// A view whose own layer is the sample-buffer display layer (it resizes with the view).
+final class SampleBufferView: UIView {
+    override class var layerClass: AnyClass { AVSampleBufferDisplayLayer.self }
+    var displayLayer: AVSampleBufferDisplayLayer { layer as! AVSampleBufferDisplayLayer }
 }

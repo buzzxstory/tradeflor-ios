@@ -98,10 +98,13 @@ final class CallVideo: ObservableObject {
     /// Opens the camera (front) and makes my track. False when the camera cannot be used.
     @discardableResult
     func openCamera() async -> Bool {
+        // read before the permission prompt: a call that ended (or another that began) while it was up bumped it
+        let gen = generation
         guard await cameraAllowed() else {
             note = NSLocalizedString("vc.camera.denied", comment: "")
             return false
         }
+        guard gen == generation else { return false }
         if source == nil {
             let s = factory.videoSource()
             source = s
