@@ -197,11 +197,13 @@ struct LocationCard: View {
             if mine { Spacer(minLength: 48) }
             VStack(alignment: .leading, spacing: 6) {
                 if running, let p = position {
-                    Map(coordinateRegion: .constant(MKCoordinateRegion(
-                        center: CLLocationCoordinate2D(latitude: p.lat, longitude: p.lon),
-                        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01))),
-                        annotationItems: [p]) { item in
-                        MapMarker(coordinate: CLLocationCoordinate2D(latitude: item.lat, longitude: item.lon), tint: .red)
+                    // the map follows the sender: its own region, moved (animated) to every new position, and a pin whose
+                    // identity carries the coordinate, so it is drawn again where the person is now (a constant region
+                    // and a pin keyed by the message alone stayed on the first position)
+                    Map(coordinateRegion: $region, annotationItems: [LivePin(lat: p.lat, lon: p.lon)]) { pin in
+                        MapAnnotation(coordinate: CLLocationCoordinate2D(latitude: pin.lat, longitude: pin.lon)) {
+                            LivePulsePin()
+                        }
                     }
                     .frame(width: 240, height: 150)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
@@ -211,7 +213,16 @@ struct LocationCard: View {
                         item.openInMaps()
                     } label: { Label("location.open", systemImage: "map") }
                     .font(.footnote.weight(.semibold))
-                    if let until { Text(String(format: NSLocalizedString("location.until", comment: ""), Self.time.string(from: until))).font(.caption2) }
+                    HStack(spacing: 6) {
+                        if let until { Text(String(format: NSLocalizedString("location.until", comment: ""), Self.time.string(from: until))) }
+                        if let at = movedAt {
+                            Text("·")
+                            TimelineView(.periodic(from: .now, by: 10)) { ctx in
+                                Text(String(format: NSLocalizedString("location.updated", comment: ""), Self.ago(at, now: ctx.date)))
+                            }
+                        }
+                    }
+                    .font(.caption2)
                 } else if maybeRunning {
                     // same size as the map card, so the row does not change height when the position arrives
                     ZStack {
@@ -233,12 +244,35 @@ struct LocationCard: View {
         .task(id: message.id) {
             while !Task.isCancelled {
                 let all = await APIClient.shared.livePositions(token: token, conversationID: message.conversation_id)
-                position = all.first { $0.message_id == message.id && $0.user_id == message.sender_id }
+                let next = all.first { $0.message_id == message.id && $0.user_id == message.sender_id }
+                if let n = next {
+                    let moved = position.map { abs($0.lat - n.lat) > 0.000_01 || abs($0.lon - n.lon) > 0.000_01 } ?? true
+                    if moved {
+                        movedAt = Date()
+                        let center = CLLocationCoordinate2D(latitude: n.lat, longitude: n.lon)
+                        if position == nil {
+                            region = MKCoordinateRegion(center: center, span: region.span.latitudeDelta > 0.05 ? MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01) : region.span)
+                        } else {
+                            withAnimation(.easeInOut(duration: 0.8)) { region.center = center }
+                        }
+                    }
+                }
+                position = next
                 loaded = true
                 if (until ?? .distantPast) < Date() { break }
-                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                // every 5 s while the card is on screen (the sender sends a new point every 10-60 s while moving)
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         }
+    }
+
+    /// When the position last changed here (the line "updated 20 s ago").
+    @State private var movedAt: Date?
+
+    private static func ago(_ d: Date, now: Date) -> String {
+        let s = max(0, Int(now.timeIntervalSince(d)))
+        if s < 60 { return String(format: NSLocalizedString("location.ago.s", comment: ""), max(1, s)) }
+        return String(format: NSLocalizedString("location.ago.m", comment: ""), s / 60)
     }
 
     private static let time: DateFormatter = {
@@ -246,6 +280,26 @@ struct LocationCard: View {
         f.timeStyle = .short
         return f
     }()
+}
+
+/// The live pin: its identity is the coordinate, so a new position draws it anew where the person is now.
+private struct LivePin: Identifiable {
+    let lat: Double
+    let lon: Double
+    var id: String { "\(lat),\(lon)" }
+}
+
+/// A red pin with a soft turquoise pulse: this position is live.
+private struct LivePulsePin: View {
+    @State private var on = false
+    var body: some View {
+        ZStack {
+            Circle().fill(Theme.hex(0x2FE6E6).opacity(0.35)).frame(width: 34, height: 34).scaleEffect(on ? 1 : 0.4).opacity(on ? 0 : 1)
+            Circle().fill(Color.white).frame(width: 18, height: 18)
+            Circle().fill(Theme.hex(0xF0525B)).frame(width: 13, height: 13)
+        }
+        .onAppear { withAnimation(.easeOut(duration: 1.6).repeatForever(autoreverses: false)) { on = true } }
+    }
 }
 
 // MARK: video notes (round videos)

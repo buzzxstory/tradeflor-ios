@@ -2054,3 +2054,6 @@
 "ls.pick.empty" = "No contacts yet. Add contacts to choose them here.";
 "ls.pick.done" = "Done (%d)";
 "ls.summary.onlinelist" = "%@, online: %d special";
+"location.updated" = "updated %@";
+"location.ago.s" = "%d s ago";
+"location.ago.m" = "%d min ago";

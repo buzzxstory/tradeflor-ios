@@ -2054,3 +2054,6 @@
 "ls.pick.empty" = "لا توجد جهات اتصال بعد. أضف جهات اتصال لتختارها هنا.";
 "ls.pick.done" = "تم (%d)";
 "ls.summary.onlinelist" = "%@، متصل: %d في القائمة الخاصة";
+"location.updated" = "حُدِّث %@";
+"location.ago.s" = "قبل %d ث";
+"location.ago.m" = "قبل %d د";
