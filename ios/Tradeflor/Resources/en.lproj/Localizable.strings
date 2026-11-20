@@ -2076,3 +2076,4 @@
 "sq.photo" = "Photo";
 "sq.video" = "Video";
 "sq.voice" = "Voice status";
+"shot.unavailable" = "Blocking screenshots is not available yet. Try again after the next update.";

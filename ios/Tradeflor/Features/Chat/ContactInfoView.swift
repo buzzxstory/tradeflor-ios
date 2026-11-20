@@ -26,8 +26,13 @@ struct ContactInfoView: View {
         do {
             try await APIClient.shared.setNoScreenshots(token: token, conversationID: chat.conversation_id, on: on)
             LiveConnection.shared.changes.send(chat.conversation_id) // the open chat reads it at once
+        } catch APIError.refused(let why) where !why.isEmpty {
+            noShots = old
+            flash(why)
         } catch {
             noShots = old
+            // a server from before the feature refuses the field: say so instead of a switch that only flicks back
+            flash(tr("shot.unavailable"))
         }
     }
     @State private var identity: IdentityDetail?
