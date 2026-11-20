@@ -367,7 +367,7 @@ struct ChatView: View {
         if albums.hidden.contains(m.id) {
             // drawn inside its album
             Color.clear.frame(height: 0).id(m.id).onAppear {
-                if !flags.unseenBelow.isEmpty { seen(m.id) }
+                if !flags.unseenBelow.isEmpty || !flags.unseenMentions.isEmpty { seen(m.id) }
                 olderSoon(i, proxy)
             }
         } else {
@@ -395,7 +395,7 @@ struct ChatView: View {
             .id(m.id)
             .onAppear {
                 flags.onScreen.insert(m.id)
-                if !flags.unseenBelow.isEmpty { seen(m.id) }
+                if !flags.unseenBelow.isEmpty || !flags.unseenMentions.isEmpty { seen(m.id) }
                 olderSoon(i, proxy)
             }
             .onDisappear { flags.onScreen.remove(m.id) }
@@ -2158,6 +2158,8 @@ struct ChatView: View {
     /// A counted message came into view: one fewer on the arrow.
     private func seen(_ id: String) {
         if let i = flags.unseenBelow.firstIndex(of: id) { flags.unseenBelow.remove(at: i) }
+        // a mention read on screen leaves the "@" button too (it only went when the button was tapped)
+        if let i = flags.unseenMentions.firstIndex(of: id) { flags.unseenMentions.remove(at: i) }
     }
 
     private func sendDraft() async {
@@ -2663,8 +2665,19 @@ struct ChatView: View {
 
     // MARK: display
 
+    /// Who deleted it (server deleted_by, present only when it was not the sender): an admin's deletion is never shown to
+    /// the sender as "You deleted this message".
+    static func deletedText(_ m: Message, me: String, names: [String: String]) -> String {
+        if let by = m.deleted_by, !by.isEmpty, by != m.sender_id {
+            if by == me { return NSLocalizedString("chat.deleted.byme.admin", comment: "") }
+            let name = names[by] ?? NSLocalizedString("chat.deleted.someadmin", comment: "")
+            return String(format: NSLocalizedString("chat.deleted.by.admin", comment: ""), name)
+        }
+        return NSLocalizedString(m.sender_id == me ? "chat.deleted.you" : "chat.deleted", comment: "")
+    }
+
     private func displayText(_ m: Message) -> String {
-        if m.isDeleted { return NSLocalizedString(m.sender_id == me ? "chat.deleted.you" : "chat.deleted", comment: "") }
+        if m.isDeleted { return Self.deletedText(m, me: me, names: memberNames) }
         switch m.kind {
         case "text": return m.body
         case "voice": return "🎤 " + NSLocalizedString("chats.kind.voice", comment: "")

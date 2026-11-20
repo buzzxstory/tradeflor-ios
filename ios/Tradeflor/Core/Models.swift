@@ -63,6 +63,8 @@ struct Message: Decodable, Identifiable, Equatable {
     let created_at: Int64
     let edited_at: Int64?
     let deleted_at: Int64?
+    /// Who deleted it, when that was not the sender (an owner or admin); absent otherwise and for old deletions.
+    var deleted_by: String? = nil
     let client_key: String?
     let file_name: String?
     let file_id: String?

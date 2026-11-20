@@ -2069,3 +2069,6 @@
 "shot.notice.off" = "%@ سمح بلقطات الشاشة من جديد في هذه المحادثة.";
 "shot.notice.taken" = "%@ أخذ لقطة شاشة لهذه المحادثة.";
 "shot.notice.taken.you" = "أخذتَ لقطة شاشة لهذه المحادثة.";
+"chat.deleted.byme.admin" = "حذفتَ هذه الرسالة بصفتك مشرفاً";
+"chat.deleted.by.admin" = "حذف المشرف %@ هذه الرسالة";
+"chat.deleted.someadmin" = "مشرف";

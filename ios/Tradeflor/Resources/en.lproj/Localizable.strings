@@ -2069,3 +2069,6 @@
 "shot.notice.off" = "%@ allowed screenshots again in this chat.";
 "shot.notice.taken" = "%@ took a screenshot of this chat.";
 "shot.notice.taken.you" = "You took a screenshot of this chat.";
+"chat.deleted.byme.admin" = "You deleted this message as admin";
+"chat.deleted.by.admin" = "This message was deleted by admin %@";
+"chat.deleted.someadmin" = "an admin";
