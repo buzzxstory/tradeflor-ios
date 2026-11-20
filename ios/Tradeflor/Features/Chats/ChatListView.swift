@@ -170,10 +170,10 @@ struct ChatListView: View {
                 // the rings are read again through .tfStatusChanged (posted once the "seen" calls have arrived)
                 StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) {}
             }
-            .sheet(isPresented: $showFolderEditor) { FolderEditorView(token: token, chats: chats) { Task { await reloadFolders() } }.tfColorScheme() }
-            .sheet(item: $editingFolder) { f in FolderEditorView(token: token, chats: chats, editing: f) { Task { await reloadFolders() } }.tfColorScheme() }
-            .sheet(isPresented: $showManageFolders) { ManageFoldersView(token: token, chats: chats) { Task { await reloadFolders() } }.tfColorScheme() }
-            .sheet(item: $lockSheetFor) { c in
+            .fullScreenCover(isPresented: $showFolderEditor) { FolderEditorView(token: token, chats: chats) { Task { await reloadFolders() } }.tfColorScheme() }
+            .fullScreenCover(item: $editingFolder) { f in FolderEditorView(token: token, chats: chats, editing: f) { Task { await reloadFolders() } }.tfColorScheme() }
+            .fullScreenCover(isPresented: $showManageFolders) { ManageFoldersView(token: token, chats: chats) { Task { await reloadFolders() } }.tfColorScheme() }
+            .fullScreenCover(item: $lockSheetFor) { c in
                 LockChatSheet(conversationID: c.conversation_id, name: c.title, locked: lockedIDs.contains(c.conversation_id)) {
                     Task { await loadLocks() }
                 }
@@ -224,7 +224,7 @@ struct ChatListView: View {
                     LocalNotifier.shared.tappedConversation = nil
                 }
             }
-            .sheet(isPresented: $showNew) {
+            .fullScreenCover(isPresented: $showNew) {
                 NewChatView { c in
                     Task {
                         await load(quiet: true)
@@ -233,11 +233,17 @@ struct ChatListView: View {
                 }
                 .tfColorScheme()
             }
-            .sheet(isPresented: $showMyQR) { NavigationStack { MyQRView() }.environmentObject(store).tfColorScheme() }
+            .fullScreenCover(isPresented: $showMyQR) {
+                NavigationStack {
+                    MyQRView()
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { showMyQR = false } } }
+                }
+                .environmentObject(store).tfColorScheme()
+            }
             .fullScreenCover(isPresented: $showQuickCamera, onDismiss: { if quickPhoto != nil { showQuickSend = true } }) {
                 CameraPicker { img in quickPhoto = img }.ignoresSafeArea()
             }
-            .sheet(isPresented: $showQuickSend, onDismiss: { quickPhoto = nil }) {
+            .fullScreenCover(isPresented: $showQuickSend, onDismiss: { quickPhoto = nil }) {
                 if let photo = quickPhoto {
                     QuickSendSheet(token: token, chats: shown, photo: photo) { c in path = [c] }
                 }
@@ -325,7 +331,7 @@ struct ChatListView: View {
         }
             .accessibilityLabel(Text("ct.title"))
             .accessibilityIdentifier("chats.new")
-            .sheet(isPresented: $showContacts, onDismiss: { Task { await load(quiet: true) } }) {
+            .fullScreenCover(isPresented: $showContacts, onDismiss: { Task { await load(quiet: true) } }) {
                 ContactsPanel { c in
                     Task {
                         await load(quiet: true)

@@ -784,8 +784,8 @@ struct ChatView: View {
                     .tfColorScheme()
             }
         }
-        .sheet(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft).tfColorScheme() }
-        .sheet(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store).tfColorScheme() }
+        .fullScreenCover(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft).tfColorScheme() }
+        .fullScreenCover(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store).tfColorScheme() }
         .fullScreenCover(isPresented: $addingGroupStatus) {
             StatusCreatorSheet(onPosted: { Task { await loadGroupStatus() } }, groupID: chat.conversation_id, groupName: chat.title)
                 .environmentObject(store)
@@ -841,7 +841,7 @@ struct ChatView: View {
     private func chatMiddle<V: View>(_ v: V) -> some View {
         v
         .fullScreenCover(item: $openDoc) { d in DocumentPreview(url: d.url).ignoresSafeArea() }
-        .sheet(isPresented: $showFocus) {
+        .fullScreenCover(isPresented: $showFocus) {
             if let doc = focusDoc {
                 SmartFocusSheet(groupID: chat.conversation_id, members: members, me: me, initial: doc, roles: memberRoles) { saved in
                     focusDoc = saved
@@ -859,11 +859,11 @@ struct ChatView: View {
             Button("chat.settings") { if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) } }
             Button("chat.close", role: .cancel) {}
         }
-        .sheet(item: $forwarding) { m in
+        .fullScreenCover(item: $forwarding) { m in
             ForwardSheet(token: token, message: m) { forwarding = nil }
                 .tfColorScheme()
         }
-        .sheet(isPresented: $showPoll) {
+        .fullScreenCover(isPresented: $showPoll) {
             PollComposer { q, opts, multi in
                 do {
                     let m = try await APIClient.shared.chCreatePoll(token: token, groupID: chat.conversation_id, question: q, options: opts, multiple: multi)
@@ -874,7 +874,7 @@ struct ChatView: View {
             }
             .tfColorScheme()
         }
-        .sheet(isPresented: $showSignal) {
+        .fullScreenCover(isPresented: $showSignal) {
             SignalComposer { sym, dir, entry, sl, tp in
                 do {
                     let m = try await APIClient.shared.chSendSignal(token: token, conversationID: chat.conversation_id, symbol: sym,
@@ -886,7 +886,7 @@ struct ChatView: View {
             }
             .tfColorScheme()
         }
-        .sheet(item: $commentsFor) { m in
+        .fullScreenCover(item: $commentsFor) { m in
             CommentsSheet(token: token, groupID: chat.conversation_id, postID: m.id, me: me, isAdmin: isAdmin, names: memberNames)
                 .tfColorScheme()
         }

@@ -81,4 +81,22 @@ final class WhatsAppParityTests: XCTestCase {
             XCTAssertTrue(s.contains(".clipped() // the bar and status bar show the page itself"), "\(f): rows would pass under the bar")
         }
     }
+
+    /// Full screens open full size, never as a card with the screen behind showing at the top (owner, 2026-11-20).
+    func testFullScreensOpenFullSize() throws {
+        let checks: [(String, String)] = [
+            ("Tradeflor/Features/Chats/ChatListView.swift", "fullScreenCover(isPresented: $showNew)"),
+            ("Tradeflor/Features/Chats/ChatListView.swift", "fullScreenCover(isPresented: $showContacts"),
+            ("Tradeflor/Features/Chats/ChatListView.swift", "fullScreenCover(isPresented: $showManageFolders)"),
+            ("Tradeflor/Features/Groups/GroupsListView.swift", "fullScreenCover(isPresented: $showCreate)"),
+            ("Tradeflor/Features/Groups/GroupsListView.swift", "fullScreenCover(isPresented: $showJoin)"),
+            ("Tradeflor/Features/Groups/GroupManage.swift", "fullScreenCover(isPresented: $addingMembers"),
+            ("Tradeflor/Features/Chat/ChatView.swift", "fullScreenCover(item: $forwarding)"),
+            ("Tradeflor/Features/Chat/ChatView.swift", "fullScreenCover(item: $commentsFor)"),
+            ("Tradeflor/Features/Login/LoginView.swift", "fullScreenCover(isPresented: $showSignUp)"),
+        ]
+        for (f, needle) in checks {
+            XCTAssertTrue(try source(f).contains(needle), "\(f): \(needle) is not full size")
+        }
+    }
 }

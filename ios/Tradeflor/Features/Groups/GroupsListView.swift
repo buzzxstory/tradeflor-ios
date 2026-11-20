@@ -148,7 +148,7 @@ struct GroupsListView: View {
             .scrollDismissesKeyboard(.immediately)
             .ignoresSafeArea(.keyboard, edges: .bottom)
             .background(ChatsWallpaper())
-            .sheet(isPresented: $showFolderEditor) {
+            .fullScreenCover(isPresented: $showFolderEditor) {
                 FolderEditorView(token: token, chats: groups.map(\.asConversation)) { Task { await reloadFolders() } }
                     .tfColorScheme()
             }
@@ -167,13 +167,13 @@ struct GroupsListView: View {
                     LocalNotifier.shared.tappedConversation = nil
                 }
             }
-            .sheet(isPresented: $showCreate) { CreateGroupView { id in Task { await open(id) } }.tfColorScheme() }
-            .sheet(isPresented: $showJoin) { JoinGroupView { id in Task { await open(id) } }.tfColorScheme() }
-            .sheet(item: $joining) { d in
+            .fullScreenCover(isPresented: $showCreate) { CreateGroupView { id in Task { await open(id) } }.tfColorScheme() }
+            .fullScreenCover(isPresented: $showJoin) { JoinGroupView { id in Task { await open(id) } }.tfColorScheme() }
+            .fullScreenCover(item: $joining) { d in
                 InviteJoinView(handle: d.handle) { id in Task { await open(id) } }
                     .tfColorScheme()
             }
-            .sheet(item: $lockSheetFor) { g in
+            .fullScreenCover(item: $lockSheetFor) { g in
                 LockChatSheet(conversationID: g.conversation_id, name: g.name, locked: isLocked(g), isGroup: true) {
                     Task { await load() }
                 }
@@ -215,7 +215,7 @@ struct GroupsListView: View {
             discovered = found.filter { !($0.already_member ?? false) || !onScreen.contains(ChatFolder.fold($0.name)) }
             discoveredFor = q
         }
-        .sheet(isPresented: Binding(get: { joinLink != nil }, set: { if !$0 { joinLink = nil } })) {
+        .fullScreenCover(isPresented: Binding(get: { joinLink != nil }, set: { if !$0 { joinLink = nil } })) {
             JoinGroupView(onJoined: { id in Task { await open(id) } }, initialLink: joinLink ?? "")
                 .tfColorScheme()
         }

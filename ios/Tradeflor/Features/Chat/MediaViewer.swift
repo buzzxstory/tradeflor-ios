@@ -148,7 +148,7 @@ struct MediaViewer: View {
         .onChange(of: playback.playing) { playing in
             if playing { keepShown() } else { hideTask?.cancel(); chrome = true }
         }
-        .sheet(item: $forwardMessage) { m in
+        .fullScreenCover(item: $forwardMessage) { m in
             ForwardSheet(token: token, message: m) { forwardMessage = nil }
                 .tfColorScheme() // the app's scheme, not the dark viewer's it is presented from
         }

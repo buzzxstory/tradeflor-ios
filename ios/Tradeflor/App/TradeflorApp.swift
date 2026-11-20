@@ -110,7 +110,7 @@ struct RootView: View {
         .onOpenURL { url in DeepLinks.shared.handle(url) }
         // Tradeflor links tapped inside the app open here instead of the browser
         .environment(\.openURL, OpenURLAction { url in DeepLinks.shared.handle(url) ? .handled : .systemAction })
-        .sheet(item: $links.pending) { p in DeepLinkSheet(target: p.target).environmentObject(store) }
+        .fullScreenCover(item: $links.pending) { p in DeepLinkSheet(target: p.target).environmentObject(store) }
         // someone scanned my connect code: Connection Request (Accept / Decline) wherever I am
         .sheet(item: Binding(get: { links.pending == nil ? flash.request(for: nil) : nil },
                              set: { if $0 == nil, let r = flash.request { flash.answered(r.id) } })) { r in

@@ -501,7 +501,7 @@ struct GroupInfoView: View {
                         .accessibilityLabel(Text("chat.close"))
                 }
             }
-            .sheet(isPresented: $manage, onDismiss: { Task { await load() } }) {
+            .fullScreenCover(isPresented: $manage, onDismiss: { Task { await load() } }) {
                 if let g = group { CreateGroupView(onCreated: { _ in }, editing: g).tfColorScheme() }
             }
             // the owner is told to hand the group over first (server 409), as in the chat's own menu
@@ -576,15 +576,15 @@ struct GroupInfoView: View {
         .fullScreenCover(isPresented: Binding(get: { viewingPicture != nil }, set: { if !$0 { viewingPicture = nil } })) {
             GroupPictureViewer(token: token, groupID: groupID, avatarID: viewingPicture ?? "")
         }
-        .sheet(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store).tfColorScheme() }
-        .sheet(isPresented: $reporting) { ReportGroupSheet(groupID: groupID, groupName: group?.name ?? "").environmentObject(store).tfColorScheme() }
-        .sheet(isPresented: $addingToFolder) { AddToFolderSheet(conversationID: groupID).environmentObject(store).tfColorScheme() }
-        .sheet(isPresented: $addingMembers, onDismiss: { Task { await load() } }) {
+        .fullScreenCover(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store).tfColorScheme() }
+        .fullScreenCover(isPresented: $reporting) { ReportGroupSheet(groupID: groupID, groupName: group?.name ?? "").environmentObject(store).tfColorScheme() }
+        .fullScreenCover(isPresented: $addingToFolder) { AddToFolderSheet(conversationID: groupID).environmentObject(store).tfColorScheme() }
+        .fullScreenCover(isPresented: $addingMembers, onDismiss: { Task { await load() } }) {
             AddMembersSheet(groupID: groupID, groupName: group?.name ?? "", memberIDs: Set(members.map(\.user_id))).environmentObject(store)
                 .tfColorScheme()
         }
         .sheet(isPresented: $showQR) { GroupQRSheet(name: group?.name ?? "", link: groupLink ?? newLink ?? "") }
-        .sheet(isPresented: $inviting, onDismiss: { Task { await load() } }) {
+        .fullScreenCover(isPresented: $inviting, onDismiss: { Task { await load() } }) {
             if let g = group {
                 InviteFriendsSheet(groupID: groupID, groupName: g.name, handle: g.handle ?? "", isPublic: g.privacy == "public",
                                    canInvite: canInvite, memberIDs: Set(members.map(\.user_id))).environmentObject(store)

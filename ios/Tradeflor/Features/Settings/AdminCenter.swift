@@ -64,7 +64,7 @@ struct AdminCenterPage: View {
             meLoaded = true
             if tab.isEmpty { tab = tabs.first?.0 ?? "settings" }
         }
-        .sheet(item: $openUser) { u in
+        .fullScreenCover(item: $openUser) { u in
             // a suspend / restore / role change made here shows at once in the tab underneath (it was a no-op)
             if let me { AdminUserSheet(user: u, me: me) { refresh += 1 }.tfColorScheme() }
         }
@@ -268,7 +268,7 @@ private struct AdminUsersView: View {
         }
         .onChange(of: filter) { _ in page = 1; Task { await load() } }
         .onChange(of: sort) { _ in page = 1; Task { await load() } }
-        .sheet(item: $open) { u in AdminUserSheet(user: u, me: me) { Task { await load() } }.tfColorScheme() }
+        .fullScreenCover(item: $open) { u in AdminUserSheet(user: u, me: me) { Task { await load() } }.tfColorScheme() }
     }
 
     private func load() async {
@@ -524,7 +524,7 @@ private struct AdminOfficialView: View {
             if let note { Text(note).font(.system(size: 12)).foregroundStyle(Theme.danger) }
         }
         .task { await load() }
-        .sheet(isPresented: $composing) { AdminOfficialComposer { Task { await load() } }.environmentObject(store).tfColorScheme() }
+        .fullScreenCover(isPresented: $composing) { AdminOfficialComposer { Task { await load() } }.environmentObject(store).tfColorScheme() }
         // deleting cannot be undone: it asks first (it ran straight from the menu)
         .confirmationDialog(Text("adm.delete.confirm"), isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } }),
                             titleVisibility: .visible) {

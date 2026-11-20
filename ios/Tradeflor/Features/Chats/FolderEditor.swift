@@ -339,8 +339,8 @@ struct ManageFoldersView: View {
             .navigationTitle(Text("folder.manage"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("chat.done") { dismiss() } } }
-            .sheet(item: $editing) { f in FolderEditorView(token: token, chats: chats, editing: f) { Task { await reload() } } }
-            .sheet(isPresented: $creating) { FolderEditorView(token: token, chats: chats) { Task { await reload() } } }
+            .fullScreenCover(item: $editing) { f in FolderEditorView(token: token, chats: chats, editing: f) { Task { await reload() } } }
+            .fullScreenCover(isPresented: $creating) { FolderEditorView(token: token, chats: chats) { Task { await reload() } } }
             .confirmationDialog(Text("folder.remove.title"), isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
                                 titleVisibility: .visible) {
                 Button("folder.remove", role: .destructive) {
