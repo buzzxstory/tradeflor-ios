@@ -167,22 +167,31 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     }
 
     private func refresh() async {
-        guard !token.isEmpty else { return }
+        let t = token
+        guard !t.isEmpty else { return }
         refreshedAt = Date()
-        if let s = try? await APIClient.shared.stSettings(token: token) { settings = s }
-        if let p = try? await APIClient.shared.prefs(token: token) {
+        let s = try? await APIClient.shared.stSettings(token: t)
+        let p = try? await APIClient.shared.prefs(token: t)
+        let st = try? await APIClient.shared.ctLockState(token: t)
+        let b = try? await APIClient.shared.blocked(token: t)
+        let list = try? await APIClient.shared.conversations(token: t)
+        let gs = try? await APIClient.shared.groups(token: t)
+        // signed out (or another account) while reading: nothing of the old account is written after detach (IOS-LC-2)
+        guard t == token else { return }
+        if let s { settings = s }
+        if let p {
             var m: [String: Int64] = [:]
             for x in p { if let u = x.muted_until { m[x.conversation_id] = u } }
             mutedUntil = m
             archivedChats = Set(p.filter { $0.archived ?? false }.map { $0.conversation_id })
         }
-        if let st = try? await APIClient.shared.ctLockState(token: token) { lockedChats = Set((st.locks ?? []).map(\.conversation_id)) }
-        if let b = try? await APIClient.shared.blocked(token: token) { blockedPeers = Set(b) }
+        if let st { lockedChats = Set((st.locks ?? []).map(\.conversation_id)) }
+        if let b { blockedPeers = Set(b) }
         let hiddenAt = (UserDefaults.standard.dictionary(forKey: BadgeStore.hiddenKey(me)) as? [String: Double]) ?? [:]
         var hidden: Set<String> = []
         var fresh: Set<String> = []
         var counts: [String: Int] = [:]
-        if let list = try? await APIClient.shared.conversations(token: token) {
+        if let list {
             for c in list {
                 titles[c.conversation_id] = c.title
                 names[c.peer_id] = c.title
@@ -192,7 +201,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
                    !(Double(c.last_message_at > 100_000_000_000 ? c.last_message_at / 1000 : c.last_message_at) > h) { hidden.insert(c.conversation_id) }
             }
         }
-        if let gs = try? await APIClient.shared.groups(token: token) {
+        if let gs {
             for g in gs {
                 titles[g.conversation_id] = g.name
                 if g.unread_count > 0 { fresh.insert(g.conversation_id); counts[g.conversation_id] = g.unread_count }
@@ -294,11 +303,14 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     }
 
     private func consider(_ m: Message) async {
-        guard !token.isEmpty, m.sender_id != me, !m.isDeleted, m.kind != "notice", m.kind != "call" else { return }
+        // the account this message came for: re-checked after every wait, so a message of an account that signed out
+        // meanwhile never posts a banner (audit IOS-LC-2)
+        let t = token
+        guard !t.isEmpty, m.sender_id != me, !m.isDeleted, m.kind != "notice", m.kind != "call" else { return }
         guard !notified.contains(m.id) else { return }
         let refreshedNow = Date().timeIntervalSince(refreshedAt) > 120
         if refreshedNow { await refresh() }
-        guard flag("notifications.enabled") else { return }
+        guard t == token, flag("notifications.enabled") else { return }
         let secs = m.created_at > 100_000_000_000 ? Double(m.created_at) / 1000 : Double(m.created_at)
         if Date().timeIntervalSince1970 - secs > 90 { return } // an old message is not news
         let group = m.conversation_id.hasPrefix("grp_")
@@ -313,6 +325,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
 
         let locked = lockedChats.contains(m.conversation_id)
         let sender = locked ? "" : await senderName(m, group: group)
+        guard t == token else { return }
         let content = UNMutableNotificationContent()
         if group {
             content.title = titles[m.conversation_id] ?? NSLocalizedString("notify.group", comment: "")
@@ -344,14 +357,17 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         // in front the app plays the sound and the buzz itself (the system's would buzz a second time, whatever Vibrate says);
         // behind, with remote push working, the push (same id) brings the sound: this copy stays silent
         if active || PushManager.shared.alertState == .ok { content.sound = nil }
+        guard t == token else { return }
         try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: m.id, content: content, trigger: nil))
         if active { MessageSound.incomingAlert(group: group, sound: soundWanted) }
     }
 
     /// Someone asked to join a group I own or run (website: one notice per request).
     private func joinRequested(_ d: [String: String]) async {
-        guard let conv = d["conversation_id"] else { return }
+        let t = token
+        guard let conv = d["conversation_id"], !t.isEmpty else { return }
         if Date().timeIntervalSince(refreshedAt) > 120 { await refresh() }
+        guard t == token else { return } // signed out meanwhile (IOS-LC-2)
         // the soft two-note chime, once per request, unless sounds are off (website preferences.tsx, 3c68bec)
         if flag("notifications.sound") { JoinChime.playOnce(conversation: conv, user: d["user_id"] ?? "") }
         guard flag("notifications.enabled") else { return }
@@ -488,7 +504,9 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     private func keepUnsentReply(id: String, body: String, conversation: String) {
         let account = me.isEmpty ? (Keychain.load()?.userID ?? "") : me
         guard !account.isEmpty else { return }
-        var list = OutboxStore.load(account: account, conversation: conversation)
+        // a saved outbox that cannot be read now (locked before the first unlock) is never saved over: that would drop the
+        // messages already waiting in it (audit IOS-LC-1)
+        guard var list = OutboxStore.loadIfReadable(account: account, conversation: conversation) else { return }
         guard !list.contains(where: { $0.id == id }) else { return }
         var p = PendingMessage(id: id, body: body, date: Date())
         p.failed = true

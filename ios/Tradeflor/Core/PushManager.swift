@@ -70,16 +70,27 @@ final class PushManager: NSObject, ObservableObject {
         guard !token.isEmpty else { return }
         bearer = token
         UIApplication.shared.registerForRemoteNotifications()
-        if registry == nil {
-            let r = PKPushRegistry(queue: .main)
-            r.delegate = self
-            r.desiredPushTypes = [.voIP]
-            registry = r
-        }
+        prepareRegistry()
+        // the registry outlived a sign-out (it is never dropped): its token is read again here, PushKit does not hand it out twice
+        if voipHex.isEmpty, let t = registry?.pushToken(for: .voIP) { voipHex = t.map { String(format: "%02x", $0) }.joined() }
         // tokens that arrived before the session was known (a launch by a push) are sent now
         if !alertHex.isEmpty { send(kind: "alert", hex: alertHex) }
         if !voipHex.isEmpty { send(kind: "voip", hex: voipHex) }
     }
+
+    /// The PushKit registry exists in every state, signed out too, from launch on (audit IOS-APL-5): a VoIP push that was in
+    /// flight across a sign-out still finds a delegate, which reports it to CallKit and ends it. Without one iOS ends the app
+    /// for not reporting the call, and after repeated failures stops delivering VoIP pushes.
+    func prepareRegistry() {
+        guard registry == nil else { return }
+        let r = PKPushRegistry(queue: .main)
+        r.delegate = self
+        r.desiredPushTypes = [.voIP]
+        registry = r
+    }
+
+    /// No account on this phone now (signed out, or the Keychain cannot be read before the first unlock).
+    var hasSession: Bool { !bearer.isEmpty || Keychain.load() != nil }
 
     /// The app came to the front: a registration that did not succeed yet (offline, the server's Apple key came later) is sent again.
     func retryIfNeeded() {
@@ -131,8 +142,8 @@ final class PushManager: NSObject, ObservableObject {
         voipState = .waiting
         PushKeys.clear()
         UIApplication.shared.unregisterForRemoteNotifications()
-        registry?.desiredPushTypes = []
-        registry = nil // start() makes a new one: PushKit then hands out its token again
+        // the registry stays (IOS-APL-5): a VoIP push already on its way is still reported and ended. The server no longer
+        // has this token (unregister below), and start() reads it again for the next account.
         guard !token.isEmpty else { return }
         Task {
             for (kind, hex) in pairs {
@@ -201,6 +212,11 @@ extension PushManager: PKPushRegistryDelegate {
         // app that has not reported, and then stops delivering VoIP pushes). The registry's queue is the main queue, so the
         // main-actor code runs right here.
         onMainNow {
+            // signed out: reported (iOS demands it) and ended at once, nothing to connect (audit IOS-APL-5)
+            guard PushManager.shared.hasSession else {
+                CallManager.shared.reportEndedPushCall(callID: callID)
+                return
+            }
             // CallKit first, then the socket so the call can be named
             CallManager.shared.reportPushCall(callID: callID)
             PushManager.shared.ensureConnected()
@@ -301,7 +317,12 @@ enum PushKeys {
 final class TradeflorAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         // a launch by a VoIP push has no screen yet: the PushKit registry must exist before the first push is delivered
-        if let s = Keychain.load() { Task { @MainActor in PushManager.shared.start(token: s.token) } }
+        // the registry is made here in every state, also with no session (IOS-APL-5); assumeIsolated is iOS 17+, so the
+        // same synchronous hop as the push handler
+        onMainNow {
+            PushManager.shared.prepareRegistry()
+            if let s = Keychain.load() { PushManager.shared.start(token: s.token) }
+        }
         return true
     }
 

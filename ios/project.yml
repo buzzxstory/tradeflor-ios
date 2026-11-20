@@ -25,6 +25,10 @@ targets:
     platform: iOS
     sources:
       - path: Tradeflor
+        excludes: [PrivacyInfo.xcprivacy]
+      # the privacy manifest is copied into the app as a resource (audit IOS-APL-3)
+      - path: Tradeflor/PrivacyInfo.xcprivacy
+        buildPhase: resources
     dependencies:
       - package: WebRTC
     info:
@@ -44,15 +48,16 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         TFAPIBase: $(TF_API_BASE)
         # Usage strings (English base; Arabic in ar.lproj/InfoPlist.strings).
-        NSCameraUsageDescription: Tradeflor uses the camera so you can take photos and videos for chats and statuses, and for video calls.
+        NSCameraUsageDescription: Tradeflor uses the camera so you can take photos and videos for chats and statuses.
         NSMicrophoneUsageDescription: Tradeflor uses the microphone for voice messages and calls.
         NSLocalNetworkUsageDescription: Tradeflor uses your local network to connect voice calls directly and with the best sound.
         NSPhotoLibraryUsageDescription: Tradeflor opens your photo library so you can send photos and videos and post statuses.
         NSPhotoLibraryAddUsageDescription: Tradeflor saves photos and videos you choose to keep into your library.
         NSFaceIDUsageDescription: Tradeflor uses Face ID to unlock your locked chats.
-        # Keeps a call's audio going when the screen locks or another app is opened.
-        NSLocationWhenInUseUsageDescription: Tradeflor shares your live location in a chat only when you choose to, for the time you pick.
-        UIBackgroundModes: [audio, location, remote-notification, voip]
+        NSLocationWhenInUseUsageDescription: Tradeflor shares your live location in a chat only when you choose to, for the time you pick, also while the app is in the background.
+        # audio: a call's sound and voice-note playback with the screen locked; location: a live-location share keeps going
+        # for the time picked; voip: PushKit calls. No remote-notification: nothing handles a silent push (audit IOS-APL-4).
+        UIBackgroundModes: [audio, location, voip]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tradeflor.ios

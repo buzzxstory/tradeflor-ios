@@ -267,6 +267,10 @@ struct RootView: View {
     }
 
     private func syncLive() {
+        // onChange(of: scenePhase) never runs for the first phase: a launch in the background (a VoIP push) left the socket
+        // "not in front" for the whole session, and others saw the person offline while using the app (audit IOS-PRES-2).
+        // .inactive (launching, Control Center) counts as in front, as in the scenePhase handler.
+        live.setActive(UIApplication.shared.applicationState != .background)
         if let s = store.session {
             live.start(token: s.token)
             PushManager.shared.start(token: s.token) // alert and VoIP tokens go to the server (remote push)
@@ -282,6 +286,7 @@ struct RootView: View {
             LocalNotifier.shared.detach()
             OutboxFlusher.shared.detach()
             live.stop()
+            live.forgetPresence() // the next account never sees this one's online list or hidden last-seen (IOS-PRES-7)
         }
     }
 }

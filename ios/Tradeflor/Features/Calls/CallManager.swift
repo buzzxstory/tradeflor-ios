@@ -208,6 +208,19 @@ final class CallManager: NSObject, ObservableObject {
         }
     }
 
+    /// A VoIP push that arrived with no account signed in (it was in flight across a sign-out): iOS demands a CallKit report
+    /// for every VoIP push, so it is reported and ended at once (audit IOS-APL-5).
+    func reportEndedPushCall(callID: String) {
+        let id = CallManager.callUUID(callID) ?? UUID()
+        let update = callCapabilities()
+        update.remoteHandle = CXHandle(type: .generic, value: "Tradeflor")
+        update.localizedCallerName = "Tradeflor"
+        provider.reportNewIncomingCall(with: id, update: update) { [weak self] err in
+            guard err == nil else { return }
+            Task { @MainActor in self?.provider.reportCall(with: id, endedAt: Date(), reason: .remoteEnded) }
+        }
+    }
+
     /// The CallKit UUID of a call id, the same for the VoIP push and the socket. Call ids are normally UUIDs; a browser
     /// without crypto.randomUUID (and the server's own tools) make 32 hex digits without dashes, which is the same value
     /// written differently. nil for anything else (the caller then makes a random one).
@@ -388,8 +401,13 @@ final class CallManager: NSObject, ObservableObject {
     }
 
     private func refreshEnabled() {
-        guard !token.isEmpty, !enabled else { return }
-        Task { if let on = try? await APIClient.shared.callsEnabled(token: token) { enabled = on } }
+        let t = token
+        guard !t.isEmpty, !enabled else { return }
+        Task {
+            // the answer belongs to the account that asked: a late one for the account that signed out set `enabled`, and
+            // the next account's attach then skipped its own check (audit IOS-LC-2)
+            if let on = try? await APIClient.shared.callsEnabled(token: t), t == token { enabled = on }
+        }
     }
 
     /// Settings › Calls › Ring for incoming calls.
@@ -404,6 +422,15 @@ final class CallManager: NSObject, ObservableObject {
         confirming = nil
         // signing out: the socket closes right after this, so call.ended would never come (the call screen stayed 5 s)
         if lineInUse { hangUp(); finish() }
+        // rings a VoIP push reported that the socket never confirmed: ended in CallKit, then forgotten, so the next account's
+        // call.sync never asks about the last account's call (audit IOS-LC-2)
+        for k in pushCalls {
+            if let u = UUID(uuidString: k) { provider.reportCall(with: u, endedAt: Date(), reason: .remoteEnded) }
+        }
+        pushCalls = []
+        pushCallID = [:]
+        lastPushKey = nil
+        syncAsked = nil
         subs.removeAll()
         token = ""
         enabled = false

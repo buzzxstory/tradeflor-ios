@@ -34,15 +34,29 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
         switch manager.authorizationStatus {
         case .notDetermined: manager.requestWhenInUseAuthorization()
         case .denied, .restricted: denied = true; pendingStart = nil
-        default: manager.startUpdatingLocation()
+        default: begin()
         }
+    }
+
+    /// Live location keeps going with the app in the background, for the time picked (as WhatsApp): the blue location
+    /// indicator shows it. Needs the "location" background mode (project.yml); started only from the foreground.
+    private func begin() {
+        manager.allowsBackgroundLocationUpdates = true
+        manager.showsBackgroundLocationIndicator = true
+        manager.pausesLocationUpdatesAutomatically = false
+        manager.startUpdatingLocation()
+    }
+
+    private func end() {
+        manager.stopUpdatingLocation()
+        manager.allowsBackgroundLocationUpdates = false
     }
 
     func stop(conversationID: String) {
         sharing.remove(conversationID)
         until[conversationID] = nil
         Task { await APIClient.shared.stopLocation(token: token, conversationID: conversationID) }
-        if sharing.isEmpty && pendingStart == nil { manager.stopUpdatingLocation() }
+        if sharing.isEmpty && pendingStart == nil { self.end() }
     }
 
     /// The session is gone (a 401): sharing stops on this phone without asking the server, which cannot be told any more (it
@@ -52,7 +66,7 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
         sharing = []
         until = [:]
         lastSent = nil
-        manager.stopUpdatingLocation()
+        self.end()
     }
 
     /// Sign-out: the shares this phone runs end on the server (shares started on another device are that device's), and
@@ -63,7 +77,7 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
         sharing = []
         until = [:]
         lastSent = nil
-        manager.stopUpdatingLocation()
+        self.end()
         for c in convs { await APIClient.shared.stopLocation(token: token, conversationID: c) }
     }
 
@@ -71,7 +85,7 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
         Task { @MainActor in
             switch manager.authorizationStatus {
             case .authorizedWhenInUse, .authorizedAlways:
-                if self.pendingStart != nil || !self.sharing.isEmpty { manager.startUpdatingLocation() }
+                if self.pendingStart != nil || !self.sharing.isEmpty { self.begin() }
             case .denied, .restricted:
                 if self.pendingStart != nil { self.denied = true; self.pendingStart = nil }
             default: break
@@ -90,7 +104,7 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
         guard (error as? CLError)?.code == .denied else { return }
         Task { @MainActor in
             if self.pendingStart != nil { self.denied = true; self.pendingStart = nil }
-            if self.sharing.isEmpty { manager.stopUpdatingLocation() }
+            if self.sharing.isEmpty { self.end() }
         }
     }
 
@@ -105,11 +119,11 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
                 until[p.conversation] = Date().addingTimeInterval(Double(p.minutes) * 60)
                 lastSent = (Date(), loc)
             } catch {
-                if sharing.isEmpty { manager.stopUpdatingLocation() }
+                if sharing.isEmpty { self.end() }
             }
             return
         }
-        guard !sharing.isEmpty else { manager.stopUpdatingLocation(); return }
+        guard !sharing.isEmpty else { self.end(); return }
         let now = Date()
         if let last = lastSent {
             let elapsed = now.timeIntervalSince(last.at)
@@ -123,7 +137,7 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
                                                            lon: loc.coordinate.longitude, accuracy: max(0, loc.horizontalAccuracy))
             if !ok { sharing.remove(c); until[c] = nil }
         }
-        if sharing.isEmpty { manager.stopUpdatingLocation() }
+        if sharing.isEmpty { self.end() }
     }
 }
 

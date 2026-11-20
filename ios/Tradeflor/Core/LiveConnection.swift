@@ -32,6 +32,7 @@ final class LiveConnection: ObservableObject {
     var callInProgress = false
 
     private func connectedChanged() {
+        updatePresenceRefresh()
         steadyTask?.cancel()
         if connected { steadyConnected = true; return }
         if offline { steadyConnected = false; return } // the phone is offline: say so at once
@@ -100,7 +101,10 @@ final class LiveConnection: ObservableObject {
                 // back online, or on another network: a fresh socket now (the old one is dead or about to be)
                 // during a call also a socket that still looks open after an offline spell: it may be dead, and the call's
                 // ICE restart needs it at once
-                if (wasOffline && (!self.connected || self.callInProgress)) || before?.first != kinds.first { self.reconnectNow() }
+                // the same interfaces in another order keep the socket (audit IOS-NET-3, see NetworkChange)
+                if (wasOffline && (!self.connected || self.callInProgress)) || NetworkChange.needsNewSocket(before: before ?? [], after: kinds) {
+                    self.reconnectNow()
+                }
             }
         }
         path.start(queue: DispatchQueue(label: "tf.live.path"))
@@ -108,6 +112,8 @@ final class LiveConnection: ObservableObject {
 
     func start(token: String) {
         guard self.token != token || loop == nil else { return }
+        // another account on this phone: nothing of the last one's presence view is shown (audit IOS-PRES-7)
+        if let old = self.token, old != token { forgetPresence() }
         stop()
         self.token = token
         loop = Task { [weak self] in await self?.run() }
@@ -117,12 +123,57 @@ final class LiveConnection: ObservableObject {
     func setActive(_ active: Bool) {
         guard active != appActive else { return }
         appActive = active
-        if connected { sendRaw(["type": "active", "data": ["active": active]]) }
+        if connected {
+            sendRaw(["type": "active", "data": ["active": active]])
+            if active { askPresence() } // back in front: whatever changed while away is read again (audit IOS-PRES-6)
+        }
+        updatePresenceRefresh()
     }
 
-    /// One person's presence read over HTTP (opening a private chat): the same fields as the live event.
-    func applyPresence(_ p: PresenceInfo, userID: String) {
+    /// Orders HTTP presence answers against live events (audit IOS-PRES-3).
+    private var presenceClock = PresenceClock()
+
+    /// Taken before asking GET /presence: the answer is applied only if nothing newer came meanwhile.
+    func presenceStamp(_ userID: String) -> PresenceClock.Stamp { presenceClock.stamp(userID) }
+
+    /// One person's presence read over HTTP (opening a private chat): the same fields as the live event. An answer older
+    /// than a live event (or a snapshot, or a sign-out) that arrived while it was on its way is dropped.
+    func applyPresence(_ p: PresenceInfo, userID: String, stamp: PresenceClock.Stamp) {
+        guard presenceClock.isCurrent(stamp, for: userID) else { return }
         setPresence(userID, online: p.online == true, lastSeen: p.last_seen, hidden: p.hidden)
+    }
+
+    /// Sign-out or another account: who is online, last seen and hidden presence of the last account go (audit IOS-PRES-7).
+    func forgetPresence() {
+        presenceClock.reset()
+        if !online.isEmpty { online = [] }
+        if !lastSeen.isEmpty { lastSeen = [:] }
+        if !hiddenPresence.isEmpty { hiddenPresence = [] }
+    }
+
+    /// Asks the server for the presence snapshot again (it answers at most once per 3 s per connection).
+    private var lastPresenceAsk = Date.distantPast
+    private func askPresence() {
+        guard connected, Date().timeIntervalSince(lastPresenceAsk) >= 3 else { return }
+        if sendRaw(["type": "presence"]) { lastPresenceAsk = Date() }
+    }
+
+    /// While the app is in front and connected, the snapshot is asked for every 45 s (web useChat.ts): a missed or stale
+    /// event heals by itself (audit IOS-PRES-6).
+    private var presenceRefresh: Task<Void, Never>?
+    private func updatePresenceRefresh() {
+        let want = appActive && connected
+        if want == (presenceRefresh != nil) { return }
+        presenceRefresh?.cancel()
+        presenceRefresh = nil
+        guard want else { return }
+        presenceRefresh = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 45_000_000_000)
+                guard let self, !Task.isCancelled, self.appActive, self.connected else { return }
+                self.askPresence()
+            }
+        }
     }
 
     /// One person's presence. Only what really changed is written: every write of a @Published set or dictionary redrew
@@ -161,6 +212,7 @@ final class LiveConnection: ObservableObject {
         } else {
             // the answer is checked here (the heartbeat's next round could be 35 s away): no pong in 5 s = a new socket
             checkPong(within: 5)
+            askPresence() // a socket that stayed up: presence is read again too (audit IOS-PRES-6)
         }
     }
 
@@ -260,7 +312,7 @@ final class LiveConnection: ObservableObject {
                 connected = true
                 opened.send(())
                 sendRaw(["type": "active", "data": ["active": appActive]])
-                sendRaw(["type": "presence"]) // ask for the online snapshot
+                if sendRaw(["type": "presence"]) { lastPresenceAsk = Date() } // ask for the online snapshot
                 attempt = 0
             }
             let data: Data
@@ -296,7 +348,8 @@ final class LiveConnection: ObservableObject {
         return true
     }
 
-    private func handle(_ data: Data) {
+    /// One frame from the server (internal, not private: the unit tests feed it frames).
+    func handle(_ data: Data) {
         guard let env = try? JSONDecoder().decode(LiveEnvelope.self, from: data) else { return }
         if env.type == "typing" || env.type == "presence" || env.type == "presence_snapshot" {
             guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -306,11 +359,13 @@ final class LiveConnection: ObservableObject {
                 if let c = d["conversation_id"] as? String, let u = d["user_id"] as? String { typing.send((c, u)) }
             case "presence":
                 if let u = d["user_id"] as? String {
+                    presenceClock.bump(u)
                     setPresence(u, online: (d["online"] as? Bool) == true,
                                 lastSeen: (d["last_seen"] as? NSNumber)?.int64Value, hidden: d["hidden"] as? Bool)
                 }
             default:
                 // the snapshot replaces what I knew (written only where it differs, see setPresence)
+                presenceClock.bumpAll()
                 let on = Set((d["online"] as? [String]) ?? [])
                 var seen: [String: Int64] = [:]
                 for (k, v) in (d["last_seen"] as? [String: Any]) ?? [:] { if let t = (v as? NSNumber)?.int64Value, t > 0 { seen[k] = t } }

@@ -75,7 +75,9 @@ enum OutboxStore {
     private static func write(_ entries: [Entry], _ url: URL) {
         if entries.isEmpty { try? FileManager.default.removeItem(at: url); return }
         if let data = try? JSONEncoder().encode(entries) {
-            try? data.write(to: url, options: [.atomic, .completeFileProtection])
+            // readable after the first unlock, also while the phone is locked: the flusher that runs after locking and a Reply
+            // typed on the lock screen read and write it then (audit IOS-LC-1; .completeFileProtection made it unreadable)
+            try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         }
     }
 
@@ -219,12 +221,19 @@ enum OutboxStore {
     }
 
     static func load(account: String, conversation: String) -> [PendingMessage] {
-        guard let url = file(account, conversation),
-              let data = queue.sync(execute: { () -> Data? in
-                  if let e = waiting.removeValue(forKey: url) { write(e, url) } // a write still waiting goes first
-                  return try? Data(contentsOf: url)
-              }),
-              let entries = try? JSONDecoder().decode([Entry].self, from: data) else { return [] }
+        loadIfReadable(account: account, conversation: conversation) ?? []
+    }
+
+    /// The saved outbox of one chat: [] when there is none, nil when a file is there but cannot be read (the phone has not
+    /// been unlocked since it started, a damaged file). Whoever saves after loading must not save over a nil (IOS-LC-1).
+    static func loadIfReadable(account: String, conversation: String) -> [PendingMessage]? {
+        guard let url = file(account, conversation) else { return nil }
+        let read = queue.sync(execute: { () -> (exists: Bool, data: Data?) in
+            if let e = waiting.removeValue(forKey: url) { write(e, url) } // a write still waiting goes first
+            return (FileManager.default.fileExists(atPath: url.path), try? Data(contentsOf: url))
+        })
+        guard read.exists else { return [] }
+        guard let data = read.data, let entries = try? JSONDecoder().decode([Entry].self, from: data) else { return nil }
         return entries.compactMap { (e: Entry) -> PendingMessage? in
             var p = PendingMessage(id: e.id, body: e.body, date: e.date)
             p.refused = e.failed == true

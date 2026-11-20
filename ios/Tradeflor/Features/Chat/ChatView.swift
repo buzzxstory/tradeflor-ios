@@ -716,7 +716,11 @@ struct ChatView: View {
         .task(id: chat.peer_id) {
             guard !isGroup, !chat.peer_id.isEmpty else { return }
             // the line itself (online / last seen / typing) and its minute tick are ChatSubtitleLine's
-            if let p = await APIClient.shared.presence(token: token, userID: chat.peer_id) { live.applyPresence(p, userID: chat.peer_id) }
+            // stamped first: an answer that a live event overtook, or that comes after the chat closed, is dropped (IOS-PRES-3)
+            let stamp = live.presenceStamp(chat.peer_id)
+            if let p = await APIClient.shared.presence(token: token, userID: chat.peer_id), !Task.isCancelled {
+                live.applyPresence(p, userID: chat.peer_id, stamp: stamp)
+            }
         }
         .confirmationDialog(Text("civ3.clear.confirm"), isPresented: $confirmClearChat, titleVisibility: .visible) {
             Button("civ3.clear", role: .destructive) {
