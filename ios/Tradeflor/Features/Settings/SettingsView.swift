@@ -252,13 +252,7 @@ struct SettingsView: View {
                         .offset(x: -1, y: -2)
                 }
             }
-            // my note as a small thought bubble on the picture's top edge, as WhatsApp's profile
-            .overlay(alignment: .topLeading) {
-                if let n = notes.mine, n.isLive() {
-                    NoteBubble(note: n, compact: true).offset(x: 22, y: -12)
-                        .allowsHitTesting(false)
-                }
-            }
+            // (no note bubble on this card: in its little room it sat over the name; the note has its own row below)
             VStack(alignment: .leading, spacing: 1) {
                 Text(name).font(.system(size: 19, weight: .bold)).foregroundStyle(SetUI.text).lineLimit(1)
                 Text("@" + username).font(.system(size: 14)).foregroundStyle(Theme.dyn(0xB9CAD3, 0x46657A)).lineLimit(1)
