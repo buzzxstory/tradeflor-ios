@@ -160,8 +160,8 @@ struct CalendarView: View {
                 .padding(.top, 4)
                 .padding(.bottom, 24)
             }
+            .clipped() // rows stop at the top bar and at the dock: nothing shows under the menu or behind the clock
             .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
-            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .refreshable {
                 await load(manual: true)
                 await loadNext()

@@ -159,6 +159,7 @@ struct ChatListView: View {
                     list
                         .padding(.bottom, 12)
                 }
+                .clipped() // rows stop at the top bar and at the dock: nothing shows under the menu or behind the clock
                 .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
                 .scrollIndicators(.hidden) // a short list drew a long bar down the whole side; WhatsApp's list shows none of it
                 .modifier(ListNoBounce())

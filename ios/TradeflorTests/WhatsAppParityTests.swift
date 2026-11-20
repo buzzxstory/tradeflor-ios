@@ -78,7 +78,7 @@ final class WhatsAppParityTests: XCTestCase {
             let s = try source(f)
             XCTAssertFalse(s.contains(".toolbarBackground(.visible, for: .navigationBar)"), "\(f): a bar colour of its own")
             XCTAssertFalse(s.contains("StatusBarScrim"), "\(f): a frosted strip at the top")
-            XCTAssertTrue(s.contains(".clipped() // the bar and status bar show the page itself"), "\(f): rows would pass under the bar")
+            XCTAssertTrue(s.contains(".clipped()"), "\(f): rows would pass under the bar")
         }
     }
 
@@ -104,5 +104,19 @@ final class WhatsAppParityTests: XCTestCase {
     func testShortChatSitsAtTheBottom() throws {
         let s = try source("Tradeflor/Features/Chat/ChatView.swift")
         XCTAssertTrue(s.contains(".frame(minHeight: viewport.size.height, alignment: .bottom)"))
+    }
+
+    /// Rows stop at the dock: nothing of a list shows under the menu or below it (owner, 2026-11-20). The clip comes before
+    /// the dock's room, so the scroll view ends at the dock's top edge.
+    func testListsStopAtTheDock() throws {
+        for f in ["Tradeflor/Features/Chats/ChatListView.swift", "Tradeflor/Features/Groups/GroupsListView.swift",
+                  "Tradeflor/Features/Settings/SettingsView.swift", "Tradeflor/Features/Status/CalendarView.swift",
+                  "Tradeflor/Features/Status/TradeFlorView.swift", "Tradeflor/Features/Settings/LinkedDevicesView.swift"] {
+            let lines = try source(f).components(separatedBy: "
+")
+            for (i, l) in lines.enumerated() where l.contains(".modifier(DockSpace()) // on the scroll view itself") {
+                XCTAssertTrue(i > 0 && lines[i - 1].contains(".clipped()"), "\(f):\(i + 1): rows would show under the dock")
+            }
+        }
     }
 }

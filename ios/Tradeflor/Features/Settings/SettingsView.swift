@@ -135,8 +135,8 @@ struct SettingsView: View {
                 .padding(.top, 18)
                 .padding(.bottom, 32)
             }
+            .clipped() // rows stop at the top bar and at the dock: nothing shows under the menu or behind the clock
             .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
-            .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
             .buttonStyle(.plain)
             // back from a page (Live location's Stop, My Profile, My Identity): the count and the card read again; the
             // first appearance is the .task below
@@ -590,8 +590,8 @@ struct SettingsPage<Content: View>: View {
             }
             .padding(16)
         }
+        .clipped() // rows stop at the top bar and at the dock: nothing shows under the menu or behind the clock
         .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
-        .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
         .scrollDismissesKeyboard(.interactively)
         .background(Starfield())
         .navigationTitle(title)
@@ -627,8 +627,8 @@ struct SettingsPage<Content: View>: View {
             .padding(.top, 4)
             .padding(.bottom, 32)
         }
+        .clipped() // rows stop at the top bar and at the dock: nothing shows under the menu or behind the clock
         .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
-        .clipped() // the bar and status bar show the page itself: rows stop under them, never a band of another colour
         .scrollDismissesKeyboard(.interactively)
         .background(SettingsBackground())
         .navigationTitle("")
