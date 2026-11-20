@@ -90,7 +90,13 @@ final class NoteStore: ObservableObject {
 
     func set(_ n: AboutNote?) { mine = n }
 
-    func forget() { mine = nil }
+    /// Live "note" event: mine from another device updates the row; anyone's is passed on to the screen showing them.
+    @Published private(set) var others: [String: AboutNote?] = [:]
+    func changed(userID: String, note: AboutNote?) {
+        if AccountGate.isCurrent(account: userID) { mine = note } else { others[userID] = note }
+    }
+
+    func forget() { mine = nil; others = [:] }
 }
 
 /// The note as a speech bubble over a picture: frosted teal, a turquoise edge, the emoji first, a small tail pointing down.

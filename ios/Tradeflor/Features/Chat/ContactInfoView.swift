@@ -140,6 +140,10 @@ struct ContactInfoView: View {
         }
         .animation(.easeOut(duration: 0.18), value: note)
         .task { await load() }
+        // their note changed while this page is open (live "note" event): the bubble follows at once
+        .onReceive(NoteStore.shared.$others) { all in
+            if let entry = all[chat.peer_id], profile != nil { profile?.note = entry }
+        }
     }
 
     // MARK: top

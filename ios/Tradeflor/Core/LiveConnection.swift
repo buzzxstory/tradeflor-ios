@@ -383,6 +383,19 @@ final class LiveConnection: ObservableObject {
             return
         }
         if env.type == "sessions" { sessionsChanged.send(()); return }
+        if env.type == "note" {
+            // someone's note over their picture changed (mine on another device: the full note; theirs: the public part or
+            // null): whoever shows it reads it from the notice (PROFILE_NOTE_CONTRACT.md)
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let d = obj["data"] as? [String: Any],
+               let u = d["user_id"] as? String {
+                var note: AboutNote?
+                if let n = d["note"], !(n is NSNull), let raw = try? JSONSerialization.data(withJSONObject: n) {
+                    note = try? JSONDecoder().decode(AboutNote.self, from: raw)
+                }
+                NoteStore.shared.changed(userID: u, note: note)
+            }
+            return
+        }
         if env.type == "profile" {
             // someone I chat with (or I, on another device) changed their picture: it changes everywhere at once (web profileStore)
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let d = obj["data"] as? [String: Any],
