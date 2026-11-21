@@ -89,7 +89,8 @@ struct SignUpView: View {
             .fullScreenCover(isPresented: $showForgot) { ForgotPasswordView().preferredColorScheme(.dark) } // as LoginView presents it
             .navigationDestination(isPresented: Binding(get: { pendingUserID != nil }, set: { if !$0 { pendingUserID = nil } })) {
                 if let id = pendingUserID {
-                    VerifyEmailView(userID: id, username: cleanUsername, displayName: fullName.trimmingCharacters(in: .whitespaces))
+                    VerifyEmailView(userID: id, username: cleanUsername, displayName: fullName.trimmingCharacters(in: .whitespaces),
+                                    password: password)
                 }
             }
         }
@@ -150,6 +151,8 @@ struct VerifyEmailView: View {
     let userID: String
     let username: String
     let displayName: String
+    /// The password typed at sign-up or at the blocked sign-in, sent with the code (in memory only, never saved).
+    let password: String
     @EnvironmentObject private var store: SessionStore
     @State private var code = ""
     @State private var busy = false
@@ -199,7 +202,7 @@ struct VerifyEmailView: View {
         error = nil
         defer { busy = false }
         do {
-            let s = try await APIClient.shared.verifyEmail(userID: userID, code: code, username: username)
+            let s = try await APIClient.shared.verifyEmail(userID: userID, code: code, username: username, password: password)
             if !displayName.isEmpty { UserDefaults.standard.set(displayName, forKey: "tf.chosenDisplayName") }
             store.adopt(s)
         } catch APIError.refused(let why) {

@@ -9,6 +9,7 @@ struct LoginView: View {
     @State private var showSignUp = false
     @State private var showForgot = false
     @State private var unverifiedUserID: String?
+    @State private var unverifiedPassword = "" // the password of the blocked sign-in, sent with the code (memory only)
 
     @State private var showPassword = false
 
@@ -121,9 +122,11 @@ struct LoginView: View {
         .task { await ciAutoLogin() }
         .fullScreenCover(isPresented: $showSignUp) { SignUpView().preferredColorScheme(.dark) }
         .fullScreenCover(isPresented: $showForgot) { ForgotPasswordView().preferredColorScheme(.dark) }
-        .sheet(isPresented: Binding(get: { unverifiedUserID != nil }, set: { if !$0 { unverifiedUserID = nil } })) {
+        .sheet(isPresented: Binding(get: { unverifiedUserID != nil },
+                                    set: { if !$0 { unverifiedUserID = nil; unverifiedPassword = "" } })) {
             if let id = unverifiedUserID {
-                NavigationStack { VerifyEmailView(userID: id, username: username, displayName: "") }.preferredColorScheme(.dark)
+                NavigationStack { VerifyEmailView(userID: id, username: username, displayName: "", password: unverifiedPassword) }
+                    .preferredColorScheme(.dark)
             }
         }
     }
@@ -138,6 +141,7 @@ struct LoginView: View {
         } catch let e as APIError {
             error = Self.message(for: e)
             if case let .emailNotVerified(uid) = e, !uid.isEmpty {
+                unverifiedPassword = password
                 unverifiedUserID = uid
                 try? await APIClient.shared.resendCode(userID: uid, purpose: "register")
             }

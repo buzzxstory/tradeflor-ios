@@ -161,8 +161,13 @@ final class APIClient {
         return o.user_id
     }
 
-    func verifyEmail(userID: String, code: String, username: String) async throws -> Session {
-        let data = try await publicPost("auth/verify-email", ["UserID": userID, "Code": code])
+    /// `password`: the one typed at sign-up or at the blocked sign-in (held in memory only, never saved). The server refuses
+    /// with 409 when the sign-up was started again with a different password and this one is not the password stored last
+    /// (BUG-057, an account takeover); that 409 text is shown as it is.
+    func verifyEmail(userID: String, code: String, username: String, password: String) async throws -> Session {
+        var body: [String: Any] = ["UserID": userID, "Code": code]
+        if !password.isEmpty { body["Password"] = password }
+        let data = try await publicPost("auth/verify-email", body)
         guard let o = try? JSONDecoder().decode(LoginResponse.self, from: data) else { throw APIError.decoding }
         return Session(token: o.token, userID: o.user_id, username: username)
     }
