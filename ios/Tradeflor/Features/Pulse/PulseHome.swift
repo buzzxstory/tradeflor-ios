@@ -64,6 +64,7 @@ struct PulseHomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                if sharer.isSharingAnywhere { sharingBar }
                 hero
                 HStack(spacing: 10) {
                     quick("location.magnifyingglass", "pulse.card.find", PulseInk.cyan) { findFriend() }
@@ -121,6 +122,38 @@ struct PulseHomeView: View {
         }
     }
 
+    // MARK: the sharing bar
+
+    /// While this device shares anywhere (web d516117b): a pulsing green dot, "Sharing your live location", where, and Stop all.
+    private var sharingBar: some View {
+        let n = sharer.sharingCircles.count
+        let pulseOn = Int(now.timeIntervalSince1970) % 2 == 0
+        return HStack(spacing: 12) {
+            ZStack {
+                Circle().fill(PulseInk.green.opacity(0.25)).frame(width: 22, height: 22).scaleEffect(pulseOn ? 1 : 0.6)
+                    .animation(.easeInOut(duration: 1), value: pulseOn)
+                Circle().fill(PulseInk.green).frame(width: 10, height: 10)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("pulse.sharebar.title").font(PulseFont.display(15, 800)).foregroundStyle(PulseInk.ink)
+                Text(verbatim: String(format: NSLocalizedString(n == 1 ? "pulse.sharebar.one" : "pulse.sharebar.n", comment: ""), n))
+                    .font(PulseFont.text(12)).foregroundStyle(PulseInk.muted).lineLimit(2)
+            }
+            Spacer(minLength: 6)
+            Button { Task { await sharer.stopAll(); await pulse.reload() } } label: {
+                Label("pulse.sharebar.stop", systemImage: "stop.fill").font(PulseFont.display(13.5, 800))
+                    .padding(.horizontal, 12).frame(minHeight: 38)
+                    .background(LinearGradient(colors: [Theme.hex(0xFF5A6A), Theme.hex(0xC81E36)], startPoint: .top, endPoint: .bottom), in: Capsule())
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(LinearGradient(colors: [PulseInk.green.opacity(0.16), PulseInk.cyan.opacity(0.1)], startPoint: .leading, endPoint: .trailing),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(PulseInk.green.opacity(0.55), lineWidth: 1))
+    }
+
     // MARK: hero
 
     private var hero: some View {
@@ -136,14 +169,6 @@ struct PulseHomeView: View {
                     .padding(.horizontal, 9).padding(.vertical, 4)
                     .background(PulseInk.green.opacity(0.14), in: Capsule())
                     Spacer()
-                    if sharer.isSharingAnywhere {
-                        Button { Task { await sharer.stopAll(); await pulse.reload() } } label: {
-                            Label("pulse.stopall", systemImage: "location.slash.fill").font(.system(size: 11.5, weight: .bold))
-                                .padding(.horizontal, 10).frame(minHeight: 30)
-                                .background(PulseInk.red, in: Capsule()).foregroundStyle(.white)
-                        }
-                        .buttonStyle(.plain)
-                    }
                 }
                 // the brand lockup: Trade (white) Flor (the sidebar's turquoise) and the slanted MEETUP badge
                 HStack(spacing: 10) {

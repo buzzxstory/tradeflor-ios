@@ -2612,3 +2612,7 @@
 "pulse.sos.show" = "Show";
 "pulse.sos.failed" = "The SOS could not be sent. Try again, or call 112.";
 "pulse.sos.beacon.ax" = "SOS from %@";
+"pulse.sharebar.title" = "Sharing your live location";
+"pulse.sharebar.one" = "in %d meetup · only the people there see you";
+"pulse.sharebar.n" = "in %d meetups · only the people there see you";
+"pulse.sharebar.stop" = "Stop all";

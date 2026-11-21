@@ -2612,3 +2612,7 @@
 "pulse.sos.show" = "أظهره";
 "pulse.sos.failed" = "تعذّر إرسال SOS. حاول مجدداً أو اتصل بـ 112.";
 "pulse.sos.beacon.ax" = "SOS من %@";
+"pulse.sharebar.title" = "تشارك موقعك المباشر";
+"pulse.sharebar.one" = "في %d لقاء · لا يراك إلا من فيه";
+"pulse.sharebar.n" = "في %d لقاءات · لا يراك إلا من فيها";
+"pulse.sharebar.stop" = "أوقف الكل";
