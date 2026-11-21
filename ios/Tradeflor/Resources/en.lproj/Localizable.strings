@@ -2616,3 +2616,10 @@
 "pulse.sharebar.one" = "in %d meetup · only the people there see you";
 "pulse.sharebar.n" = "in %d meetups · only the people there see you";
 "pulse.sharebar.stop" = "Stop all";
+"pulse.how.title" = "How it works";
+"pulse.how.1" = "Create & invite";
+"pulse.how.1.sub" = "Pick a place on the map, or tap a café, and invite friends.";
+"pulse.how.2" = "Share on your way";
+"pulse.how.2.sub" = "Each person chooses to share, for how long, and can stop anytime.";
+"pulse.how.3" = "See everyone arrive";
+"pulse.how.3.sub" = "Live on the map, with arrival alerts. It all ends by itself.";

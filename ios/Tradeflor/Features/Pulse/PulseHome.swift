@@ -89,6 +89,7 @@ struct PulseHomeView: View {
                 ForEach(meetups) { e in
                     Button { open = PulseOpen(id: e.id) } label: { meetupCard(e) }.buttonStyle(.plain)
                 }
+                howItWorks
                 partyCard
                 trust
             }
@@ -398,6 +399,47 @@ struct PulseHomeView: View {
     private func chip(_ icon: String, _ text: String, _ c: Color) -> some View {
         Label(text, systemImage: icon).font(PulseFont.text(11.5, 600)).foregroundStyle(c)
             .padding(.horizontal, 7).padding(.vertical, 3).background(c.opacity(0.12), in: Capsule())
+    }
+
+    /// How it works (web fc59db5d): three cards, each in its own colour (cyan, violet, amber) on dark navy, with glows, a
+    /// thin border, a large faint drawn icon on the right and a gradient number chip. No big watermark numbers (the owner).
+    private var howItWorks: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("pulse.how.title").font(PulseFont.display(18, 800)).foregroundStyle(PulseInk.ink).accessibilityAddTraits(.isHeader)
+            step(1, "mappin", PulseInk.cyan, "pulse.how.1", "pulse.how.1.sub")
+            step(2, "dot.radiowaves.left.and.right", Self.violet, "pulse.how.2", "pulse.how.2.sub")
+            step(3, "person.2", PulseInk.amber, "pulse.how.3", "pulse.how.3.sub")
+        }
+    }
+
+    private func step(_ n: Int, _ icon: String, _ c: Color, _ title: String, _ line: String) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+        return HStack(alignment: .top, spacing: 12) {
+            Text(verbatim: "\(n)").font(PulseFont.display(15, 900)).foregroundStyle(Theme.hex(0x04222C))
+                .frame(width: 30, height: 30)
+                .background(LinearGradient(colors: [c, c.opacity(0.65)], startPoint: .topLeading, endPoint: .bottomTrailing), in: Circle())
+                .shadow(color: c.opacity(0.55), radius: 8)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(LocalizedStringKey(title)).font(PulseFont.display(16, 800)).foregroundStyle(PulseInk.ink)
+                Text(LocalizedStringKey(line)).font(PulseFont.text(13)).foregroundStyle(PulseInk.muted).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.trailing, 60)
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            ZStack {
+                LinearGradient(colors: [Theme.hex(0x0D3442), Theme.hex(0x061C25)], startPoint: .top, endPoint: .bottom)
+                RadialGradient(colors: [c.opacity(0.28), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 190)
+                RadialGradient(colors: [c.opacity(0.12), .clear], center: .topLeading, startRadius: 0, endRadius: 140)
+                Image(systemName: icon).font(.system(size: 96, weight: .ultraLight)).foregroundStyle(c.opacity(0.32))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing).offset(x: 22)
+            }
+            .clipShape(shape)
+        }
+        .overlay(shape.stroke(c.opacity(0.3), lineWidth: 1))
+        .accessibilityElement(children: .combine)
     }
 
     private var partyCard: some View {
