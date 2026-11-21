@@ -2551,3 +2551,26 @@
 "pulse.left.h" = "%dh";
 "pulse.left.m" = "%dm";
 "pulse.left.s" = "%ds";
+
+/* Pulse home (TradeFlor tab, 2026-11-21) */
+"pulse.home.livenow" = "%d live now";
+"pulse.home.line" = "Meet your friends and see each other arrive, live on the map. Private, and it ends by itself.";
+"pulse.home.create" = "+ Create meetup";
+"pulse.home.instant" = "Instant circle";
+"pulse.home.capture" = "Capture moment";
+"pulse.home.invitations" = "Invitations";
+"pulse.home.live" = "Live & upcoming";
+"pulse.home.empty" = "No meetups yet";
+"pulse.home.empty.sub" = "Create one and invite your friends.";
+"pulse.home.invited" = "%@ invited you";
+"pulse.home.joinshare" = "Join & share location";
+"pulse.home.joinonly" = "Join only";
+"pulse.home.upcoming" = "Upcoming";
+"pulse.home.left" = "%@ left";
+"pulse.home.in" = "in %@";
+"pulse.home.joined" = "👥 %d joined";
+"pulse.home.sharing" = "📡 %d sharing";
+"pulse.trust.private" = "🔒 Private circles";
+"pulse.trust.ends" = "⏱ Ends by itself";
+"pulse.trust.arrival" = "🔔 Arrival alerts";
+"pulse.trust.safety" = "🆘 Safety center";

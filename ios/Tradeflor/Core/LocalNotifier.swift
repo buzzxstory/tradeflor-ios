@@ -642,7 +642,6 @@ enum PulseRouting {
         let kind = ((info["tf"] as? [String: Any])?["kind"] as? String) ?? (info["kind"] as? String) ?? ""
         guard identifier.hasPrefix("pulse-") || kind.hasPrefix("pulse") else { return false }
         guard NotificationRouting.belongsToCurrentAccount(info, knownSubscriptionIDs: PushKeys.knownIDs()) else { return true }
-        UserDefaults.standard.set("pulse", forKey: "tf.tradeflor.side")
         if let id = circle(identifier) { PulseStore.shared.openCircle = id }
         TradeFlorView.go("tradeflor")
         return true

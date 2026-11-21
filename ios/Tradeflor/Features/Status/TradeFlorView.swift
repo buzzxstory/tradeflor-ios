@@ -61,87 +61,14 @@ struct TradeFlorView: View {
     /// What the viewer pages through: my status first, then the people's.
     private var viewerGroups: [StatusGroup] { (mine.map { [$0] } ?? []) + people }
 
-    @AppStorage("tf.tradeflor.side") private var side = "home"
-    @ObservedObject private var pulse = PulseStore.shared
-
+    /// The TradeFlor tab is TRADEFLOR Pulse (owner, 2026-11-21): the old home (status strip, market sessions, today's events,
+    /// search) is gone; status lives in Chats, events in Calendar.
     var body: some View {
         NavigationStack {
-            if pulse.enabled && side == "pulse" {
-                PulseHomeView(token: token, me: myID, side: $side)
-                    .background(Theme.soul.ignoresSafeArea())
-                    .toolbar(.hidden, for: .navigationBar)
-            } else {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    PulseSideSwitch(side: $side).padding(.bottom, pulse.enabled ? 12 : 0)
-                    header.padding(.top, 2).padding(.bottom, 12)
-                    SearchPill(placeholder: "tf.search", text: $query).padding(.bottom, 12)
-                    nextSlot.padding(.bottom, 10)
-                    sessions.padding(.bottom, 18)
-                    sectionTitle("status.title").padding(.bottom, 10)
-                    statusCards.padding(.bottom, 16)
-                    awayCard.padding(.bottom, 18)
-                    HStack {
-                        sectionTitle("tf.today")
-                        Spacer()
-                        Button { Self.go("calendar") } label: {
-                            Text("calendar.title").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.accent)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.bottom, 10)
-                    eventsList.padding(.bottom, 16)
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 28)
-            }
-            .clipped() // rows stop at the top bar and at the dock: nothing shows under the menu or behind the clock
-            .modifier(DockSpace()) // on the scroll view itself: an inset outside its NavigationStack never reached it
-            .scrollDismissesKeyboard(.interactively)
-            .refreshable { await load() }
-            .background(
-                ZStack {
-                    Starfield()
-                    // web .tf-home: radial-gradient(120% 50% at 100% 0%, rgba(0,201,211,.12), transparent 55%)
-                    RadialGradient(colors: [Theme.dyn(0x00C9D3, 0x00A8B5, 0.12, 0.1), .clear], center: .topTrailing, startRadius: 0, endRadius: 420)
-                        .ignoresSafeArea()
-                        .allowsHitTesting(false)
-                }
-            )
-            .toolbar(.hidden, for: .navigationBar)
-            }
+            PulseHomeView(token: token, me: myID)
+                .background(PulseInk.ground.ignoresSafeArea())
+                .toolbar(.hidden, for: .navigationBar)
         }
-        .task {
-            // a tab entered again within 20 s is not read again (as Chats and Groups); the first read always happens
-            let k = "tradeflor|" + token
-            if FreshGate.isFresh(k) && events != nil { return }
-            await load()
-            FreshGate.mark(k)
-        }
-        .task {
-            while !Task.isCancelled {
-                // the page itself only needs the minute (released events, sessions, "5m ago"); the seconds of the
-                // countdown tick inside TickText, so the whole page is not redrawn every second (that made it lag)
-                try? await Task.sleep(nanoseconds: 20_000_000_000)
-                now = Date()
-            }
-        }
-        .task {
-            // the web asks again every five minutes (events) and two minutes (status)
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 120_000_000_000)
-                await load()
-            }
-        }
-        .fullScreenCover(item: $open) { o in
-            StatusViewerScreen(groups: o.groups, startGroup: o.index, token: token) {}
-        }
-        .fullScreenCover(isPresented: $manage) {
-            StatusCreatorSheet { NotificationCenter.default.post(name: .tfStatusChanged, object: nil) }
-        }
-        // a status watched, posted or deleted anywhere: the cards and their rings change at once
-        .onReceive(NotificationCenter.default.publisher(for: .tfStatusChanged)) { _ in Task { await loadStatus() } }
     }
 
     // MARK: pieces

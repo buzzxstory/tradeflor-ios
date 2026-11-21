@@ -2551,3 +2551,26 @@
 "pulse.left.h" = "%dس";
 "pulse.left.m" = "%dد";
 "pulse.left.s" = "%dث";
+
+/* Pulse home (TradeFlor tab, 2026-11-21) */
+"pulse.home.livenow" = "%d مباشر الآن";
+"pulse.home.line" = "قابل أصدقاءك وشاهدوا وصول بعضكم مباشرة على الخريطة. خاص، وينتهي وحده.";
+"pulse.home.create" = "+ إنشاء لقاء";
+"pulse.home.instant" = "دائرة فورية";
+"pulse.home.capture" = "التقط لحظة";
+"pulse.home.invitations" = "الدعوات";
+"pulse.home.live" = "المباشرة والقادمة";
+"pulse.home.empty" = "لا لقاءات بعد";
+"pulse.home.empty.sub" = "أنشئ لقاءً وادعُ أصدقاءك.";
+"pulse.home.invited" = "دعاك %@";
+"pulse.home.joinshare" = "انضم وشارك الموقع";
+"pulse.home.joinonly" = "انضم فقط";
+"pulse.home.upcoming" = "قادم";
+"pulse.home.left" = "متبقٍ %@";
+"pulse.home.in" = "بعد %@";
+"pulse.home.joined" = "👥 %d انضموا";
+"pulse.home.sharing" = "📡 %d يشاركون";
+"pulse.trust.private" = "🔒 دوائر خاصة";
+"pulse.trust.ends" = "⏱ تنتهي وحدها";
+"pulse.trust.arrival" = "🔔 تنبيهات الوصول";
+"pulse.trust.safety" = "🆘 مركز الأمان";

@@ -33,78 +33,72 @@ struct PulseSideSwitch: View {
 
 struct PulseOpen: Identifiable, Equatable { let id: String }
 
-/// Pulse home: Create Meetup, Instant Circle, Find My Friend, Time Capsule; invitations with four answers; Recent & Active
-/// with LIVE; Party Mode; Stop all sharing whenever this device shares anywhere.
+/// The Pulse home (web PulseHub.tsx, .ph2-*): a hero card with the live count, the title, the line, Create meetup and
+/// Instant circle, and a radar; three quick tiles; invitations; live and upcoming meetups; Party mode; trust badges.
 struct PulseHomeView: View {
     let token: String
     let me: String
-    @Binding var side: String
     @ObservedObject private var pulse = PulseStore.shared
     @ObservedObject private var sharer = PulseSharer.shared
     @AppStorage("tf.pulse.party") private var party = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var creating = false
     @State private var instant = false
     @State private var open: PulseOpen?
     @State private var capsules = false
+    @State private var capture = false
     @State private var sharingFor: PulseCircle?
     @State private var note: String?
+    @State private var now = Date()
+
+    private static let violet = Color(red: 0xB4 / 255.0, green: 0x8C / 255.0, blue: 1)
+    private static let coral = Color(red: 1, green: 0x7F / 255.0, blue: 0x66 / 255.0)
 
     private var invitations: [PulseCircleEntry] { pulse.circles.filter { $0.response == "invited" && $0.circle.isOpen } }
-    private var active: [PulseCircleEntry] { pulse.circles.filter { $0.response != "invited" && $0.response != "declined" } }
+    private var meetups: [PulseCircleEntry] {
+        pulse.circles.filter { $0.response != "invited" && $0.response != "declined" && $0.circle.isOpen }
+    }
+    private var nowMs: Int64 { Int64(now.timeIntervalSince1970 * 1000) }
+    private var liveCount: Int { meetups.filter { ($0.circle.starts_at ?? 0) <= nowMs }.count }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                PulseSideSwitch(side: $side)
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("pulse.title").font(.title2.weight(.heavy)).foregroundStyle(Theme.text)
-                        Text("pulse.tagline").font(.footnote).foregroundStyle(Theme.muted)
-                    }
-                    Spacer()
-                    if sharer.isSharingAnywhere {
-                        Button { Task { await sharer.stopAll(); await pulse.reload() } } label: {
-                            Label("pulse.stopall", systemImage: "location.slash.fill").font(.footnote.weight(.bold))
-                                .padding(.horizontal, 12).frame(minHeight: 36)
-                                .background(Theme.danger, in: Capsule()).foregroundStyle(.white)
-                        }
-                        .buttonStyle(.plain)
-                    }
+            VStack(alignment: .leading, spacing: 16) {
+                hero
+                HStack(spacing: 10) {
+                    quick("location.viewfinder", "pulse.card.find", PulseInk.cyan) { findFriend() }
+                    quick("photo.stack", "pulse.card.capsule", Self.violet) { capsules = true }
+                    quick("camera.fill", "pulse.home.capture", PulseInk.amber) { capture = true }
                 }
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                    card("person.3.fill", "pulse.card.create", "pulse.card.create.sub") { creating = true }
-                    card("qrcode", "pulse.card.instant", "pulse.card.instant.sub") { instant = true }
-                    card("location.viewfinder", "pulse.card.find", "pulse.card.find.sub") { findFriend() }
-                    card("photo.stack", "pulse.card.capsule", "pulse.card.capsule.sub") { capsules = true }
-                }
-                if let note { Text(verbatim: note).font(.footnote).foregroundStyle(Theme.gold) }
+                if let note { Text(verbatim: note).font(.footnote).foregroundStyle(PulseInk.amber) }
                 if !invitations.isEmpty {
-                    section("pulse.invitations")
-                    ForEach(invitations) { e in invitationRow(e) }
+                    sectionTitle("pulse.home.invitations", invitations.count)
+                    ForEach(invitations) { e in invitationCard(e) }
                 }
-                section("pulse.recent")
-                if active.isEmpty {
-                    Text(LocalizedStringKey(pulse.loaded ? "pulse.recent.none" : "pulse.loading")).font(.callout).foregroundStyle(Theme.muted)
-                        .padding(.vertical, 8)
-                }
-                ForEach(active) { e in
-                    Button { open = PulseOpen(id: e.id) } label: { activeRow(e) }.buttonStyle(.plain)
-                }
-                Toggle(isOn: $party) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("pulse.party").font(.callout.weight(.semibold)).foregroundStyle(Theme.text)
-                        Text("pulse.party.sub").font(.caption).foregroundStyle(Theme.muted)
+                sectionTitle("pulse.home.live", meetups.count)
+                if meetups.isEmpty {
+                    VStack(spacing: 6) {
+                        Text(verbatim: "🗺️").font(.system(size: 40))
+                        Text("pulse.home.empty").font(.headline).foregroundStyle(PulseInk.ink)
+                        Text(LocalizedStringKey(pulse.loaded ? "pulse.home.empty.sub" : "pulse.loading")).font(.footnote).foregroundStyle(PulseInk.muted)
                     }
+                    .frame(maxWidth: .infinity).padding(24)
+                    .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 }
-                .padding(14).background(Theme.soulCard, in: RoundedRectangle(cornerRadius: 14))
-                Text("pulse.footer").font(.caption).foregroundStyle(Theme.faint).multilineTextAlignment(.center).frame(maxWidth: .infinity)
+                ForEach(meetups) { e in
+                    Button { open = PulseOpen(id: e.id) } label: { meetupCard(e) }.buttonStyle(.plain)
+                }
+                partyCard
+                trust
             }
-            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 28)
+            .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 28)
         }
+        .scrollIndicators(.hidden)
         .clipped()
         .modifier(DockSpace())
         .refreshable { await pulse.reload() }
         .task { await pulse.reload() }
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now = $0 }
         .onReceive(pulse.$openCircle) { id in if let id { open = PulseOpen(id: id); pulse.openCircle = nil } }
         .fullScreenCover(item: $open) { o in PulseMeetupScreen(token: token, me: me, circleID: o.id).tfColorScheme() }
         .sheet(isPresented: $creating) {
@@ -114,6 +108,10 @@ struct PulseHomeView: View {
             PulseCreateView(token: token, me: me, instant: true) { c in instant = false; open = PulseOpen(id: c.id) }.tfColorScheme()
         }
         .sheet(isPresented: $capsules) { PulseCapsuleList(token: token, me: me).tfColorScheme() }
+        // Capture moment: the status composer; a posted status refreshes the Chats status strip
+        .fullScreenCover(isPresented: $capture) {
+            StatusCreatorSheet { NotificationCenter.default.post(name: .tfStatusChanged, object: nil) }
+        }
         .sheet(item: $sharingFor) { c in
             PulseShareSheet(circle: c, others: max(0, (pulse.circles.first { $0.id == c.id }?.going ?? 1) - 1), token: token, me: me) { _ in
                 sharingFor = nil
@@ -123,97 +121,255 @@ struct PulseHomeView: View {
         }
     }
 
-    private func findFriend() {
-        if let e = active.first(where: { ($0.sharing ?? 0) > 0 && $0.circle.isOpen }) { open = PulseOpen(id: e.id) } else { note = NSLocalizedString("pulse.find.none", comment: "") }
-    }
+    // MARK: hero
 
-    private func section(_ key: String) -> some View {
-        Text(LocalizedStringKey(key)).font(.subheadline.weight(.bold)).foregroundStyle(Theme.accent).padding(.top, 6).accessibilityAddTraits(.isHeader)
-    }
-
-    private func card(_ icon: String, _ title: String, _ sub: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 6) {
-                Image(systemName: icon).font(.system(size: 22, weight: .semibold)).foregroundStyle(Theme.accent)
-                Text(LocalizedStringKey(title)).font(.subheadline.weight(.bold)).foregroundStyle(Theme.text).multilineTextAlignment(.leading)
-                Text(LocalizedStringKey(sub)).font(.caption).foregroundStyle(Theme.muted).multilineTextAlignment(.leading)
+    private var hero: some View {
+        ZStack(alignment: .topTrailing) {
+            radar.frame(width: 170, height: 170).offset(x: 40, y: -30).opacity(0.55).allowsHitTesting(false)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    HStack(spacing: 5) {
+                        Circle().fill(PulseInk.green).frame(width: 7, height: 7)
+                        Text(verbatim: String(format: NSLocalizedString("pulse.home.livenow", comment: ""), liveCount))
+                    }
+                    .font(.system(size: 11.5, weight: .heavy)).foregroundStyle(PulseInk.green)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(PulseInk.green.opacity(0.14), in: Capsule())
+                    Spacer()
+                    if sharer.isSharingAnywhere {
+                        Button { Task { await sharer.stopAll(); await pulse.reload() } } label: {
+                            Label("pulse.stopall", systemImage: "location.slash.fill").font(.system(size: 11.5, weight: .bold))
+                                .padding(.horizontal, 10).frame(minHeight: 30)
+                                .background(PulseInk.red, in: Capsule()).foregroundStyle(.white)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                HStack(spacing: 0) {
+                    Text(verbatim: "TradeFlor ").foregroundStyle(PulseInk.ink)
+                    Text(verbatim: "Pulse").foregroundStyle(LinearGradient(colors: [Color(red: 0.6, green: 0.97, blue: 1), PulseInk.cyan], startPoint: .top, endPoint: .bottom))
+                }
+                .font(.system(size: 30, weight: .black))
+                .lineLimit(1).minimumScaleFactor(0.8)
+                Text("pulse.home.line").font(.subheadline).foregroundStyle(PulseInk.muted).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Button { creating = true } label: {
+                        Text("pulse.home.create").font(.system(size: 15, weight: .bold)).frame(maxWidth: .infinity, minHeight: 46)
+                            .background(PulseInk.gradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .foregroundStyle(Theme.hex(0x04222C))
+                    }
+                    .buttonStyle(.plain)
+                    Button { instant = true } label: {
+                        Label("pulse.home.instant", systemImage: "qrcode").font(.system(size: 15, weight: .bold)).frame(maxWidth: .infinity, minHeight: 46)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.white.opacity(0.14), lineWidth: 1))
+                            .foregroundStyle(PulseInk.ink)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading)
-            .padding(14)
-            .background(Theme.soulCard, in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.soulCardBorder, lineWidth: 1))
+            .padding(18)
+        }
+        .background(
+            ZStack {
+                LinearGradient(colors: [Theme.hex(0x063440), Theme.hex(0x02202A), Theme.hex(0x011820)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                RadialGradient(colors: [PulseInk.cyan.opacity(0.28), .clear], center: .topTrailing, startRadius: 0, endRadius: 220)
+                RadialGradient(colors: [PulseInk.amber.opacity(0.16), .clear], center: .bottomLeading, startRadius: 0, endRadius: 200)
+                Image("PulseFlower").resizable().scaledToFit().frame(width: 180).opacity(0.12).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+            }
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(PulseInk.cyan.opacity(0.22), lineWidth: 1))
+    }
+
+    /// The orb in a glowing circle with three expanding waves and three floating place blips.
+    private var radar: some View {
+        TimelineView(.animation(minimumInterval: 1 / 20, paused: reduceMotion)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            ZStack {
+                ForEach(0..<3, id: \.self) { i in
+                    let phase = reduceMotion ? Double(i) / 3 : ((t / 3) + Double(i) / 3).truncatingRemainder(dividingBy: 1)
+                    Circle().stroke(PulseInk.cyan.opacity(0.55 * (1 - phase)), lineWidth: 1.5).frame(width: 60 + 110 * phase, height: 60 + 110 * phase)
+                }
+                Circle().fill(Theme.hex(0x062A34)).frame(width: 62, height: 62)
+                    .overlay(Circle().stroke(PulseInk.cyan.opacity(0.6), lineWidth: 2))
+                    .shadow(color: PulseInk.cyan.opacity(0.6), radius: 14)
+                Image("BrandFlower").resizable().scaledToFit().frame(width: 38, height: 38)
+                blip("☕", PulseInk.amber, x: -58, y: -30, t: t, k: 0)
+                blip("🍔", Self.coral, x: 56, y: 22, t: t, k: 1)
+                blip("📍", PulseInk.cyan, x: -20, y: 58, t: t, k: 2)
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func blip(_ e: String, _ c: Color, x: CGFloat, y: CGFloat, t: Double, k: Int) -> some View {
+        let bob = reduceMotion ? 0 : CGFloat(sin(t * 1.2 + Double(k) * 2)) * 4
+        return Text(verbatim: e).font(.system(size: 14)).frame(width: 28, height: 28)
+            .background(Theme.hex(0x071A24), in: Circle()).overlay(Circle().stroke(c, lineWidth: 2))
+            .shadow(color: c.opacity(0.6), radius: 6)
+            .offset(x: x, y: y + bob)
+    }
+
+    // MARK: tiles and sections
+
+    private func quick(_ icon: String, _ key: String, _ tint: Color, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 10) {
+                Image(systemName: icon).font(.system(size: 17, weight: .semibold)).foregroundStyle(tint)
+                    .frame(width: 38, height: 38).background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Text(LocalizedStringKey(key)).font(.system(size: 13, weight: .bold)).foregroundStyle(PulseInk.ink)
+                    .lineLimit(2).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+            .padding(12)
+            .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(tint.opacity(0.22), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
-    private func invitationRow(_ e: PulseCircleEntry) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private func sectionTitle(_ key: String, _ n: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(LocalizedStringKey(key)).font(.system(size: 17, weight: .heavy)).foregroundStyle(PulseInk.ink)
+            Text(verbatim: "\(n)").font(.system(size: 12, weight: .bold)).foregroundStyle(PulseInk.muted)
+                .padding(.horizontal, 7).padding(.vertical, 2).background(Color.white.opacity(0.08), in: Capsule())
+        }
+        .padding(.top, 4)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    private func findFriend() {
+        if let e = meetups.first(where: { ($0.sharing ?? 0) > 0 }) { open = PulseOpen(id: e.id) } else { note = NSLocalizedString("pulse.find.none", comment: "") }
+    }
+
+    private static let whenFormat: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        f.doesRelativeDateFormatting = true
+        return f
+    }()
+
+    private func invitationCard(_ e: PulseCircleEntry) -> some View {
+        let c = e.circle
+        let when = Self.whenFormat.string(from: Date(timeIntervalSince1970: Double(max(c.starts_at ?? 0, 0) == 0 ? nowMs : c.starts_at!) / 1000))
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                Text(verbatim: e.circle.icon).font(.title2)
+                activityBadge(c, size: 44)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: e.circle.title ?? "").font(.headline).foregroundStyle(Theme.text)
-                    Text(verbatim: String(format: NSLocalizedString("pulse.invited.by", comment: ""), pulse.name(e.invited_by ?? "")))
-                        .font(.caption).foregroundStyle(Theme.muted)
+                    Text(verbatim: String(format: NSLocalizedString("pulse.home.invited", comment: ""), pulse.name(e.invited_by ?? "")))
+                        .font(.caption.weight(.semibold)).foregroundStyle(PulseInk.amber)
+                    Text(verbatim: c.title ?? "").font(.system(size: 16, weight: .bold)).foregroundStyle(PulseInk.ink).lineLimit(1)
+                    Text(verbatim: "📍 " + ((c.dest_name ?? "").isEmpty ? "—" : c.dest_name!) + " · " + when).font(.caption).foregroundStyle(PulseInk.muted).lineLimit(1)
                 }
             }
             HStack(spacing: 8) {
-                answer("pulse.join.share", primary: true) { await respond(e, "going"); sharingFor = e.circle }
-                answer("pulse.join.noshare") { await respond(e, "going") }
+                Button { Task { await respond(e, "going"); sharingFor = c } } label: {
+                    Text("pulse.home.joinshare").font(.system(size: 14, weight: .bold)).frame(maxWidth: .infinity, minHeight: 42)
+                        .background(PulseInk.gradient, in: RoundedRectangle(cornerRadius: 12, style: .continuous)).foregroundStyle(Theme.hex(0x04222C))
+                }
+                Button { Task { await respond(e, "going") } } label: {
+                    Text("pulse.home.joinonly").font(.system(size: 14, weight: .bold)).frame(maxWidth: .infinity, minHeight: 42)
+                        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous)).foregroundStyle(PulseInk.ink)
+                }
             }
-            HStack(spacing: 8) {
-                answer("pulse.maybe") { await respond(e, "maybe") }
-                answer("pulse.decline") { await respond(e, "declined") }
+            .buttonStyle(.plain)
+            HStack(spacing: 18) {
+                Button("pulse.maybe") { Task { await respond(e, "maybe") } }
+                Button("pulse.decline") { Task { await respond(e, "declined") } }
             }
+            .font(.footnote.weight(.semibold)).foregroundStyle(PulseInk.muted).buttonStyle(.plain)
         }
-        .padding(14).background(Theme.soulCard, in: RoundedRectangle(cornerRadius: 14))
+        .padding(14)
+        .background(LinearGradient(colors: [PulseInk.amber.opacity(0.14), Color.white.opacity(0.03)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                    in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(PulseInk.amber.opacity(0.3), lineWidth: 1))
     }
 
-    private func answer(_ key: String, primary: Bool = false, _ action: @escaping () async -> Void) -> some View {
-        Button { Task { await action() } } label: {
-            Text(LocalizedStringKey(key)).font(.footnote.weight(.bold)).frame(maxWidth: .infinity, minHeight: 40)
-                .background(primary ? Theme.accent : Theme.card, in: RoundedRectangle(cornerRadius: 10))
-                .foregroundStyle(primary ? Theme.onAccent : Theme.text)
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Answering never shares a location: "Join & Share" answers going, then opens the share step.
+    /// Answering never shares a location: "Join & share location" answers going, then opens the share step.
     private func respond(_ e: PulseCircleEntry, _ r: String) async {
         _ = try? await APIClient.shared.pulsePost(token: token, circle: e.id, "respond", body: ["response": r])
         await pulse.reload()
     }
 
-    private func activeRow(_ e: PulseCircleEntry) -> some View {
-        let now = PulseRules.nowMs()
-        let started = (e.circle.starts_at ?? 0) <= now
-        let live = e.circle.isOpen && started
-        return HStack(spacing: 12) {
-            Text(verbatim: e.circle.icon).font(.title2).frame(width: 44, height: 44).background(Theme.active, in: Circle())
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(verbatim: e.circle.title ?? "").font(.subheadline.weight(.bold)).foregroundStyle(Theme.text).lineLimit(1)
-                    if live {
-                        Text("pulse.live").font(.system(size: 10, weight: .heavy)).foregroundStyle(.white)
-                            .padding(.horizontal, 6).padding(.vertical, 2).background(Theme.danger, in: Capsule())
-                    }
-                }
-                Text(verbatim: String(format: NSLocalizedString("pulse.joined.sharing", comment: ""), e.going ?? 0, e.sharing ?? 0))
-                    .font(.caption).foregroundStyle(Theme.muted)
-                Text(verbatim: timeLine(e.circle, now: now)).font(.caption2).foregroundStyle(Theme.faint)
-            }
-            Spacer()
-            if sharer.isSharing(e.id) { Image(systemName: "location.fill").foregroundStyle(Theme.accent) }
-            Image(systemName: "chevron.forward").foregroundStyle(Theme.faint)
-        }
-        .padding(12).background(Theme.soulCard, in: RoundedRectangle(cornerRadius: 14))
-        .opacity(e.circle.isOpen ? 1 : 0.6)
+    private func activityBadge(_ c: PulseCircle, size: CGFloat) -> some View {
+        Text(verbatim: c.icon).font(.system(size: size * 0.42))
+            .frame(width: size - 6, height: size - 6)
+            .background(Theme.hex(0x071A24), in: Circle())
+            .padding(3)
+            .overlay(Circle().stroke(AngularGradient(colors: [PulseInk.cyan, Color(red: 0.6, green: 0.97, blue: 1), PulseInk.amber, Self.coral, PulseInk.cyan],
+                                                     center: .center), lineWidth: 3))
     }
 
-    private func timeLine(_ c: PulseCircle, now: Int64) -> String {
-        if !c.isOpen { return NSLocalizedString("pulse.ended", comment: "") }
-        if let s = c.starts_at, s > now { return String(format: NSLocalizedString("pulse.starts.in", comment: ""), PulseRules.countdown(s - now)) }
-        if let e = c.expires_at { return String(format: NSLocalizedString("pulse.ends.in", comment: ""), PulseRules.countdown(e - now)) }
-        return ""
+    private func meetupCard(_ e: PulseCircleEntry) -> some View {
+        let c = e.circle
+        let started = (c.starts_at ?? 0) <= nowMs
+        let sharing = e.sharing ?? 0
+        return HStack(spacing: 12) {
+            activityBadge(c, size: 52)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: c.title ?? "").font(.system(size: 16, weight: .bold)).foregroundStyle(PulseInk.ink).lineLimit(1)
+                if let d = c.dest_name, !d.isEmpty { Text(verbatim: "📍 " + d).font(.caption).foregroundStyle(PulseInk.muted).lineLimit(1) }
+                HStack(spacing: 6) {
+                    chip(String(format: NSLocalizedString("pulse.home.joined", comment: ""), e.going ?? 0), PulseInk.muted)
+                    chip(String(format: NSLocalizedString("pulse.home.sharing", comment: ""), sharing), sharing > 0 ? PulseInk.cyan : PulseInk.muted)
+                }
+            }
+            Spacer(minLength: 4)
+            VStack(alignment: .trailing, spacing: 6) {
+                if started {
+                    HStack(spacing: 4) {
+                        Circle().fill(PulseInk.green).frame(width: 6, height: 6)
+                        Text("pulse.hdr.live").textCase(.uppercase)
+                    }
+                    .font(.system(size: 10, weight: .heavy)).foregroundStyle(PulseInk.green)
+                    .padding(.horizontal, 8).padding(.vertical, 3).background(PulseInk.green.opacity(0.14), in: Capsule())
+                    Text(verbatim: String(format: NSLocalizedString("pulse.home.left", comment: ""), PulseRules.shortLeft((c.expires_at ?? 0) - nowMs)))
+                        .font(.caption2).foregroundStyle(PulseInk.muted)
+                } else {
+                    Text("pulse.home.upcoming").font(.system(size: 10, weight: .heavy)).foregroundStyle(PulseInk.amber)
+                        .padding(.horizontal, 8).padding(.vertical, 3).background(PulseInk.amber.opacity(0.14), in: Capsule())
+                    Text(verbatim: String(format: NSLocalizedString("pulse.home.in", comment: ""), PulseRules.shortLeft((c.starts_at ?? 0) - nowMs)))
+                        .font(.caption2).foregroundStyle(PulseInk.muted)
+                }
+                if sharer.isSharing(e.id) { Image(systemName: "location.fill").font(.caption).foregroundStyle(PulseInk.cyan) }
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
+    }
+
+    private func chip(_ text: String, _ c: Color) -> some View {
+        Text(verbatim: text).font(.system(size: 11, weight: .semibold)).foregroundStyle(c)
+            .padding(.horizontal, 7).padding(.vertical, 3).background(c.opacity(0.12), in: Capsule())
+    }
+
+    private var partyCard: some View {
+        Toggle(isOn: $party) {
+            HStack(spacing: 10) {
+                Text(verbatim: "🎉").font(.title3).frame(width: 38, height: 38).background(Self.violet.opacity(0.16), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("pulse.party").font(.callout.weight(.bold)).foregroundStyle(PulseInk.ink)
+                    Text("pulse.party.sub").font(.caption).foregroundStyle(PulseInk.muted)
+                }
+            }
+        }
+        .tint(Self.violet)
+        .padding(14)
+        .background(Self.violet.opacity(0.07), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Self.violet.opacity(0.22), lineWidth: 1))
+    }
+
+    private var trust: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+            ForEach(["pulse.trust.private", "pulse.trust.ends", "pulse.trust.arrival", "pulse.trust.safety"], id: \.self) { k in
+                Text(LocalizedStringKey(k)).font(.system(size: 12, weight: .semibold)).foregroundStyle(PulseInk.muted)
+                    .frame(maxWidth: .infinity, minHeight: 34)
+                    .background(Color.white.opacity(0.04), in: Capsule())
+            }
+        }
     }
 }
 
