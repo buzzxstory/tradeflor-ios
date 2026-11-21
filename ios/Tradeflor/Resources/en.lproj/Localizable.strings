@@ -2737,3 +2737,23 @@
 "pulse.find.distance" = "Distance";
 "pulse.find.hint.share" = "Share your own location to see how far apart you are.";
 "pulse.find.hint.hidden" = "The distance is hidden: one of the positions is only approximate.";
+
+/* Pulse meetup sheets (web 872dfbee) */
+"pulse.status.now" = "Now showing";
+"pulse.status.clear2" = "Clear";
+"pulse.status.own2" = "Write your own status…";
+"pulse.imhere2" = "I'm here";
+"pulse.imhere.sub" = "Tell everyone you arrived";
+"pulse.imhere.undo.sub" = "Undo your arrival";
+"pulse.more.propose.sub" = "Tap a café or any spot on the map";
+"pulse.more.code.sub" = "Friends nearby scan to join";
+"pulse.more.invite2" = "Invite more friends";
+"pulse.more.invite.sub" = "From your contacts";
+"pulse.more.capsule.sub" = "Photos everyone shared";
+"pulse.more.safety.sub" = "Block, report and alerts";
+"pulse.more.end" = "End meetup";
+"pulse.more.end.sub" = "Stops sharing for everyone";
+"pulse.more.leave" = "Leave meetup";
+"pulse.more.leave.sub" = "Your location stops at once";
+"pulse.find.notsharing" = "%@ isn't sharing location";
+"pulse.find.notsharing.sub" = "Their position appears here as soon as they share.";

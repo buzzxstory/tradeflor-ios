@@ -821,9 +821,9 @@ struct PulseMeetupScreen: View {
                                 token: token, me: me) { ok in sheet = nil; if ok { Task { await load() } } }
                     .presentationDetents([.large])
             }
-        case .status: statusSheet.presentationDetents([.medium])
+        case .status: statusSheet.presentationDetents([.medium, .large])
         case .find: findSheet.presentationDetents([.medium, .large])
-        case .more: moreSheet.presentationDetents([.medium])
+        case .more: moreSheet.presentationDetents([.medium, .large])
         case .safety:
             PulseSafetyCenter(token: token, me: me, circleID: circleID, members: members.filter { $0.user_id != me }, people: people,
                               sharingHere: sharingHere, onLeave: { sheet = nil; confirmLeave = true })
@@ -833,33 +833,165 @@ struct PulseMeetupScreen: View {
         }
     }
 
+    /// The menus' look for each quick status (web 872dfbee): a drawn icon in a coloured chip instead of the emoji. The emoji
+    /// is still sent: it floats over the avatar on every app's map.
+    private static let statusLook: [String: (icon: String, tone: Tone)] = [
+        "On my way!": ("car.fill", .cyan), "Stuck in traffic": ("car.2.fill", .amber), "5 min away": ("timer", .violet),
+        "I'm here!": ("mappin.and.ellipse", .green), "Running late": ("hourglass", .rose), "Order for me": ("cup.and.saucer.fill", .blue),
+    ]
+
+    /// The sheets' chip colours (web .t-*): a light and a deep stop.
+    enum Tone {
+        case cyan, amber, violet, green, rose, blue, red, slate
+        var stops: (Color, Color) {
+            switch self {
+            case .cyan: return (Theme.hex(0x00D4DF), Theme.hex(0x0A7F8A))
+            case .amber: return (Theme.hex(0xF2B155), Theme.hex(0xB86A12))
+            case .violet: return (Theme.hex(0xB48CFF), Theme.hex(0x6A3FD1))
+            case .green: return (Theme.hex(0x4FE39A), Theme.hex(0x138A52))
+            case .rose: return (Theme.hex(0xFF7A9A), Theme.hex(0xC0305A))
+            case .blue: return (Theme.hex(0x6CB4FF), Theme.hex(0x2563C9))
+            case .red: return (Theme.hex(0xFF5A6E), Theme.hex(0xB8102A))
+            case .slate: return (Theme.hex(0x8FB0BB), Theme.hex(0x3F5B66))
+            }
+        }
+    }
+
+    /// A drawn icon in a gradient chip (40 pt, radius 13, white icon).
+    private func toneChip(_ icon: String, _ tone: Tone, size: CGFloat = 40) -> some View {
+        let (a, b) = tone.stops
+        let shape = RoundedRectangle(cornerRadius: size * 0.33, style: .continuous)
+        return Image(systemName: icon).font(.system(size: size * 0.48, weight: .semibold)).foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(LinearGradient(colors: [a, b], startPoint: .topLeading, endPoint: .bottomTrailing), in: shape)
+            .overlay(shape.stroke(LinearGradient(colors: [Color.white.opacity(0.35), .clear], startPoint: .top, endPoint: .center), lineWidth: 1))
+            .shadow(color: a.opacity(0.35), radius: 8, y: 4)
+            .accessibilityHidden(true)
+    }
+
+    /// The sheet's title and a round close button.
+    private func sheetHeader(_ key: String) -> some View {
+        HStack {
+            Text(LocalizedStringKey(key)).font(PulseFont.display(19, 800)).foregroundStyle(PulseInk.ink)
+            Spacer()
+            Button { sheet = nil } label: {
+                Image(systemName: "xmark").font(.system(size: 14, weight: .bold)).foregroundStyle(PulseInk.ink)
+                    .frame(width: 36, height: 36).background(Color.white.opacity(0.08), in: Circle())
+                    .frame(width: 44, height: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(Text("chat.close"))
+        }
+    }
+
+    /// My status (web 872dfbee): what is shown now with Clear; six tiles; my own text with Set inside the field; I'm here.
     private var statusSheet: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("pulse.mystatus").font(.headline)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                ForEach(PulseRules.quickStatuses, id: \.text) { q in
-                    Button { Task { await setStatus(NSLocalizedString("pulse.qs." + q.text, comment: ""), q.emoji) } } label: {
-                        Text(verbatim: q.emoji + " " + NSLocalizedString("pulse.qs." + q.text, comment: "")).font(.footnote.weight(.semibold))
-                            .frame(maxWidth: .infinity, minHeight: 44).background(Theme.card, in: RoundedRectangle(cornerRadius: 10))
+        let current = view?.me?.status?.text ?? ""
+        let arrived = view?.me?.arrived == true
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                sheetHeader("pulse.mystatus")
+                if !current.isEmpty {
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("pulse.status.now").font(.system(size: 10.5, weight: .heavy)).tracking(0.8).textCase(.uppercase)
+                                .foregroundStyle(Theme.hex(0x7FB5C2))
+                            Text(verbatim: "“" + current + "”").font(.system(size: 14.5).italic()).foregroundStyle(.white).lineLimit(1)
+                        }
+                        Spacer(minLength: 6)
+                        Button { Task { await setStatus("", nil) } } label: {
+                            Text("pulse.status.clear2").font(.system(size: 13, weight: .heavy)).foregroundStyle(Theme.hex(0xFFD7DC))
+                                .padding(.horizontal, 14).frame(minHeight: 32)
+                                .background(Theme.hex(0xFF5A6E, 0.14), in: Capsule())
+                                .overlay(Capsule().stroke(Theme.hex(0xFF5A6E, 0.35), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .background(PulseInk.cyan.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(PulseInk.cyan.opacity(0.25), lineWidth: 1))
+                }
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                    ForEach(PulseRules.quickStatuses, id: \.text) { q in statusTile(q.text, q.emoji, current: current) }
+                }
+                HStack(spacing: 8) {
+                    Image(systemName: "pencil").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.hex(0x7FB5C2))
+                    TextField(NSLocalizedString("pulse.status.own2", comment: ""), text: $bubbleText)
+                        .font(.system(size: 14.5)).foregroundStyle(.white).submitLabel(.done)
+                        .onSubmit { sendOwnStatus() }
+                    let empty = bubbleText.trimmingCharacters(in: .whitespaces).isEmpty
+                    Button { sendOwnStatus() } label: {
+                        Text("pulse.status.set").font(.system(size: 14, weight: .heavy)).padding(.horizontal, 18).frame(minHeight: 40)
+                            .foregroundStyle(empty ? Color.white.opacity(0.45) : Theme.hex(0x00242B))
+                            .background(empty ? AnyShapeStyle(Color.white.opacity(0.07))
+                                        : AnyShapeStyle(LinearGradient(colors: [Theme.hex(0x6FF8FC), Theme.hex(0x00BCC6)], startPoint: .topLeading, endPoint: .bottomTrailing)),
+                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .disabled(empty)
                 }
-            }
-            HStack {
-                TextField(NSLocalizedString("pulse.status.own", comment: ""), text: $bubbleText).textFieldStyle(.roundedBorder)
-                Button("pulse.status.set") { Task { await setStatus(String(bubbleText.prefix(40)), nil); bubbleText = "" } }
-            }
-            HStack {
+                .padding(.leading, 12).padding(.trailing, 6).padding(.vertical, 6)
+                .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(PulseInk.cyan.opacity(0.22), lineWidth: 1))
                 // "I'm here" works without location (said, not measured)
-                Button { Task { _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "here", body: ["here": !(view?.me?.arrived ?? false)]); sheet = nil; await load() } } label: {
-                    Label(LocalizedStringKey(view?.me?.arrived == true ? "pulse.imhere.undo" : "pulse.imhere"), systemImage: "cup.and.saucer.fill")
+                menuRow("mappin.and.ellipse", .green, arrived ? "pulse.imhere.undo" : "pulse.imhere2", arrived ? "pulse.imhere.undo.sub" : "pulse.imhere.sub") {
+                    Task { _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "here", body: ["here": !arrived]); sheet = nil; await load() }
                 }
-                Spacer()
-                Button("pulse.status.clear") { Task { await setStatus("", nil) } }
             }
-            .font(.callout.weight(.semibold))
+            .padding(20)
         }
-        .padding(20)
+    }
+
+    private func sendOwnStatus() {
+        let t = bubbleText.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return }
+        Task { await setStatus(String(t.prefix(40)), nil); bubbleText = "" }
+    }
+
+    private func statusTile(_ text: String, _ emoji: String, current: String) -> some View {
+        let look = Self.statusLook[text] ?? ("bubble.left.fill", .cyan)
+        let label = NSLocalizedString("pulse.qs." + text, comment: "")
+        let on = current == label || current == text
+        let tc = look.tone.stops.0
+        return Button { Task { await setStatus(label, emoji) } } label: {
+            HStack(spacing: 10) {
+                toneChip(look.icon, look.tone, size: 36)
+                Text(verbatim: label).font(PulseFont.display(14, 800)).foregroundStyle(Theme.hex(0xF2FBFD)).lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 9).padding(.trailing, 12).frame(minHeight: 58)
+            .background(LinearGradient(colors: [tc.opacity(0.14), .clear], startPoint: .topLeading, endPoint: .bottomTrailing),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(LinearGradient(colors: [Theme.hex(0x0B2F3B), Theme.hex(0x061C25)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                        in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(tc.opacity(on ? 1 : 0.3), lineWidth: on ? 2 : 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    /// One menu row (web MenuRow): a coloured icon chip, a title and one line of help, a chevron; red-tinted when it is the
+    /// leave / end row.
+    private func menuRow(_ icon: String, _ tone: Tone, _ title: String, _ sub: String?, danger: Bool = false, _ action: @escaping () -> Void) -> some View {
+        let tc = tone.stops.0
+        let bg: [Color] = danger ? [Theme.hex(0xB8102A, 0.22), Theme.hex(0x12060A)] : [Theme.hex(0x0B2F3B), Theme.hex(0x061C25)]
+        return Button(action: action) {
+            HStack(spacing: 12) {
+                toneChip(icon, tone)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(LocalizedStringKey(title)).font(PulseFont.display(15, 800)).foregroundStyle(danger ? Theme.hex(0xFFB3BD) : Theme.hex(0xF2FBFD))
+                    if let sub { Text(LocalizedStringKey(sub)).font(.system(size: 12.5)).foregroundStyle(Theme.hex(0x8FB6C0)).lineLimit(1) }
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.forward").font(.system(size: 14, weight: .bold)).foregroundStyle(tc.opacity(0.9))
+                    .flipsForRightToLeftLayoutDirection(true)
+            }
+            .padding(.leading, 10).padding(.trailing, 12).padding(.vertical, 10)
+            .background(LinearGradient(colors: bg, startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(danger ? Theme.hex(0xFF5A6E, 0.3) : PulseInk.cyan.opacity(0.16), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     private func setStatus(_ text: String, _ emoji: String?) async {
@@ -875,10 +1007,16 @@ struct PulseMeetupScreen: View {
     private var findSheet: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("pulse.findfriend").font(PulseFont.display(19, 800)).foregroundStyle(PulseInk.ink)
+                sheetHeader("pulse.findfriend")
                 let sharing = members.filter { $0.user_id != me && locations[$0.user_id] != nil }
-                if sharing.isEmpty { Text("pulse.find.nobody").font(PulseFont.text(14)).foregroundStyle(PulseInk.muted) }
+                let others = members.filter { $0.user_id != me && ($0.response == "going" || $0.response == "maybe" || $0.role == "organizer") }
                 ForEach(sharing) { m in friendCard(m, locations[m.user_id]!) }
+                // nobody shares: the first friend is shown, with what to expect and a way to reach them
+                if sharing.isEmpty {
+                    if let first = others.first { notSharingCard(first) } else {
+                        Text("pulse.find.nobody").font(PulseFont.text(14)).foregroundStyle(PulseInk.muted)
+                    }
+                }
             }
             .padding(20)
         }
@@ -956,6 +1094,43 @@ struct PulseMeetupScreen: View {
         }
     }
 
+    /// Find My Friend when the friend is not sharing (web 872dfbee): grey chip, what is true, and a Message pill.
+    private func notSharingCard(_ m: PulseMember) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            toneChip("eye.slash", .slate)
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: String(format: NSLocalizedString("pulse.find.notsharing", comment: ""), name(m.user_id)))
+                        .font(PulseFont.display(15, 800)).foregroundStyle(Theme.hex(0xF2FBFD))
+                    Text("pulse.find.notsharing.sub").font(.system(size: 12.5)).foregroundStyle(Theme.hex(0x8FB6C0))
+                }
+                Button { Task { await messageFriend(m.user_id) } } label: {
+                    Label("sos.message", systemImage: "bubble.left.fill").font(.system(size: 13.5, weight: .heavy))
+                        .padding(.horizontal, 14).frame(minHeight: 38)
+                        .foregroundStyle(Theme.hex(0x00242B))
+                        .background(LinearGradient(colors: [Theme.hex(0x6FF8FC), Theme.hex(0x00BCC6)], startPoint: .topLeading, endPoint: .bottomTrailing), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(LinearGradient(colors: [Theme.hex(0x0B2F3B), Theme.hex(0x061C25)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.hex(0x8FB0BB, 0.22), lineWidth: 1))
+    }
+
+    /// The private chat with this person (fails visibly when they are not a contact).
+    private func messageFriend(_ id: String) async {
+        do {
+            let conv = try await APIClient.shared.directConversation(token: token, with: id)
+            sheet = nil
+            LocalNotifier.shared.tappedConversation = conv
+        } catch {
+            flash = NSLocalizedString("sos.notcontact", comment: "")
+        }
+    }
+
     /// One of the three labelled values: a tiny uppercase label with its icon, the value under it.
     private func findStat(_ icon: String, _ label: String, _ value: String, warn: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -972,42 +1147,28 @@ struct PulseMeetupScreen: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// More (web 872dfbee): each row an icon chip, a title and one help line.
     private var moreSheet: some View {
         ScrollView {
-            VStack(spacing: 10) {
-                Text("pulse.more").font(.headline).foregroundStyle(PulseInk.ink).frame(maxWidth: .infinity, alignment: .leading)
-                choice("mappin.and.ellipse", "pulse.more.propose") { sheet = nil; proposing = true }
-                if isOrganizer {
-                    choice("qrcode", "pulse.more.code") { sheet = .code }
-                    choice("person.badge.plus", "pulse.more.invite") { sheet = .invite }
+            VStack(spacing: 8) {
+                sheetHeader("pulse.more")
+                menuRow("mappin.and.ellipse", .cyan, "pulse.more.propose", "pulse.more.propose.sub") { sheet = nil; proposing = true }
+                if isOrganizer && !ended {
+                    menuRow("qrcode", .violet, "pulse.more.code", "pulse.more.code.sub") { sheet = .code }
+                    menuRow("person.badge.plus", .blue, "pulse.more.invite2", "pulse.more.invite.sub") { sheet = .invite }
                 }
-                choice("photo.stack", "pulse.card.capsule") { sheet = .capsule }
-                choice("shield.lefthalf.filled", "pulse.safety") { sheet = .safety }
-                choice(isOrganizer ? "stop.circle" : "rectangle.portrait.and.arrow.right", isOrganizer ? "pulse.end" : "pulse.leave", danger: true) {
-                    sheet = nil
-                    confirmLeave = true
+                menuRow("photo.on.rectangle", .amber, "pulse.card.capsule", "pulse.more.capsule.sub") { sheet = .capsule }
+                menuRow("shield.lefthalf.filled", .green, "pulse.safety", "pulse.more.safety.sub") { sheet = .safety }
+                if isOrganizer {
+                    if !ended {
+                        menuRow("power", .red, "pulse.more.end", "pulse.more.end.sub", danger: true) { sheet = nil; confirmLeave = true }
+                    }
+                } else {
+                    menuRow("rectangle.portrait.and.arrow.right", .red, "pulse.more.leave", "pulse.more.leave.sub", danger: true) { sheet = nil; confirmLeave = true }
                 }
             }
             .padding(20)
         }
-    }
-
-    /// A choice row: a card with its icon chip and a › chevron.
-    private func choice(_ icon: String, _ key: String, danger: Bool = false, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: icon).font(.system(size: 16, weight: .semibold)).frame(width: 36, height: 36)
-                    .background((danger ? PulseInk.red : PulseInk.cyan).opacity(0.16), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-                    .foregroundStyle(danger ? PulseInk.red : PulseInk.cyan)
-                Text(LocalizedStringKey(key)).font(.callout.weight(.semibold)).foregroundStyle(danger ? PulseInk.red : PulseInk.ink)
-                Spacer()
-                Image(systemName: "chevron.forward").font(.system(size: 13, weight: .bold)).foregroundStyle(PulseInk.muted)
-            }
-            .padding(12)
-            .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.07), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: the invitation (opened before answering)

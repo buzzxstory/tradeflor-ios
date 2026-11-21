@@ -2737,3 +2737,23 @@
 "pulse.find.distance" = "المسافة";
 "pulse.find.hint.share" = "شارك موقعك لترى المسافة بينكما.";
 "pulse.find.hint.hidden" = "المسافة مخفية: أحد الموقعين تقريبي فقط.";
+
+/* Pulse meetup sheets (web 872dfbee) */
+"pulse.status.now" = "المعروض الآن";
+"pulse.status.clear2" = "مسح";
+"pulse.status.own2" = "اكتب حالتك الخاصة…";
+"pulse.imhere2" = "أنا هنا";
+"pulse.imhere.sub" = "أخبر الجميع أنك وصلت";
+"pulse.imhere.undo.sub" = "التراجع عن وصولك";
+"pulse.more.propose.sub" = "اضغط على مقهى أو أي مكان على الخريطة";
+"pulse.more.code.sub" = "يمسحه الأصدقاء القريبون للانضمام";
+"pulse.more.invite2" = "دعوة المزيد من الأصدقاء";
+"pulse.more.invite.sub" = "من جهات اتصالك";
+"pulse.more.capsule.sub" = "صور شاركها الجميع";
+"pulse.more.safety.sub" = "الحظر والإبلاغ والتنبيهات";
+"pulse.more.end" = "إنهاء اللقاء";
+"pulse.more.end.sub" = "يوقف المشاركة للجميع";
+"pulse.more.leave" = "مغادرة اللقاء";
+"pulse.more.leave.sub" = "يتوقف موقعك فورًا";
+"pulse.find.notsharing" = "%@ لا يشارك موقعه";
+"pulse.find.notsharing.sub" = "سيظهر موقعه هنا بمجرد أن يشاركه.";
