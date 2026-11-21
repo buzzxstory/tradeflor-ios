@@ -196,32 +196,48 @@ struct PulseHomeView: View {
         .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(PulseInk.cyan.opacity(0.22), lineWidth: 1))
     }
 
-    /// The orb in a glowing circle with three expanding waves and three floating place blips.
+    /// The orb in a breathing glow, a rotating cyan beam (4.5 s a turn), expanding waves, and three place blips that float and
+    /// light up as the beam passes. With Reduce Motion it keeps moving, slower (the owner wants it alive).
     private var radar: some View {
-        TimelineView(.animation(minimumInterval: 1 / 20, paused: reduceMotion)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
+        TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate * (reduceMotion ? 0.35 : 1)
+            let beam = (t / 4.5).truncatingRemainder(dividingBy: 1) * 360 // degrees, clockwise from the top
+            let breathe = 0.5 + 0.5 * sin(t * 2 * .pi / 3.2)
             ZStack {
                 ForEach(0..<3, id: \.self) { i in
-                    let phase = reduceMotion ? Double(i) / 3 : ((t / 3) + Double(i) / 3).truncatingRemainder(dividingBy: 1)
+                    let phase = ((t / 3) + Double(i) / 3).truncatingRemainder(dividingBy: 1)
                     Circle().stroke(PulseInk.cyan.opacity(0.55 * (1 - phase)), lineWidth: 1.5).frame(width: 60 + 110 * phase, height: 60 + 110 * phase)
                 }
+                // the beam: a cyan wedge fading behind its leading edge
+                Circle()
+                    .fill(AngularGradient(stops: [.init(color: .clear, location: 0), .init(color: .clear, location: 0.78),
+                                                  .init(color: PulseInk.cyan.opacity(0.32), location: 0.995), .init(color: .clear, location: 1)],
+                                          center: .center, startAngle: .degrees(-90), endAngle: .degrees(270)))
+                    .frame(width: 168, height: 168)
+                    .rotationEffect(.degrees(beam))
                 Circle().fill(Theme.hex(0x062A34)).frame(width: 62, height: 62)
-                    .overlay(Circle().stroke(PulseInk.cyan.opacity(0.6), lineWidth: 2))
-                    .shadow(color: PulseInk.cyan.opacity(0.6), radius: 14)
+                    .overlay(Circle().stroke(PulseInk.cyan.opacity(0.5 + 0.3 * breathe), lineWidth: 2))
+                    .shadow(color: PulseInk.cyan.opacity(0.35 + 0.4 * breathe), radius: 10 + 8 * breathe)
                 Image("BrandFlower").resizable().scaledToFit().frame(width: 38, height: 38)
-                blip("cup.and.saucer.fill", PulseInk.amber, x: -58, y: -30, t: t, k: 0)
-                blip("fork.knife", Self.coral, x: 56, y: 22, t: t, k: 1)
-                blip("mappin", PulseInk.cyan, x: -20, y: 58, t: t, k: 2)
+                blip("cup.and.saucer.fill", PulseInk.amber, x: -58, y: -30, t: t, beam: beam, k: 0)
+                blip("fork.knife", Self.coral, x: 56, y: 22, t: t, beam: beam, k: 1)
+                blip("mappin", PulseInk.cyan, x: -20, y: 58, t: t, beam: beam, k: 2)
             }
         }
         .accessibilityHidden(true)
     }
 
-    private func blip(_ e: String, _ c: Color, x: CGFloat, y: CGFloat, t: Double, k: Int) -> some View {
-        let bob = reduceMotion ? 0 : CGFloat(sin(t * 1.2 + Double(k) * 2)) * 4
+    /// A blip floats, and lights up while the beam passes over its angle.
+    private func blip(_ e: String, _ c: Color, x: CGFloat, y: CGFloat, t: Double, beam: Double, k: Int) -> some View {
+        let bob = CGFloat(sin(t * 1.2 + Double(k) * 2)) * 4
+        let angle = (atan2(Double(x), Double(-y)) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360) // clockwise from the top
+        let behind = (beam - angle + 360).truncatingRemainder(dividingBy: 360) // how far the beam has gone past it
+        let lit = behind < 50 ? 1 - behind / 50 : 0
         return Image(systemName: e).font(.system(size: 12, weight: .bold)).foregroundStyle(.white).frame(width: 28, height: 28)
             .background(Theme.hex(0x071A24), in: Circle()).overlay(Circle().stroke(c, lineWidth: 2))
-            .shadow(color: c.opacity(0.6), radius: 6)
+            .shadow(color: c.opacity(0.45 + 0.5 * lit), radius: 6 + 8 * lit)
+            .scaleEffect(1 + 0.12 * lit)
+            .brightness(0.25 * lit)
             .offset(x: x, y: y + bob)
     }
 

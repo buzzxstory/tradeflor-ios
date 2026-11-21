@@ -2581,3 +2581,14 @@
 "pulse.trust.safety.sub" = "Stop, block or alert anytime";
 "pulse.home.tag1" = "Plan it. Pin it.";
 "pulse.home.tag2" = "Meet up live.";
+
+/* New status (2026-11-21) */
+"stx2.title" = "New status";
+"stx2.disappears" = "Disappears after 24 hours";
+"stx2.camera" = "Camera";
+"stx2.camera.sub" = "Photo or video";
+"stx2.gallery" = "Gallery";
+"stx2.gallery.sub" = "From device";
+"stx2.voice" = "Voice note";
+"stx2.voice.sub" = "Up to 1 minute";
+"stx2.audience" = "Seen by people you chat with · videos up to 30 s";

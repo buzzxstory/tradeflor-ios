@@ -76,15 +76,26 @@ struct StatusCreatorSheet: View {
                                 .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.accent)
                                 .padding(.horizontal, 14).frame(height: 38).overlay(Capsule().stroke(Theme.borderActive, lineWidth: 1))
                         }
+                    }
+                    HStack(spacing: 10) {
+                        Button { dismiss() } label: {
+                            Text("notes.cancel").font(PulseFont.display(15.5, 700)).foregroundStyle(Self.ink)
+                                .frame(maxWidth: .infinity, minHeight: 48)
+                                .overlay(Capsule().stroke(Color.white.opacity(0.25), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(posting)
                         Button { Task { await postAll() } } label: {
                             HStack {
-                                Spacer()
-                                if posting { ProgressView().tint(Theme.onAccent); Text(progress) } else { Text("stx.post").bold() }
-                                Spacer()
+                                if posting { ProgressView().tint(Theme.hex(0x04222C)); Text(progress) } else { Text("stx.post") }
                             }
-                            .foregroundStyle(Theme.onAccent).frame(height: 48).background(Theme.accent, in: Capsule())
+                            .font(PulseFont.display(15.5, 800)).foregroundStyle(Theme.hex(0x04222C))
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                            .background(PulseInk.gradient, in: Capsule())
+                            .opacity(items.isEmpty ? 0.45 : 1)
                         }
-                        .disabled(posting)
+                        .buttonStyle(.plain)
+                        .disabled(posting || items.isEmpty)
                     }
                         if let problem {
                             // web .sc-notice
@@ -204,69 +215,81 @@ struct StatusCreatorSheet: View {
     }
 
     /// The start screen's top half (web .sc-start): the bar, my lit ring, "Share a moment", who sees it, and the ways to post.
+    /// The New status screen (web 90d1e9b8): "New status" with "Disappears after 24 hours" and a round close button; three
+    /// tinted cards (Camera, Gallery, Voice note), each with a gradient icon chip; text and layout stay as two small choices;
+    /// the audience pill.
     @ViewBuilder private var startSection: some View {
-        // web .sc-bar: X in a dark glass circle on the left, the title in the middle (no system bar)
-        HStack(spacing: 8) {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(groupName ?? NSLocalizedString("stx2.title", comment: ""))
+                    .font(PulseFont.display(21, 800)).foregroundStyle(Self.ink).lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                Label("stx2.disappears", systemImage: "clock").font(PulseFont.text(13)).foregroundStyle(Theme.hex(0x9FB8C4))
+            }
+            Spacer()
             Button { dismiss() } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Self.ink)
-                    .frame(width: 44, height: 44)
-                    .background(Color.black.opacity(0.2), in: Circle())
-                    .contentShape(Circle())
+                Image(systemName: "xmark").font(.system(size: 15, weight: .bold)).foregroundStyle(Self.ink)
+                    .frame(width: 40, height: 40)
+                    .background(Color.white.opacity(0.08), in: Circle())
+                    .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
             }
             .buttonStyle(.plain)
             .disabled(posting) // an upload on its way is not left running unseen behind a closed sheet
             .accessibilityLabel(Text("chat.close"))
-            Text(groupName ?? NSLocalizedString("stx.new", comment: ""))
-                .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(Self.ink)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity)
-                .accessibilityAddTraits(.isHeader)
-            Color.clear.frame(width: 44, height: 44)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        // the lit ring around me (web .sc-hero), "Share a moment" big, and who sees it right under it
-        StatusCreatorHero(token: token, userID: store.session?.userID ?? "", name: store.session?.username ?? "?")
-            .padding(.top, 10)
-            .padding(.bottom, 16)
-        Text("stx.share")
-            .font(.system(size: 30, weight: .heavy))
-            .tracking(-0.5)
-            .foregroundStyle(Self.ink)
-            .multilineTextAlignment(.center)
-        Text(groupName.map { String(format: NSLocalizedString("ux2.creator.sub.group", comment: ""), $0) }
-             ?? NSLocalizedString("stx.footer", comment: ""))
-            .font(.system(size: 15))
-            .lineSpacing(4)
-            .foregroundStyle(Theme.hex(0x9FB8C4))
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 24)
-            .padding(.top, 8)
+        .padding(.horizontal, 18).padding(.top, 14)
         VStack(spacing: 12) {
+            Button { showCamera = true } label: { way("camera.fill", "stx2.camera", "stx2.camera.sub", PulseInk.cyan) }
             PhotosPicker(selection: $picked, maxSelectionCount: 10, matching: .any(of: [.images, .videos])) {
-                mainTile
+                way("photo.on.rectangle.angled", "stx2.gallery", "stx2.gallery.sub", Color(red: 0xB4 / 255.0, green: 0x8C / 255.0, blue: 1))
             }
-            .buttonStyle(.plain)
+            Button { showVoice = true } label: { way("mic.fill", "stx2.voice", "stx2.voice.sub", Color(red: 1, green: 0x8F / 255.0, blue: 0x78 / 255.0)) }
+            HStack(spacing: 10) {
+                Button { showText = true } label: { small("textformat", "stx.tile.text") }
+                PhotosPicker(selection: $layoutPicked, maxSelectionCount: 6, matching: .images) { small("square.grid.2x2", "stx.tile.layout") }
+            }
             if posting && items.isEmpty {
                 // a text or voice status on its way (the queue's own button shows the progress otherwise)
                 ProgressView().tint(Theme.accent).padding(.vertical, 4)
             }
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                Button { showCamera = true } label: { tile("camera", "stx.tile.camera", "stx.tile.camera.sub", 0x2FD9DC, soft: 0.14, glow: 0.22) }
-                Button { showText = true } label: { tile(nil, "stx.tile.text", "stx.tile.text.sub", 0xF2C14E, soft: 0.15, glow: 0.2) }
-                PhotosPicker(selection: $layoutPicked, maxSelectionCount: 6, matching: .images) {
-                    tile("square.grid.2x2", "stx.tile.layout", "stx.tile.layout.sub", 0xA68BFF, soft: 0.16, glow: 0.22, glowHex: 0x8F6BFF)
-                }
-                Button { showVoice = true } label: { tile("mic", "stx.tile.voice", "stx.tile.voice.sub", 0xFF8AA0, soft: 0.15, glow: 0.2, glowHex: 0xFF7A93) }
-            }
-            .buttonStyle(.plain)
-            .disabled(posting)
+            Label {
+                Text(groupName.map { String(format: NSLocalizedString("ux2.creator.sub.group", comment: ""), $0) }
+                     ?? NSLocalizedString("stx2.audience", comment: ""))
+            } icon: { Image(systemName: "eye") }
+                .font(PulseFont.text(12.5)).foregroundStyle(Theme.hex(0x9FB8C4))
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .background(Color.white.opacity(0.05), in: Capsule())
+                .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
         }
+        .buttonStyle(.plain)
+        .disabled(posting)
         .padding(.horizontal, 16)
-        .padding(.top, 26)
+        .padding(.top, 18)
+    }
+
+    /// One way to post: a card tinted by its colour (radius 22), a 60 pt gradient chip with a white icon, a title and a hint.
+    private func way(_ icon: String, _ title: String, _ hint: String, _ c: Color) -> some View {
+        HStack(spacing: 14) {
+            PulseIconChip(symbol: icon, color: c, size: 60)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(LocalizedStringKey(title)).font(PulseFont.display(17, 800)).foregroundStyle(Self.ink)
+                Text(LocalizedStringKey(hint)).font(PulseFont.text(13)).foregroundStyle(Theme.hex(0x9FB8C4))
+            }
+            Spacer()
+            Image(systemName: "chevron.forward").font(.system(size: 13, weight: .bold)).foregroundStyle(c.opacity(0.8))
+        }
+        .padding(14)
+        .background(LinearGradient(colors: [c.opacity(0.16), c.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                    in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(c.opacity(0.25), lineWidth: 1))
+        .contentShape(Rectangle())
+    }
+
+    private func small(_ icon: String, _ key: String) -> some View {
+        Label(LocalizedStringKey(key), systemImage: icon).font(PulseFont.display(13.5, 700)).foregroundStyle(Self.ink)
+            .frame(maxWidth: .infinity, minHeight: 42)
+            .background(Color.white.opacity(0.05), in: Capsule())
+            .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
     }
 
     /// web .sc-way--main: the bright turquoise-to-blue card, a white icon on frosted glass, "Photos & videos" (19 pt) over

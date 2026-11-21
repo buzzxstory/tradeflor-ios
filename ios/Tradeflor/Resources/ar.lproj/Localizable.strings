@@ -2581,3 +2581,14 @@
 "pulse.trust.safety.sub" = "أوقف أو احظر أو نبّه في أي وقت";
 "pulse.home.tag1" = "خطّط. ثبّت.";
 "pulse.home.tag2" = "والتقوا مباشرة.";
+
+/* New status (2026-11-21) */
+"stx2.title" = "حالة جديدة";
+"stx2.disappears" = "تختفي بعد 24 ساعة";
+"stx2.camera" = "الكاميرا";
+"stx2.camera.sub" = "صورة أو فيديو";
+"stx2.gallery" = "المعرض";
+"stx2.gallery.sub" = "من الجهاز";
+"stx2.voice" = "رسالة صوتية";
+"stx2.voice.sub" = "حتى دقيقة واحدة";
+"stx2.audience" = "يراها من تدردش معهم · الفيديو حتى 30 ث";
