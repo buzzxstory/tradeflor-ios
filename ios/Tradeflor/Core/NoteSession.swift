@@ -482,7 +482,8 @@ final class NoteSession {
         }
         // 409 (history the server no longer keeps) or 404 (a block deleted under me): reload, keep my text, send it again
         var typed: [(String, String)] = []
-        for o in ops where (o.op == "block.text" || o.op == "block.insert"), let id = o.id {
+        for o in ops where o.op == "block.text" || o.op == "block.insert" {
+            guard let id = o.id else { continue }
             typed.append((id, blocks[id]?.text ?? o.text ?? ""))
         }
         let typedIds = Set(typed.map(\.0))
