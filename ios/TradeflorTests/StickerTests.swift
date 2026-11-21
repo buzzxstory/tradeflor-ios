@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import Tradeflor
 
 /// Stickers (2026-11-21): the reference in a message, the library, the keyboard's tab, Favorites without duplicates, the
