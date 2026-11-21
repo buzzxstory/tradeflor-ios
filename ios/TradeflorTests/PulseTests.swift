@@ -136,6 +136,16 @@ final class PulseTests: XCTestCase {
         XCTAssertNil(PulseMapView.style("").flatMap { $0.scheme == "https" ? $0 : nil }, "an empty style_url uses the bundled Pulse Night")
     }
 
+    func testHeaderTimeIsShortAndTheRingEmpties() {
+        XCTAssertEqual(R.shortLeft(2 * 3_600_000 + 46 * 60_000 + 30_000), "2h 46m")
+        XCTAssertEqual(R.shortLeft(3 * 3_600_000), "3h")
+        XCTAssertEqual(R.shortLeft(46 * 60_000), "46m")
+        XCTAssertEqual(R.shortLeft(40_000), "40s")
+        XCTAssertEqual(R.leftFraction(now: 50, starts: 0, expires: 100), 0.5, accuracy: 0.001)
+        XCTAssertEqual(R.leftFraction(now: -5, starts: 0, expires: 100), 1, "before the start: full")
+        XCTAssertEqual(R.leftFraction(now: 200, starts: 0, expires: 100), 0, "over: empty")
+    }
+
     func testNotificationRouting() {
         XCTAssertEqual(PulseRouting.circle("pulse-pc_42"), "pc_42")
         XCTAssertNil(PulseRouting.circle("pulse-alert-a1"), "an alert names no meetup")

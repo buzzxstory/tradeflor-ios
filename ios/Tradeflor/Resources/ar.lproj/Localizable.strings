@@ -2538,3 +2538,16 @@
 "pulse.share.p1" = "👥 فقط من في هذا اللقاء";
 "pulse.share.p2" = "⏱ تتوقف وحدها";
 "pulse.share.p3" = "✨ بلا سجل";
+
+/* Pulse header (2026-11-21) */
+"pulse.hdr.live" = "مباشر";
+"pulse.hdr.inviting" = "دعوة";
+"pulse.hdr.ended" = "انتهى";
+"pulse.hdr.people" = "%d أشخاص";
+"pulse.hdr.private" = "🔒 خاص";
+"pulse.left" = "متبقٍ";
+"pulse.untilstart" = "حتى البدء";
+"pulse.left.hm" = "%dس %dد";
+"pulse.left.h" = "%dس";
+"pulse.left.m" = "%dد";
+"pulse.left.s" = "%dث";

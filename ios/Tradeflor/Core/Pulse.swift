@@ -371,6 +371,25 @@ enum PulseRules {
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
     }
 
+    /// The header's time: "2h 46m", "2h", "46m" or "40s" (never a ticking hh:mm:ss).
+    static func shortLeft(_ ms: Int64) -> String {
+        let s = Int(max(0, ms / 1000))
+        let h = s / 3600, m = (s % 3600) / 60
+        if h > 0 { return m > 0 ? String(format: NSLocalizedString("pulse.left.hm", comment: ""), h, m) : String(format: NSLocalizedString("pulse.left.h", comment: ""), h) }
+        if m > 0 { return String(format: NSLocalizedString("pulse.left.m", comment: ""), m) }
+        return String(format: NSLocalizedString("pulse.left.s", comment: ""), s)
+    }
+
+    /// How much of the meetup is left (1 = all of it, 0 = over): the header's ring.
+    static func leftFraction(now: Int64, starts: Int64?, expires: Int64?) -> Double {
+        guard let e = expires, e > 0 else { return 0 }
+        let s = starts ?? 0
+        if now < s { return 1 }
+        let total = Double(e - s)
+        guard total > 0 else { return 0 }
+        return min(1, max(0, Double(e - now) / total))
+    }
+
     static let quickStatuses: [(text: String, emoji: String)] = [
         ("On my way!", "🚗"), ("Stuck in traffic", "😩"), ("5 min away", "⏱️"), ("I'm here!", "☕"), ("Running late", "🙏"), ("Order for me", "🥤"),
     ]

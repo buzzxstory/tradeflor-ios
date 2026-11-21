@@ -40,6 +40,8 @@ struct PulseMeetupScreen: View {
     @State private var confirmLeave = false
     @State private var flash: String?
     @StateObject private var walkie = PulseWalkie()
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var wide: Bool { sizeClass == .regular }
 
     enum Sheet: String, Identifiable {
         case share, status, find, more, safety, code, invite, capsule
@@ -58,7 +60,7 @@ struct PulseMeetupScreen: View {
 
     var body: some View {
         ZStack {
-            Theme.hex(0x020C14).ignoresSafeArea()
+            PulseInk.ground.ignoresSafeArea() // the app's teal-black (the sidebar's), never pure black
             if let gone {
                 VStack(spacing: 14) {
                     Image(systemName: "mappin.slash").font(.largeTitle).foregroundStyle(Theme.faint)
@@ -132,8 +134,9 @@ struct PulseMeetupScreen: View {
             .background(Theme.hex(0x04111E, 0.9), in: Capsule()).overlay(Capsule().stroke(tint.opacity(0.6), lineWidth: 1))
     }
 
-    /// A round back button, the title with "🔒 Private · N people" and a LIVE / INVITING / ENDED pill, the timer pill and
-    /// a round shield.
+    /// The header: a round back button, the activity in a 46 pt badge with a story-style ring (cyan → light cyan → amber →
+    /// coral, slowly turning; amber while inviting, grey when ended) and a live dot, the title, "Live · N people", the time
+    /// pill with its ring (what is left of the meetup) and the round glass shield.
     private var topBar: some View {
         HStack(spacing: 10) {
             Button { dismiss() } label: {
@@ -141,45 +144,93 @@ struct PulseMeetupScreen: View {
                     .background(Color.white.opacity(0.08), in: Circle())
             }
             .accessibilityLabel(Text("chat.close"))
+            activityBadge
             VStack(alignment: .leading, spacing: 3) {
-                Text(verbatim: (circle?.icon ?? "📍") + " " + (circle?.title ?? "")).font(.headline).lineLimit(1)
-                HStack(spacing: 6) {
-                    Text(verbatim: String(format: NSLocalizedString("pulse.private.people", comment: ""), going.count))
-                        .font(.caption).foregroundStyle(PulseInk.muted)
-                    livePill
+                Text(verbatim: circle?.title ?? "").font(.system(size: 17.5, weight: .heavy)).foregroundStyle(PulseInk.ink).lineLimit(1)
+                HStack(spacing: 5) {
+                    if wide {
+                        HStack(spacing: -6) {
+                            ForEach(members.prefix(3)) { m in
+                                Avatar(token: token, userID: m.user_id, avatarID: people[m.user_id]?.avatar_id, title: name(m.user_id), size: 20)
+                                    .overlay(Circle().stroke(Theme.hex(0x00161F), lineWidth: 1.5))
+                            }
+                        }
+                    }
+                    Text(LocalizedStringKey(stateKey)).foregroundStyle(stateColor).fontWeight(.bold)
+                    Text(verbatim: "·").foregroundStyle(PulseInk.muted)
+                    Text(verbatim: String(format: NSLocalizedString("pulse.hdr.people", comment: ""), going.count)).foregroundStyle(PulseInk.muted)
+                    if wide { Text(verbatim: "· " + NSLocalizedString("pulse.hdr.private", comment: "")).foregroundStyle(PulseInk.muted) }
                 }
+                .font(.caption).lineLimit(1)
             }
             Spacer(minLength: 4)
-            VStack(spacing: 0) {
-                Text(LocalizedStringKey(startsLater ? "pulse.timer.starts" : "pulse.timer.ends")).font(.system(size: 8.5, weight: .heavy)).tracking(0.8)
-                    .foregroundStyle(PulseInk.muted)
-                Text(verbatim: countdownText).font(.system(size: 15, weight: .bold).monospacedDigit()).foregroundStyle(PulseInk.ink)
-            }
-            .padding(.horizontal, 10).padding(.vertical, 4)
-            .background(Color.white.opacity(0.06), in: Capsule())
-            .overlay(Capsule().stroke(PulseInk.cyan.opacity(0.25), lineWidth: 1))
-            .accessibilityElement(children: .combine)
+            timePill
             Button { sheet = .safety } label: {
-                Image(systemName: "shield.lefthalf.filled").font(.system(size: 17, weight: .semibold)).frame(width: 40, height: 40)
-                    .background(Color.white.opacity(0.08), in: Circle())
+                Image(systemName: "shield.lefthalf.filled").font(.system(size: 18, weight: .semibold)).foregroundStyle(PulseInk.ink)
+                    .frame(width: 44, height: 44)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay(Circle().stroke(LinearGradient(colors: [PulseInk.cyan, PulseInk.cyan.opacity(0.15)], startPoint: .top, endPoint: .bottom), lineWidth: 1.2))
+                    .environment(\.colorScheme, .dark)
             }
             .accessibilityLabel(Text("pulse.safety"))
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(Theme.hex(0x04111E))
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(
+            ZStack {
+                LinearGradient(colors: [Theme.hex(0x03212C), Theme.hex(0x00161F)], startPoint: .top, endPoint: .bottom)
+                RadialGradient(colors: [PulseInk.cyan.opacity(0.16), .clear], center: .top, startRadius: 0, endRadius: 200)
+            }
+            .ignoresSafeArea(edges: .top)
+        )
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(PulseInk.cyan.opacity(0.55)).frame(height: 1).shadow(color: PulseInk.cyan.opacity(0.8), radius: 4)
+        }
     }
 
-    private var livePill: some View {
-        let state: (String, Color) = ended ? ("pulse.pill.ended", PulseInk.muted)
-            : (startsLater || circle?.state == "inviting") ? ("pulse.pill.inviting", PulseInk.amber) : ("pulse.pill.live", PulseInk.green)
-        let blink = Int(now.timeIntervalSince1970) % 2 == 0
-        return HStack(spacing: 4) {
-            if state.0 == "pulse.pill.live" { Circle().fill(PulseInk.green).frame(width: 6, height: 6).opacity(blink ? 1 : 0.3) }
-            Text(LocalizedStringKey(state.0)).font(.system(size: 9.5, weight: .heavy)).tracking(0.6)
+    private var stateKey: String { ended ? "pulse.hdr.ended" : (startsLater || circle?.state == "inviting") ? "pulse.hdr.inviting" : "pulse.hdr.live" }
+    private var stateColor: Color { ended ? PulseInk.muted : (startsLater || circle?.state == "inviting") ? PulseInk.amber : PulseInk.green }
+
+    private var activityBadge: some View {
+        let colors: [Color] = ended ? [Color.gray, Color.gray.opacity(0.5), Color.gray]
+            : (startsLater || circle?.state == "inviting") ? [PulseInk.amber, PulseInk.amber.opacity(0.5), PulseInk.amber]
+            : [PulseInk.cyan, Color(red: 0.6, green: 0.97, blue: 1), PulseInk.amber, Color(red: 1, green: 0.5, blue: 0.4), PulseInk.cyan]
+        let turn = reduceMotion || ended ? 0 : (now.timeIntervalSince1970 * 24).truncatingRemainder(dividingBy: 360)
+        return ZStack(alignment: .bottomTrailing) {
+            Text(verbatim: circle?.icon ?? "📍").font(.system(size: 21))
+                .frame(width: 40, height: 40)
+                .background(Theme.hex(0x071A24), in: Circle())
+                .padding(3)
+                .overlay(Circle().stroke(AngularGradient(colors: colors, center: .center), lineWidth: 3).rotationEffect(.degrees(turn))
+                    .animation(.linear(duration: 1), value: turn))
+                .frame(width: 46, height: 46)
+            if stateKey == "pulse.hdr.live" {
+                Circle().fill(PulseInk.green).frame(width: 10, height: 10).overlay(Circle().stroke(Theme.hex(0x00161F), lineWidth: 2))
+            }
         }
-        .foregroundStyle(state.1)
-        .padding(.horizontal, 7).padding(.vertical, 2)
-        .background(state.1.opacity(0.14), in: Capsule())
+        .accessibilityHidden(true)
+    }
+
+    /// What is left: a 34 pt ring that empties over the meetup (amber in the last 15 minutes) and "2h 46m left".
+    private var timePill: some View {
+        let c = circle
+        let left = startsLater ? (c?.starts_at ?? 0) - nowMs : (c?.expires_at ?? 0) - nowMs
+        let frac = PulseRules.leftFraction(now: nowMs, starts: c?.starts_at, expires: c?.expires_at)
+        let tint = !startsLater && left < 15 * 60_000 ? PulseInk.amber : PulseInk.cyan
+        return HStack(spacing: 7) {
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.1), lineWidth: 3)
+                Circle().trim(from: 0, to: ended ? 0 : frac).stroke(tint, style: StrokeStyle(lineWidth: 3, lineCap: .round)).rotationEffect(.degrees(-90))
+            }
+            .frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(verbatim: ended ? "0m" : PulseRules.shortLeft(left)).font(.system(size: 14.5, weight: .heavy).monospacedDigit()).foregroundStyle(PulseInk.ink)
+                Text(LocalizedStringKey(startsLater ? "pulse.untilstart" : "pulse.left")).font(.system(size: 10, weight: .semibold)).foregroundStyle(PulseInk.muted)
+            }
+        }
+        .padding(.leading, 5).padding(.trailing, 10).padding(.vertical, 4)
+        .background(Color.white.opacity(0.06), in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .accessibilityElement(children: .combine)
     }
 
     private var startsLater: Bool { (circle?.starts_at ?? 0) > nowMs }
@@ -249,9 +300,12 @@ struct PulseMeetupScreen: View {
                     .padding(14)
                 }
                 .frame(maxHeight: 260)
+                .background(alignment: .bottom) {
+                    Image("PulseFlower").resizable().scaledToFit().frame(width: 140).opacity(0.5).allowsHitTesting(false)
+                }
             }
         }
-        .background(Theme.hex(0x061A24))
+        .background(PulseInk.ground)
     }
 
     private func tabPill(_ tab: Int, _ title: String) -> some View {
@@ -401,7 +455,22 @@ struct PulseMeetupScreen: View {
             .padding(.top, 8) // about 22-24 pt between the message box and the round button
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
-        .background(Theme.hex(0x04111E))
+        .background(
+            ZStack {
+                PulseInk.ground
+                HStack {
+                    Image("PulseWave").resizable().scaledToFit().frame(width: 150).opacity(0.5)
+                    Spacer()
+                    Image("PulseWave").resizable().scaledToFit().frame(width: 150).opacity(0.5).scaleEffect(x: -1)
+                }
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .allowsHitTesting(false)
+            }
+            .ignoresSafeArea(edges: .bottom)
+        )
+        .overlay(alignment: .top) {
+            Rectangle().fill(PulseInk.cyan.opacity(0.45)).frame(height: 1).shadow(color: PulseInk.cyan.opacity(0.7), radius: 4)
+        }
     }
 
     /// A dock tile: a 47 pt rounded square (radius 16) with a line icon, its name under it.
@@ -981,6 +1050,9 @@ enum PulseInk {
     static let amber = Color(red: 0xF2 / 255.0, green: 0xB1 / 255.0, blue: 0x55 / 255.0)
     static let red = Color(red: 1, green: 0x5A / 255.0, blue: 0x6A / 255.0)
     static let gradient = LinearGradient(colors: [Color(red: 0.24, green: 0.94, blue: 0.93), cyan], startPoint: .topLeading, endPoint: .bottomTrailing)
+    /// The app's teal-black (the sidebar's): #00161f -> #00141c -> #001018.
+    static let ground = LinearGradient(colors: [Color(red: 0, green: 0x16 / 255.0, blue: 0x1F / 255.0), Color(red: 0, green: 0x14 / 255.0, blue: 0x1C / 255.0),
+                                                Color(red: 0, green: 0x10 / 255.0, blue: 0x18 / 255.0)], startPoint: .top, endPoint: .bottom)
 }
 
 /// Pulse sheets on phones: from the bottom, 26 pt top corners, a grab handle, a warmer gradient.

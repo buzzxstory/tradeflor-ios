@@ -2538,3 +2538,16 @@
 "pulse.share.p1" = "👥 Only people in this meetup";
 "pulse.share.p2" = "⏱ Stops by itself";
 "pulse.share.p3" = "✨ No history";
+
+/* Pulse header (2026-11-21) */
+"pulse.hdr.live" = "Live";
+"pulse.hdr.inviting" = "Inviting";
+"pulse.hdr.ended" = "Ended";
+"pulse.hdr.people" = "%d people";
+"pulse.hdr.private" = "🔒 Private";
+"pulse.left" = "left";
+"pulse.untilstart" = "until start";
+"pulse.left.hm" = "%dh %dm";
+"pulse.left.h" = "%dh";
+"pulse.left.m" = "%dm";
+"pulse.left.s" = "%ds";
