@@ -133,11 +133,6 @@ struct PulseMeetupScreen: View {
                 }
                 .padding(10)
                 cameraButtons.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(12)
-                // the SOS button: always there while the meetup is live (not while my own SOS is on)
-                if !ended && mySOS == nil && proposalAt == nil {
-                    PulseSOSButton { sosCountdown = true }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading).padding(12)
-                }
                 if let at = proposalAt {
                     pickCard(at).frame(maxHeight: .infinity, alignment: .bottom).padding(10)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -264,6 +259,11 @@ struct PulseMeetupScreen: View {
             camButton("person.3", "pulse.cam.everyone") { camera = PulseCamera(mode: .everyone, nonce: camera.nonce + 1) }
             if mapDest != nil { camButton("mappin.and.ellipse", "pulse.cam.place") { camera = PulseCamera(mode: .place, nonce: camera.nonce + 1) } }
             if mapPeople.contains(where: \.isMe) { camButton("location.fill", "pulse.cam.me") { camera = PulseCamera(mode: .me, nonce: camera.nonce + 1) } }
+            // SOS lives in this right-hand column (web 6eee89d5): it never covers the place cards at the bottom of the map;
+            // there while the meetup is live, not while my own SOS is on
+            if !ended && mySOS == nil {
+                PulseSOSButton(disc: 52) { sosCountdown = true }.padding(.top, 2)
+            }
         }
     }
 
@@ -791,14 +791,17 @@ struct PulseMeetupScreen: View {
                 .accessibilityLabel(Text("chat.close"))
             }
             Button { Task { await propose() } } label: {
-                Text(LocalizedStringKey(decides ? "pulse.pick.make" : "pulse.pick.suggest")).font(.body.weight(.bold))
-                    .frame(maxWidth: .infinity, minHeight: 48)
-                    .background(PulseInk.gradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // a compact centred pill (web 6eee89d5), not a full-width bar
+                Text(LocalizedStringKey(decides ? "pulse.pick.make" : "pulse.pick.suggest")).font(.subheadline.weight(.bold))
+                    .padding(.horizontal, 22)
+                    .frame(minHeight: 40)
+                    .background(PulseInk.gradient, in: Capsule())
                     .foregroundStyle(Theme.hex(0x04222C))
                     .opacity(empty ? 0.5 : 1)
             }
             .buttonStyle(.plain)
             .disabled(empty)
+            .frame(maxWidth: .infinity)
             Text(LocalizedStringKey(decides ? "pulse.pick.note.org" : "pulse.pick.note")).font(.caption2).foregroundStyle(PulseInk.muted)
         }
         .padding(14)
@@ -1308,6 +1311,7 @@ struct PulseSheetLook: ViewModifier {
 
 /// The SOS button on the map: a 58 pt red disc with a siren, a white ring, a pulsing red ring, and the "SOS" pill.
 struct PulseSOSButton: View {
+    var disc: CGFloat = 58
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -1318,18 +1322,19 @@ struct PulseSOSButton: View {
                     let t = ctx.date.timeIntervalSinceReferenceDate * (reduceMotion ? 0.7 : 1)
                     let phase = (t / 1.6).truncatingRemainder(dividingBy: 1)
                     ZStack {
-                        Circle().stroke(Theme.hex(0xFF3B4E).opacity(0.7 * (1 - phase)), lineWidth: 3).frame(width: 58 + 30 * phase, height: 58 + 30 * phase)
+                        Circle().stroke(Theme.hex(0xFF3B4E).opacity(0.7 * (1 - phase)), lineWidth: 3)
+                            .frame(width: disc + disc * 0.5 * phase, height: disc + disc * 0.5 * phase)
                         Circle().fill(RadialGradient(colors: [Theme.hex(0xFF8A95), Theme.hex(0xFF3B4E), Theme.hex(0xB8102A)], center: .init(x: 0.4, y: 0.35),
-                                                     startRadius: 2, endRadius: 34))
-                            .frame(width: 58, height: 58)
-                            .overlay(Circle().stroke(.white, lineWidth: 3))
+                                                     startRadius: 2, endRadius: disc * 0.6))
+                            .frame(width: disc, height: disc)
+                            .overlay(Circle().stroke(.white, lineWidth: disc < 56 ? 2.5 : 3))
                             .shadow(color: Theme.hex(0xFF3B4E).opacity(0.6), radius: 10)
-                        Image(systemName: "light.beacon.max.fill").font(.system(size: 24, weight: .bold)).foregroundStyle(.white)
+                        Image(systemName: "light.beacon.max.fill").font(.system(size: disc * 0.42, weight: .bold)).foregroundStyle(.white)
                     }
-                    .frame(width: 88, height: 88)
+                    .frame(width: disc * 1.5, height: disc * 1.5)
                 }
-                .frame(width: 88, height: 76)
-                Text(verbatim: "SOS").font(PulseFont.brand(12)).tracking(3).foregroundStyle(.white)
+                .frame(width: disc + 8, height: disc + 4) // the wave may spread past the column; it is never clipped
+                Text(verbatim: "SOS").font(PulseFont.brand(disc < 56 ? 11 : 12)).tracking(disc < 56 ? 2 : 3).foregroundStyle(.white)
                     .padding(.horizontal, 10).padding(.vertical, 3)
                     .background(Theme.hex(0xB8102A), in: Capsule())
             }
