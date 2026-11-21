@@ -2555,7 +2555,7 @@
 /* Pulse home (TradeFlor tab, 2026-11-21) */
 "pulse.home.livenow" = "%d live now";
 "pulse.home.line" = "Meet your friends and see each other arrive, live on the map. Private, and it ends by itself.";
-"pulse.home.create" = "+ Create meetup";
+"pulse.home.create" = "Create meetup";
 "pulse.home.instant" = "Instant circle";
 "pulse.home.capture" = "Capture moment";
 "pulse.home.invitations" = "Invitations";
@@ -2568,9 +2568,14 @@
 "pulse.home.upcoming" = "Upcoming";
 "pulse.home.left" = "%@ left";
 "pulse.home.in" = "in %@";
-"pulse.home.joined" = "👥 %d joined";
-"pulse.home.sharing" = "📡 %d sharing";
-"pulse.trust.private" = "🔒 Private circles";
-"pulse.trust.ends" = "⏱ Ends by itself";
-"pulse.trust.arrival" = "🔔 Arrival alerts";
-"pulse.trust.safety" = "🆘 Safety center";
+"pulse.home.joined" = "%d joined";
+"pulse.home.sharing" = "%d sharing";
+"pulse.trust.private" = "Private circles";
+"pulse.trust.ends" = "Ends by itself";
+"pulse.trust.arrival" = "Arrival alerts";
+"pulse.trust.safety" = "Safety center";
+"pulse.safe.title" = "Safe by design";
+"pulse.trust.private.sub" = "Only the people you invite";
+"pulse.trust.ends.sub" = "Sharing stops when it ends";
+"pulse.trust.arrival.sub" = "Know when friends arrive";
+"pulse.trust.safety.sub" = "Stop, block or alert anytime";

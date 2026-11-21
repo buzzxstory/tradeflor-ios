@@ -196,7 +196,7 @@ struct PulseMeetupScreen: View {
             : [PulseInk.cyan, Color(red: 0.6, green: 0.97, blue: 1), PulseInk.amber, Color(red: 1, green: 0.5, blue: 0.4), PulseInk.cyan]
         let turn = reduceMotion || ended ? 0 : (now.timeIntervalSince1970 * 24).truncatingRemainder(dividingBy: 360)
         return ZStack(alignment: .bottomTrailing) {
-            Text(verbatim: circle?.icon ?? "📍").font(.system(size: 21))
+            Image(systemName: circle?.symbol ?? "mappin").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .background(Theme.hex(0x071A24), in: Circle())
                 .padding(3)

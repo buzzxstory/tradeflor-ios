@@ -66,8 +66,8 @@ struct PulseHomeView: View {
             VStack(alignment: .leading, spacing: 16) {
                 hero
                 HStack(spacing: 10) {
-                    quick("location.viewfinder", "pulse.card.find", PulseInk.cyan) { findFriend() }
-                    quick("photo.stack", "pulse.card.capsule", Self.violet) { capsules = true }
+                    quick("location.magnifyingglass", "pulse.card.find", PulseInk.cyan) { findFriend() }
+                    quick("hourglass", "pulse.card.capsule", Self.violet) { capsules = true }
                     quick("camera.fill", "pulse.home.capture", PulseInk.amber) { capture = true }
                 }
                 if let note { Text(verbatim: note).font(.footnote).foregroundStyle(PulseInk.amber) }
@@ -78,8 +78,8 @@ struct PulseHomeView: View {
                 sectionTitle("pulse.home.live", meetups.count)
                 if meetups.isEmpty {
                     VStack(spacing: 6) {
-                        Text(verbatim: "🗺️").font(.system(size: 40))
-                        Text("pulse.home.empty").font(.headline).foregroundStyle(PulseInk.ink)
+                        PulseIconChip(symbol: "map.fill", color: PulseInk.cyan, size: 52)
+                        Text("pulse.home.empty").font(PulseFont.display(17, 800)).foregroundStyle(PulseInk.ink)
                         Text(LocalizedStringKey(pulse.loaded ? "pulse.home.empty.sub" : "pulse.loading")).font(.footnote).foregroundStyle(PulseInk.muted)
                     }
                     .frame(maxWidth: .infinity).padding(24)
@@ -152,22 +152,22 @@ struct PulseHomeView: View {
                         Text(verbatim: "Flor").foregroundStyle(LinearGradient(colors: [Theme.hex(0x7FF8FF), Theme.hex(0x2AE8F8), Theme.hex(0x14D2F2)],
                                                                          startPoint: .top, endPoint: .bottom))
                     }
-                    .font(.system(size: 29, weight: .heavy))
+                    .font(PulseFont.brand(29))
                     .kerning(-1)
                     MeetupBadge()
                 }
                 .lineLimit(1).minimumScaleFactor(0.8)
                 .accessibilityElement(children: .combine)
-                Text("pulse.home.line").font(.subheadline).foregroundStyle(PulseInk.muted).fixedSize(horizontal: false, vertical: true)
+                Text("pulse.home.line").font(PulseFont.text(15)).foregroundStyle(PulseInk.muted).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
                     Button { creating = true } label: {
-                        Text("pulse.home.create").font(.system(size: 15, weight: .bold)).frame(maxWidth: .infinity, minHeight: 46)
+                        Label("pulse.home.create", systemImage: "plus").font(PulseFont.display(15, 800)).frame(maxWidth: .infinity, minHeight: 46)
                             .background(PulseInk.gradient, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .foregroundStyle(Theme.hex(0x04222C))
                     }
                     .buttonStyle(.plain)
                     Button { instant = true } label: {
-                        Label("pulse.home.instant", systemImage: "qrcode").font(.system(size: 15, weight: .bold)).frame(maxWidth: .infinity, minHeight: 46)
+                        Label("pulse.home.instant", systemImage: "qrcode").font(PulseFont.display(15, 800)).frame(maxWidth: .infinity, minHeight: 46)
                             .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.white.opacity(0.14), lineWidth: 1))
                             .foregroundStyle(PulseInk.ink)
@@ -202,9 +202,9 @@ struct PulseHomeView: View {
                     .overlay(Circle().stroke(PulseInk.cyan.opacity(0.6), lineWidth: 2))
                     .shadow(color: PulseInk.cyan.opacity(0.6), radius: 14)
                 Image("BrandFlower").resizable().scaledToFit().frame(width: 38, height: 38)
-                blip("☕", PulseInk.amber, x: -58, y: -30, t: t, k: 0)
-                blip("🍔", Self.coral, x: 56, y: 22, t: t, k: 1)
-                blip("📍", PulseInk.cyan, x: -20, y: 58, t: t, k: 2)
+                blip("cup.and.saucer.fill", PulseInk.amber, x: -58, y: -30, t: t, k: 0)
+                blip("fork.knife", Self.coral, x: 56, y: 22, t: t, k: 1)
+                blip("mappin", PulseInk.cyan, x: -20, y: 58, t: t, k: 2)
             }
         }
         .accessibilityHidden(true)
@@ -212,7 +212,7 @@ struct PulseHomeView: View {
 
     private func blip(_ e: String, _ c: Color, x: CGFloat, y: CGFloat, t: Double, k: Int) -> some View {
         let bob = reduceMotion ? 0 : CGFloat(sin(t * 1.2 + Double(k) * 2)) * 4
-        return Text(verbatim: e).font(.system(size: 14)).frame(width: 28, height: 28)
+        return Image(systemName: e).font(.system(size: 12, weight: .bold)).foregroundStyle(.white).frame(width: 28, height: 28)
             .background(Theme.hex(0x071A24), in: Circle()).overlay(Circle().stroke(c, lineWidth: 2))
             .shadow(color: c.opacity(0.6), radius: 6)
             .offset(x: x, y: y + bob)
@@ -223,9 +223,8 @@ struct PulseHomeView: View {
     private func quick(_ icon: String, _ key: String, _ tint: Color, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 10) {
-                Image(systemName: icon).font(.system(size: 17, weight: .semibold)).foregroundStyle(tint)
-                    .frame(width: 38, height: 38).background(tint.opacity(0.16), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                Text(LocalizedStringKey(key)).font(.system(size: 13, weight: .bold)).foregroundStyle(PulseInk.ink)
+                PulseIconChip(symbol: icon, color: tint)
+                Text(LocalizedStringKey(key)).font(PulseFont.display(13.5, 700)).foregroundStyle(PulseInk.ink)
                     .lineLimit(2).multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
@@ -238,7 +237,7 @@ struct PulseHomeView: View {
 
     private func sectionTitle(_ key: String, _ n: Int) -> some View {
         HStack(spacing: 6) {
-            Text(LocalizedStringKey(key)).font(.system(size: 17, weight: .heavy)).foregroundStyle(PulseInk.ink)
+            Text(LocalizedStringKey(key)).font(PulseFont.display(18, 800)).foregroundStyle(PulseInk.ink)
             Text(verbatim: "\(n)").font(.system(size: 12, weight: .bold)).foregroundStyle(PulseInk.muted)
                 .padding(.horizontal, 7).padding(.vertical, 2).background(Color.white.opacity(0.08), in: Capsule())
         }
@@ -267,8 +266,8 @@ struct PulseHomeView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: String(format: NSLocalizedString("pulse.home.invited", comment: ""), pulse.name(e.invited_by ?? "")))
                         .font(.caption.weight(.semibold)).foregroundStyle(PulseInk.amber)
-                    Text(verbatim: c.title ?? "").font(.system(size: 16, weight: .bold)).foregroundStyle(PulseInk.ink).lineLimit(1)
-                    Text(verbatim: "📍 " + ((c.dest_name ?? "").isEmpty ? "—" : c.dest_name!) + " · " + when).font(.caption).foregroundStyle(PulseInk.muted).lineLimit(1)
+                    Text(verbatim: c.title ?? "").font(PulseFont.display(16.5, 800)).foregroundStyle(PulseInk.ink).lineLimit(1)
+                    Label(((c.dest_name ?? "").isEmpty ? "—" : c.dest_name!) + " · " + when, systemImage: "mappin").font(PulseFont.text(12.5)).foregroundStyle(PulseInk.muted).lineLimit(1)
                 }
             }
             HStack(spacing: 8) {
@@ -301,7 +300,7 @@ struct PulseHomeView: View {
     }
 
     private func activityBadge(_ c: PulseCircle, size: CGFloat) -> some View {
-        Text(verbatim: c.icon).font(.system(size: size * 0.42))
+        Image(systemName: c.symbol).font(.system(size: size * 0.36, weight: .semibold)).foregroundStyle(.white)
             .frame(width: size - 6, height: size - 6)
             .background(Theme.hex(0x071A24), in: Circle())
             .padding(3)
@@ -316,11 +315,11 @@ struct PulseHomeView: View {
         return HStack(spacing: 12) {
             activityBadge(c, size: 52)
             VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: c.title ?? "").font(.system(size: 16, weight: .bold)).foregroundStyle(PulseInk.ink).lineLimit(1)
-                if let d = c.dest_name, !d.isEmpty { Text(verbatim: "📍 " + d).font(.caption).foregroundStyle(PulseInk.muted).lineLimit(1) }
+                Text(verbatim: c.title ?? "").font(PulseFont.display(16.5, 800)).foregroundStyle(PulseInk.ink).lineLimit(1)
+                if let d = c.dest_name, !d.isEmpty { Label(d, systemImage: "mappin").font(PulseFont.text(12.5)).foregroundStyle(PulseInk.muted).lineLimit(1) }
                 HStack(spacing: 6) {
-                    chip(String(format: NSLocalizedString("pulse.home.joined", comment: ""), e.going ?? 0), PulseInk.muted)
-                    chip(String(format: NSLocalizedString("pulse.home.sharing", comment: ""), sharing), sharing > 0 ? PulseInk.cyan : PulseInk.muted)
+                    chip("person.2.fill", String(format: NSLocalizedString("pulse.home.joined", comment: ""), e.going ?? 0), PulseInk.muted)
+                    chip("dot.radiowaves.left.and.right", String(format: NSLocalizedString("pulse.home.sharing", comment: ""), sharing), sharing > 0 ? PulseInk.cyan : PulseInk.muted)
                 }
             }
             Spacer(minLength: 4)
@@ -348,18 +347,18 @@ struct PulseHomeView: View {
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
     }
 
-    private func chip(_ text: String, _ c: Color) -> some View {
-        Text(verbatim: text).font(.system(size: 11, weight: .semibold)).foregroundStyle(c)
+    private func chip(_ icon: String, _ text: String, _ c: Color) -> some View {
+        Label(text, systemImage: icon).font(PulseFont.text(11.5, 600)).foregroundStyle(c)
             .padding(.horizontal, 7).padding(.vertical, 3).background(c.opacity(0.12), in: Capsule())
     }
 
     private var partyCard: some View {
         Toggle(isOn: $party) {
             HStack(spacing: 10) {
-                Text(verbatim: "🎉").font(.title3).frame(width: 38, height: 38).background(Self.violet.opacity(0.16), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                PulseIconChip(symbol: "sparkles", color: Self.violet)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("pulse.party").font(.callout.weight(.bold)).foregroundStyle(PulseInk.ink)
-                    Text("pulse.party.sub").font(.caption).foregroundStyle(PulseInk.muted)
+                    Text("pulse.party").font(PulseFont.display(15.5, 800)).foregroundStyle(PulseInk.ink)
+                    Text("pulse.party.sub").font(PulseFont.text(12.5)).foregroundStyle(PulseInk.muted)
                 }
             }
         }
@@ -369,14 +368,29 @@ struct PulseHomeView: View {
         .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Self.violet.opacity(0.22), lineWidth: 1))
     }
 
+    /// Safe by design: four cards, each a colour chip, a title and one line.
     private var trust: some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-            ForEach(["pulse.trust.private", "pulse.trust.ends", "pulse.trust.arrival", "pulse.trust.safety"], id: \.self) { k in
-                Text(LocalizedStringKey(k)).font(.system(size: 12, weight: .semibold)).foregroundStyle(PulseInk.muted)
-                    .frame(maxWidth: .infinity, minHeight: 34)
-                    .background(Color.white.opacity(0.04), in: Capsule())
+        VStack(alignment: .leading, spacing: 10) {
+            Text("pulse.safe.title").font(PulseFont.display(18, 800)).foregroundStyle(PulseInk.ink).accessibilityAddTraits(.isHeader)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                safe("lock.fill", PulseInk.cyan, "pulse.trust.private", "pulse.trust.private.sub")
+                safe("timer", Self.violet, "pulse.trust.ends", "pulse.trust.ends.sub")
+                safe("bell.fill", PulseInk.amber, "pulse.trust.arrival", "pulse.trust.arrival.sub")
+                safe("shield.fill", Color(red: 1, green: 0x6B / 255.0, blue: 0x79 / 255.0), "pulse.trust.safety", "pulse.trust.safety.sub")
             }
         }
+    }
+
+    private func safe(_ icon: String, _ color: Color, _ title: String, _ line: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            PulseIconChip(symbol: icon, color: color, size: 34)
+            Text(LocalizedStringKey(title)).font(PulseFont.display(14, 800)).foregroundStyle(PulseInk.ink)
+            Text(LocalizedStringKey(line)).font(PulseFont.text(12)).foregroundStyle(PulseInk.muted).fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+        .padding(12)
+        .background(color.opacity(0.07), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(color.opacity(0.2), lineWidth: 1))
     }
 }
 
@@ -701,5 +715,45 @@ struct MeetupBadge: View {
         }
         .fixedSize()
         .accessibilityLabel(Text(verbatim: "Meetup"))
+    }
+}
+
+/// A drawn icon, white, in a gradient chip (its colour -> 55 % over #03202a) with an inner top highlight and a coloured glow
+/// (web PulseIcons.tsx). Emoji stay only on the map markers.
+struct PulseIconChip: View {
+    let symbol: String
+    let color: Color
+    var size: CGFloat = 38
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.32, style: .continuous)
+        return Image(systemName: symbol)
+            .font(.system(size: size * 0.44, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(ZStack {
+                Theme.hex(0x03202A)
+                LinearGradient(colors: [color, color.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            }, in: shape)
+            .overlay(shape.stroke(LinearGradient(colors: [Color.white.opacity(0.4), .clear], startPoint: .top, endPoint: .center), lineWidth: 1))
+            .shadow(color: color.opacity(0.5), radius: 8)
+            .accessibilityHidden(true)
+    }
+}
+
+/// The Meetup home's type: Montserrat 800 for the wordmark, Red Hat Display (700-800) for headings, Red Hat Text (500) for
+/// text. The fonts are latin only: Arabic falls back to the system font by itself.
+enum PulseFont {
+    static func brand(_ size: CGFloat) -> Font {
+        UIFont(name: "MontserratThin-ExtraBold", size: size) != nil ? .custom("MontserratThin-ExtraBold", size: size) : .system(size: size, weight: .heavy)
+    }
+    static func display(_ size: CGFloat, _ weight: CGFloat = 800) -> Font { variable("RedHatDisplay-Regular", size, weight, .heavy) }
+    static func text(_ size: CGFloat, _ weight: CGFloat = 500) -> Font { variable("RedHatText-Regular", size, weight, .medium) }
+
+    private static func variable(_ name: String, _ size: CGFloat, _ wght: CGFloat, _ fallback: Font.Weight) -> Font {
+        guard UIFont(name: name, size: size) != nil else { return .system(size: size, weight: fallback) }
+        let wghtTag = 0x7767_6874 // 'wght'
+        let d = UIFontDescriptor(fontAttributes: [.name: name, UIFontDescriptor.AttributeName(rawValue: kCTFontVariationAttribute as String): [wghtTag: wght]])
+        return Font(UIFont(descriptor: d, size: size) as CTFont)
     }
 }

@@ -2555,7 +2555,7 @@
 /* Pulse home (TradeFlor tab, 2026-11-21) */
 "pulse.home.livenow" = "%d مباشر الآن";
 "pulse.home.line" = "قابل أصدقاءك وشاهدوا وصول بعضكم مباشرة على الخريطة. خاص، وينتهي وحده.";
-"pulse.home.create" = "+ إنشاء لقاء";
+"pulse.home.create" = "إنشاء لقاء";
 "pulse.home.instant" = "دائرة فورية";
 "pulse.home.capture" = "التقط لحظة";
 "pulse.home.invitations" = "الدعوات";
@@ -2568,9 +2568,14 @@
 "pulse.home.upcoming" = "قادم";
 "pulse.home.left" = "متبقٍ %@";
 "pulse.home.in" = "بعد %@";
-"pulse.home.joined" = "👥 %d انضموا";
-"pulse.home.sharing" = "📡 %d يشاركون";
-"pulse.trust.private" = "🔒 دوائر خاصة";
-"pulse.trust.ends" = "⏱ تنتهي وحدها";
-"pulse.trust.arrival" = "🔔 تنبيهات الوصول";
-"pulse.trust.safety" = "🆘 مركز الأمان";
+"pulse.home.joined" = "%d انضموا";
+"pulse.home.sharing" = "%d يشاركون";
+"pulse.trust.private" = "دوائر خاصة";
+"pulse.trust.ends" = "تنتهي وحدها";
+"pulse.trust.arrival" = "تنبيهات الوصول";
+"pulse.trust.safety" = "مركز الأمان";
+"pulse.safe.title" = "آمن بالتصميم";
+"pulse.trust.private.sub" = "فقط من تدعوهم";
+"pulse.trust.ends.sub" = "تتوقف المشاركة عند الانتهاء";
+"pulse.trust.arrival.sub" = "اعرف متى يصل أصدقاؤك";
+"pulse.trust.safety.sub" = "أوقف أو احظر أو نبّه في أي وقت";

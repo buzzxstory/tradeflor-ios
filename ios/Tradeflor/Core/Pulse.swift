@@ -29,6 +29,8 @@ struct PulseCircle: Decodable, Identifiable, Equatable {
     var dest: CLLocationCoordinate2D? { hasDest ? CLLocationCoordinate2D(latitude: dest_lat!, longitude: dest_lon!) : nil }
     var isOpen: Bool { state != "ended" && state != "expired" }
     var icon: String { PulseRules.activityIcon[activity ?? ""] ?? "📍" }
+    /// The drawn icon of the activity (the map markers keep the emoji).
+    var symbol: String { PulseRules.activitySymbol[activity ?? ""] ?? "mappin" }
 }
 
 struct PulseStatus: Decodable, Equatable {
@@ -399,6 +401,12 @@ enum PulseRules {
     ]
 
     static let activities = ["coffee", "food", "gaming", "business", "road-trip", "hangout"]
+
+    /// The activities as line icons (web PulseIcons.tsx).
+    static let activitySymbol: [String: String] = [
+        "coffee": "cup.and.saucer.fill", "food": "fork.knife", "gaming": "gamecontroller.fill", "business": "briefcase.fill",
+        "road-trip": "car.fill", "hangout": "person.2.fill", "party": "sparkles", "custom": "mappin",
+    ]
 
     static func nowMs() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
 }

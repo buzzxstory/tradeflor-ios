@@ -55,6 +55,8 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         # portrait only: the app opts out of iPad multitasking (App Store Connect refuses a portrait-only app otherwise)
         UIRequiresFullScreen: true
+        # the Meetup home's type (web: Montserrat 800 for the wordmark, Red Hat Display / Text): OFL fonts, latin only
+        UIAppFonts: [Montserrat-ExtraBold.ttf, RedHatDisplay-Variable.ttf, RedHatText-Variable.ttf]
         UIApplicationSupportsIndirectInputEvents: true
         CFBundleURLTypes:
           - CFBundleURLName: com.tradeflor.ios
