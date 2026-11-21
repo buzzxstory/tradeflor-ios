@@ -2766,3 +2766,21 @@
 "sos.responding.failed" = "Could not update. Check the connection and try again.";
 "pulse.leave.offline" = "No connection: your sharing stopped on this device; leaving will work once you are online.";
 "pulse.safety.sos2" = "SOS";
+
+/* Map, places and live sharing audit (2026-11-21) */
+"pulse.place.default" = "Meeting place";
+"pulse.proposal.pin" = "%@ · proposed";
+"pulse.proposal.title" = "New Location: %@";
+"pulse.proposal.by" = "Proposed by %@";
+"pulse.proposal.votes" = "%d for, %d against";
+"pulse.proposal.orgdecides" = "the organizer decides";
+"pulse.proposal.counted" = "Vote counted";
+"pulse.proposal.sent.org" = "Sent to the organizer";
+"pulse.proposal.changed" = "The meeting place changed";
+"pulse.proposal.sent" = "Proposal sent";
+"pulse.paused" = "Sharing is on for this meetup, but this device is not sending. Resume or stop.";
+"pulse.paused.resume" = "Resume";
+"pulse.paused.stop" = "Stop";
+"pulse.paused.denied" = "Location permission is needed to resume.";
+"pulse.create.finding" = "Finding…";
+"pulse.create.nearme.failed" = "Your location could not be found";

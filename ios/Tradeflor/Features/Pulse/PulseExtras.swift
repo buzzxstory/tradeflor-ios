@@ -117,7 +117,7 @@ struct PulseSafetyCenter: View {
 
     private func send(_ kind: String) async {
         let recipients = to.isEmpty ? members.map(\.user_id) : Array(to)
-        var body: [String: Any] = ["kind": kind, "text": String(text.prefix(280)), "to": recipients]
+        var body: [String: Any] = ["kind": kind, "text": PulseRules.runes(text, 200), "to": recipients]
         // a fresh reading only (at most 2 minutes old, with its time and source), or none (audit 11)
         if withLocation, let l = await PulseSharer.shared.snapshotFix(maxWait: 3) { body["position"] = SOSCenter.snapshot(l) }
         do {
@@ -506,7 +506,7 @@ struct PulseCapsuleView: View {
         let clean = UIGraphicsImageRenderer(size: src.size, format: f).jpegData(withCompressionQuality: 0.85) { _ in src.draw(at: .zero) }
         do {
             _ = try await APIClient.shared.pulseUpload(token: token, path: "pulse/circles/\(APIClient.pSeg(circleID))/capsule",
-                                                       fields: ["caption": String(caption.prefix(140))], fileField: "file", fileName: "photo.jpg",
+                                                       fields: ["caption": PulseRules.runes(caption, 140)], fileField: "file", fileName: "photo.jpg",
                                                        mime: "image/jpeg", data: clean)
             caption = ""
             await load()

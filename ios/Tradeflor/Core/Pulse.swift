@@ -87,15 +87,23 @@ struct PulseBubble: Decodable, Identifiable, Equatable {
     var created_at: Int64?
 }
 
+/// A proposed meeting place, as the server sends it (pulse/social.go Proposal): who proposed it, the votes so far and mine.
 struct PulseProposal: Decodable, Identifiable, Equatable {
     let id: String
-    var user_id: String?
+    var proposer_id: String?
     var name: String?
     var lat: Double?
     var lon: Double?
     var state: String?
-    var votes: [String: Bool]?
+    var accept: Int?
+    var reject: Int?
+    var my_vote: String?
     var created_at: Int64?
+
+    /// The one card the web shows (CircleScreen openProposal): open, not voted by me, not mine.
+    static func cardFor(_ all: [PulseProposal], me: String) -> PulseProposal? {
+        all.first { ($0.state ?? "open") == "open" && ($0.my_vote ?? "").isEmpty && $0.proposer_id != me }
+    }
 }
 
 struct PulseVoice: Decodable, Identifiable, Equatable {
@@ -370,6 +378,24 @@ enum PulseRules {
         case 409: return !text.lowercased().contains("older position")
         default: return false
         }
+    }
+
+    /// Text cut to what the server accepts: it counts runes (Unicode scalars) and refuses longer text with 400 instead of
+    /// cutting it; Swift's prefix counts characters (an Arabic word with marks or an emoji is several runes).
+    static func runes(_ s: String, _ max: Int) -> String {
+        guard s.unicodeScalars.count > max else { return s }
+        var out = String.UnicodeScalarView()
+        out.append(contentsOf: s.unicodeScalars.prefix(max))
+        return String(out)
+    }
+
+    /// A position that has no answer within this long is given up (the next reading is sent instead).
+    static let locationPostTimeoutS = 8.0
+
+    /// How long the next send waits after a refused or failed one: what a 429 asks (5 s without Retry-After), else 3 s.
+    static func retryHoldMs(status: Int, retryAfter: Double?) -> Int64 {
+        if status == 429 { return Int64((retryAfter ?? 5) * 1000) }
+        return 3000
     }
 
     /// No reading from Core Location for this long while sharing: the updates are restarted.

@@ -2766,3 +2766,21 @@
 "sos.responding.failed" = "تعذّر التحديث. تحقق من الاتصال وحاول مجددًا.";
 "pulse.leave.offline" = "لا يوجد اتصال: توقفت مشاركتك على هذا الجهاز، وستنجح المغادرة عند عودة الاتصال.";
 "pulse.safety.sos2" = "SOS";
+
+/* Map, places and live sharing audit (2026-11-21) */
+"pulse.place.default" = "مكان اللقاء";
+"pulse.proposal.pin" = "%@ · مقترح";
+"pulse.proposal.title" = "مكان جديد: %@";
+"pulse.proposal.by" = "اقترحه %@";
+"pulse.proposal.votes" = "%d مع، %d ضد";
+"pulse.proposal.orgdecides" = "المنظّم يقرّر";
+"pulse.proposal.counted" = "تم احتساب صوتك";
+"pulse.proposal.sent.org" = "أُرسل إلى المنظّم";
+"pulse.proposal.changed" = "تغيّر مكان اللقاء";
+"pulse.proposal.sent" = "أُرسل الاقتراح";
+"pulse.paused" = "المشاركة مفعّلة في هذا اللقاء، لكن هذا الجهاز لا يرسل موقعك. استأنف أو أوقف.";
+"pulse.paused.resume" = "استئناف";
+"pulse.paused.stop" = "إيقاف";
+"pulse.paused.denied" = "يلزم إذن الموقع للاستئناف.";
+"pulse.create.finding" = "جارٍ التحديد…";
+"pulse.create.nearme.failed" = "تعذّر تحديد موقعك";

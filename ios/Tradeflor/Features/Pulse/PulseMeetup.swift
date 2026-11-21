@@ -19,6 +19,13 @@ struct PulseMeetupScreen: View {
     /// nothing for 15 s it asks the server again, so a socket that died quietly never freezes the map (live-line audit).
     @State private var lastNews: Int64 = 0
     @State private var safetyLoading = false
+    /// Every load and every "stopped sharing" frame takes a number; an answer older than the newest number is dropped (two
+    /// loads landing out of order, or a load started before a stop, no longer bring old state back).
+    @State private var loadGen = 0
+    @State private var loadSoonTask: Task<Void, Never>?
+    @State private var busyProposal = false
+    /// The server has my consent here but this phone could not resume by itself (no permission): Resume / Stop.
+    @State private var pausedHere = false
 
     @State private var view: PulseView?
     @State private var invitation: PulseInvitation?
@@ -124,21 +131,27 @@ struct PulseMeetupScreen: View {
             topBar
             ZStack(alignment: .top) {
                 PulseMapView(token: token, styleURL: pulse.config.style_url, people: mapPeople, dest: mapDest, camera: camera, selected: selected,
-                             onTapMap: proposing ? { c in proposing = false; proposalName = ""; pickGroup = nil; proposalAt = c } : nil,
+                             // picking stays on while the card is open: another tap moves the spot and keeps the typed name
+                             // (web); a plain spot has no place group
+                             onTapMap: (proposing || proposalAt != nil) && !ended ? { c in proposing = false; pickGroup = nil; proposalAt = c } : nil,
                              // a café or restaurant tapped: the place card (nothing is sent until its button)
                              onTapPlace: ended ? nil : { name, c, cls in proposing = false; proposalName = name; pickGroup = PulseMapView.poiGroupKey(cls); proposalAt = c },
                              onSelect: { id in selected = id; panelOpen = true; panelTab = 0 },
-                             onUserMoved: { if case .follow = camera.mode { camera.mode = .none } },
+                             // a hand on the map: the camera is free (web), whatever it was doing
+                             onUserMoved: { if camera.mode != .none { camera.mode = .none } },
                              onTilesFailed: { tilesFailed = $0 },
-                             beacons: sosBeacons)
+                             beacons: sosBeacons, proposals: mapProposals,
+                             pick: proposalAt.map { PulseMapPin(id: PulseMapView.pickID, coordinate: $0, name: proposalName) })
                     .ignoresSafeArea(edges: .horizontal)
                 VStack(spacing: 8) {
                     if tilesFailed { banner("pulse.tiles.failed", Theme.gold) }
                     if proposing { banner("pulse.propose.tap", Theme.accent) }
                     if ended { banner("pulse.ended.banner", Theme.faint) }
                     if sharer.stopPending.contains(circleID) { banner("pulse.stop.pending", Theme.gold).accessibilityAddTraits(.updatesFrequently) }
+                    if pausedHere { pausedBanner }
                     ForEach(activeSOS) { s in sosBanner(s) }
-                    ForEach(openProposals) { p in proposalCard(p) }
+                    // one card, hidden while a place is being picked (web)
+                    if let p = PulseProposal.cardFor(view?.proposals ?? [], me: me), !proposing, proposalAt == nil { proposalCard(p) }
                     if let flash { banner(flash, Theme.accent).onTapGesture { self.flash = nil } }
                 }
                 .padding(10)
@@ -611,7 +624,7 @@ struct PulseMeetupScreen: View {
             out.append(PulseMapPerson(id: id, name: p?.name ?? "", avatarID: p?.avatar_id, coordinate: loc.coordinate,
                                       accuracy: loc.accuracy ?? 0, approximate: loc.approximate, ring: ring, line: personLine(m, loc),
                                       status: status, statusAt: flashBubble[id] != nil ? nowMs : m.status?.at, isMe: id == me,
-                                      moving: (loc.speed ?? 0) > 0.6 || (loc.distance_m ?? 0) > 150, measuredAt: loc.measured_at,
+                                      toPlaceM: circle?.hasDest == true ? loc.distance_m : nil, measuredAt: loc.measured_at,
                                       glide: PulseRules.glideMs(prev: previous[id], next: loc, reduceMotion: reduceMotion) / 1000,
                                       sos: activeSOS.contains { $0.user_id == id }))
         }
@@ -621,12 +634,15 @@ struct PulseMeetupScreen: View {
     private func personLine(_ m: PulseMember, _ loc: PulseLocation?) -> String {
         if m.arrived { return NSLocalizedString(m.arrived_kind == "manual" ? "pulse.imhere.said" : "pulse.arrived", comment: "") }
         guard let loc else { return NSLocalizedString("pulse.notsharing", comment: "") }
-        if PulseRules.freshness(loc.measured_at, now: nowMs) == .stale {
+        // web PulseMap: the time and distance only for a live position (delayed or stale: "Last updated"), and only when the
+        // position is precise enough for the distance (an internet-provider position says nothing about 2.8 km)
+        if PulseRules.freshness(loc.measured_at, now: nowMs) != .live {
             return String(format: NSLocalizedString("pulse.lastupdated", comment: ""), PulseRules.agoText(loc.measured_at, now: nowMs))
         }
         var parts: [String] = []
-        if let e = PulseRules.eta(distance: loc.distance_m, speed: loc.speed, arrived: false) { parts.append(e) }
-        if let d = loc.distance_m { parts.append(PulseRules.distanceText(d)) }
+        let known = PulseRules.distanceKnown(loc.distance_m, accuracy: loc.accuracy ?? 0)
+        if known, let e = PulseRules.eta(distance: loc.distance_m, speed: loc.speed, arrived: false) { parts.append(e) }
+        if known, let d = loc.distance_m { parts.append(PulseRules.distanceText(d)) }
         var s = parts.joined(separator: " · ")
         if loc.approximate { s += " " + NSLocalizedString("pulse.approx", comment: "") }
         return s
@@ -724,39 +740,77 @@ struct PulseMeetupScreen: View {
 
     // MARK: proposals
 
-    private var openProposals: [PulseProposal] { (view?.proposals ?? []).filter { ($0.state ?? "open") == "open" } }
+    /// Open proposals on the map ("📍 name · proposed", web PulseMap).
+    private var mapProposals: [PulseMapPin] {
+        (view?.proposals ?? []).compactMap { p in
+            guard (p.state ?? "open") == "open", let lat = p.lat, let lon = p.lon else { return nil }
+            return PulseMapPin(id: p.id, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), name: p.name ?? "")
+        }
+    }
 
+    /// The web's card (CircleScreen pc-proposal): "New Location: name", who proposed it, how far from the current place, the
+    /// votes under the majority rule or "the organizer decides", and Accept / Suggest another / Reject.
     private func proposalCard(_ p: PulseProposal) -> some View {
         let km = (circle?.dest).flatMap { d in p.lat.flatMap { lat in p.lon.map { PulseRules.distanceM(d.latitude, d.longitude, lat, $0) } } }
+        var meta = [String(format: NSLocalizedString("pulse.proposal.by", comment: ""), name(p.proposer_id ?? ""))]
+        if let km { meta.append(String(format: NSLocalizedString("pulse.proposal.from", comment: ""), PulseRules.distanceText(km))) }
+        if circle?.policy == "majority" {
+            meta.append(String(format: NSLocalizedString("pulse.proposal.votes", comment: ""), p.accept ?? 0, p.reject ?? 0))
+        } else if !isOrganizer {
+            meta.append(NSLocalizedString("pulse.proposal.orgdecides", comment: ""))
+        }
         return VStack(alignment: .leading, spacing: 8) {
-            Text(verbatim: "📍 " + String(format: NSLocalizedString("pulse.proposal.line", comment: ""), p.name ?? "", name(p.user_id ?? "")))
+            Text(verbatim: "📍 " + String(format: NSLocalizedString("pulse.proposal.title", comment: ""), p.name ?? ""))
                 .font(.footnote.weight(.semibold))
-            if let km { Text(verbatim: String(format: NSLocalizedString("pulse.proposal.from", comment: ""), PulseRules.distanceText(km))).font(.caption2).foregroundStyle(.white.opacity(0.6)) }
+            Text(verbatim: meta.joined(separator: " · ")).font(.caption2).foregroundStyle(.white.opacity(0.6))
             HStack {
-                if p.user_id == me {
-                    Button("pulse.proposal.withdraw") { Task { try? await APIClient.shared.pulseDelete(token: token, path: "pulse/circles/\(APIClient.pSeg(circleID))/proposals/\(APIClient.pSeg(p.id))"); await load() } }
-                } else {
-                    Button("pulse.proposal.accept") { Task { await vote(p, true) } }
-                    Button("pulse.proposal.another") { proposing = true }
-                    Button("pulse.proposal.reject") { Task { await vote(p, false) } }
+                Button("pulse.proposal.accept") {
+                    Task { await vote(p, true, ok: isOrganizer || circle?.policy == "majority" ? "pulse.proposal.counted" : "pulse.proposal.sent.org") }
                 }
+                Button("pulse.proposal.another") { proposing = true }
+                Button("pulse.proposal.reject") { Task { await vote(p, false, ok: nil) } }
             }
-            .font(.footnote.weight(.bold)).buttonStyle(.borderless)
+            .font(.footnote.weight(.bold)).buttonStyle(.borderless).disabled(busyProposal)
         }
         .padding(12).background(Theme.hex(0x04111E, 0.92), in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private func vote(_ p: PulseProposal, _ accept: Bool) async {
-        _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "proposals/\(APIClient.pSeg(p.id))/vote", body: ["accept": accept])
+    /// The server's own words when it refuses (ended, 10 open proposals...), else "That did not work".
+    private func failText(_ e: Error) -> String {
+        if let h = e as? PulseHTTPError, h.status >= 400, h.status < 500, !h.text.isEmpty { return h.text }
+        return NSLocalizedString("pulse.err.other", comment: "")
+    }
+
+    private func vote(_ p: PulseProposal, _ accept: Bool, ok: String?) async {
+        busyProposal = true
+        defer { busyProposal = false }
+        do {
+            _ = try await APIClient.shared.pulsePost(token: token, circle: circleID, "proposals/\(APIClient.pSeg(p.id))/vote", body: ["accept": accept])
+            if let ok { flash = NSLocalizedString(ok, comment: "") }
+        } catch {
+            flash = failText(error)
+        }
         await load()
     }
 
+    /// Sent only by the card's button; on a failure the card stays open with the name and says why (web act()).
     private func propose() async {
         guard let at = proposalAt else { return }
         let n = proposalName.trimmingCharacters(in: .whitespaces)
         guard !n.isEmpty else { return }
-        proposalAt = nil
-        _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "proposals", body: ["name": String(n.prefix(80)), "lat": at.latitude, "lon": at.longitude])
+        busyProposal = true
+        defer { busyProposal = false }
+        do {
+            let d = try await APIClient.shared.pulsePost(token: token, circle: circleID, "proposals",
+                                                         body: ["name": PulseRules.runes(n, 80), "lat": at.latitude, "lon": at.longitude])
+            let changed = ((try? JSONSerialization.jsonObject(with: d)) as? [String: Any])?["destination_changed"] as? Bool ?? false
+            withAnimation { proposalAt = nil }
+            proposalName = ""
+            pickGroup = nil
+            flash = NSLocalizedString(changed ? "pulse.proposal.changed" : "pulse.proposal.sent", comment: "")
+        } catch {
+            flash = failText(error)
+        }
         await load()
     }
 
@@ -802,7 +856,7 @@ struct PulseMeetupScreen: View {
                     .opacity(empty ? 0.5 : 1)
             }
             .buttonStyle(.plain)
-            .disabled(empty)
+            .disabled(empty || busyProposal)
             .frame(maxWidth: .infinity)
             Text(LocalizedStringKey(decides ? "pulse.pick.note.org" : "pulse.pick.note")).font(.caption2).foregroundStyle(PulseInk.muted)
         }
@@ -947,7 +1001,7 @@ struct PulseMeetupScreen: View {
     private func sendOwnStatus() {
         let t = bubbleText.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
-        Task { await setStatus(String(t.prefix(40)), nil); bubbleText = "" }
+        Task { await setStatus(PulseRules.runes(t, 40), nil); bubbleText = "" }
     }
 
     private func statusTile(_ text: String, _ emoji: String, current: String) -> some View {
@@ -1221,9 +1275,52 @@ struct PulseMeetupScreen: View {
         }
     }
 
+    /// Frames ask for a load 250 ms later, once for a burst (web reloadSoon), not one request each.
+    private func loadSoon() {
+        loadSoonTask?.cancel()
+        loadSoonTask = Task {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if !Task.isCancelled { await load() }
+        }
+    }
+
+    /// Sharing is on for me on the server but this phone is not sending (iOS closed the app, a crash, an update): it starts
+    /// again by itself when the permission is already given (web maybeResume), else the screen says it is paused.
+    private func resumeIfNeeded(_ v: PulseView) async {
+        guard v.circle.isOpen, v.me?.sharing == true, !sharer.isSharing(circleID), !sharer.stopPending.contains(circleID) else {
+            pausedHere = false
+            return
+        }
+        let ok = await sharer.resume(circle: circleID, until: v.me?.share_until, dest: v.circle.dest)
+        pausedHere = !ok
+    }
+
+    private var pausedBanner: some View {
+        VStack(spacing: 8) {
+            Text("pulse.paused").font(.footnote.weight(.semibold)).multilineTextAlignment(.center)
+            HStack(spacing: 14) {
+                Button("pulse.paused.resume") {
+                    Task {
+                        let ok = await sharer.resume(circle: circleID, until: view?.me?.share_until, dest: circle?.dest, ask: true)
+                        pausedHere = !ok
+                        if !ok { flash = NSLocalizedString("pulse.paused.denied", comment: "") }
+                    }
+                }
+                Button("pulse.paused.stop") { Task { pausedHere = false; await sharer.stop(circleID); await load() } }
+            }
+            .font(.footnote.weight(.bold)).buttonStyle(.borderless)
+        }
+        .padding(12).background(Theme.hex(0x04111E, 0.92), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.gold.opacity(0.6), lineWidth: 1))
+    }
+
     private func load() async {
+        loadGen += 1
+        let gen = loadGen
         do {
             let d = try await APIClient.shared.pulseCircle(token: token, id: circleID)
+            // a newer load, or a "stopped sharing" frame, came while this one was asked: its answer is older, dropped
+            guard gen == loadGen else { return }
             lastNews = PulseRules.nowMs()
             people.merge(d.people ?? [:]) { _, n in n }
             pulse.noteName(d.people ?? [:])
@@ -1241,6 +1338,7 @@ struct PulseMeetupScreen: View {
                 locations = fresh
                 PulseSharer.shared.setDestination(circleID, v.circle.dest)
                 if !v.circle.isOpen { PulseSharer.shared.stopLocally(circleID) }
+                await resumeIfNeeded(v)
             }
             loadFailed = false
         } catch let e as PulseHTTPError where e.status == 404 {
@@ -1265,31 +1363,33 @@ struct PulseMeetupScreen: View {
             if let i = view?.members?.firstIndex(where: { $0.user_id == loc.user_id }) { view?.members?[i].sharing = true }
         case "sharing":
             if let u = d["user_id"] as? String, (d["sharing"] as? Bool) == false {
+                loadGen += 1 // a load asked before this stop must not bring the old position back
                 locations[u] = nil
                 if let i = view?.members?.firstIndex(where: { $0.user_id == u }) { view?.members?[i].sharing = false }
+                if u == me { pausedHere = false }
             } else {
-                Task { await load() }
+                loadSoon()
             }
         case "bubble":
             if let b = d["bubble"] as? [String: Any], let u = b["user_id"] as? String, let t = b["text"] as? String {
                 flashBubble[u] = (t, Date().addingTimeInterval(6))
             }
-            Task { await load() }
+            loadSoon()
         case "arrived":
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             if (d["all"] as? Bool) == true { flash = NSLocalizedString("pulse.all.here", comment: "") }
-            Task { await load() }
+            loadSoon()
         case "removed":
             PulseSharer.shared.stopLocally(circleID)
             gone = NSLocalizedString("pulse.removed", comment: "")
         case "ended":
             PulseSharer.shared.stopLocally(circleID)
-            Task { await load() }
+            loadSoon()
         case "alert", "sos-resolved":
             if e == "alert", ((d["alert"] as? [String: Any])?["kind"] as? String) == "sos" { UINotificationFeedbackGenerator().notificationOccurred(.error) }
-            Task { await load() }
+            loadSoon()
         case "voice", "status", "circle", "alert-seen":
-            Task { await load() }
+            loadSoon()
         default: break
         }
     }
@@ -1298,7 +1398,7 @@ struct PulseMeetupScreen: View {
         let t = bubbleText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         bubbleText = ""
-        var body: [String: Any] = ["text": String(t.prefix(80))]
+        var body: [String: Any] = ["text": PulseRules.runes(t, 80)]
         if let s = selected, s != me { body["reply_to"] = s }
         _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "bubble", body: body)
         flashBubble[me] = (t, Date().addingTimeInterval(6))

@@ -636,7 +636,9 @@ struct PulseCreateView: View {
     @State private var majority = false
     @State private var busy = false
     @State private var error: String?
-    @State private var camera = PulseCamera(mode: .place)
+    // free: tapping the map sets the pin where the finger is, the map does not jump to it (Near me moves it once)
+    @State private var camera = PulseCamera(mode: .none)
+    @State private var finding = false
 
     var body: some View {
         NavigationStack {
@@ -664,17 +666,30 @@ struct PulseCreateView: View {
                         PulseMapView(token: token, styleURL: pulse.config.style_url, people: [],
                                      dest: pin.map { PulseMapDest(coordinate: $0, name: place, icon: PulseRules.activityIcon[activity] ?? "📍") },
                                      camera: camera, selected: nil, compact: true, onTapMap: { c in pin = c },
-                                     onTapPlace: { name, c, _ in pin = c; place = name })
+                                     onTapPlace: { name, c, _ in pin = c; place = name },
+                                     // a hand on the map: it stays where it is put (it was pulled back to the pin)
+                                     onUserMoved: { if camera.mode != .none { camera.mode = .none } })
                             .frame(height: 200).clipShape(RoundedRectangle(cornerRadius: 12))
                         Button {
+                            // "Near me" (web): the map moves to this device's position at zoom 15 to show the cafés around;
+                            // the meeting pin is NOT set there (it was: the meetup's place became home, sent to everyone)
+                            finding = true
                             Task {
-                                // "Near me": this device's position once, for this screen only (never shared)
-                                if let l = await PulseSharer.shared.readOnce() { pin = l.coordinate; camera = PulseCamera(mode: .place, nonce: camera.nonce + 1) }
+                                let l = await PulseSharer.shared.readOnce()
+                                finding = false
+                                if let l {
+                                    camera = PulseCamera(mode: .center(l.coordinate.latitude, l.coordinate.longitude), nonce: camera.nonce + 1)
+                                } else {
+                                    error = NSLocalizedString("pulse.create.nearme.failed", comment: "")
+                                }
                             }
                         } label: {
-                            Label("pulse.create.nearme", systemImage: "location").font(.caption.weight(.bold)).padding(8)
+                            Label(LocalizedStringKey(finding ? "pulse.create.finding" : "pulse.create.nearme"), systemImage: "location")
+                                .font(.caption.weight(.bold)).padding(8)
                                 .background(.ultraThinMaterial, in: Capsule())
                         }
+                        .buttonStyle(.borderless) // only the button, never the whole map row
+                        .disabled(finding)
                         .padding(8)
                     }
                     .listRowInsets(EdgeInsets())
@@ -719,7 +734,8 @@ struct PulseCreateView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("notes.cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(LocalizedStringKey(instant ? "pulse.create.instant.go" : "pulse.create.go")) { Task { await create() } }
-                        .disabled(busy || title.trimmingCharacters(in: .whitespaces).isEmpty || (!instant && chosen.isEmpty))
+                        // nobody invited is fine (web): people can join later by invite or code
+                        .disabled(busy || title.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }
@@ -741,7 +757,7 @@ struct PulseCreateView: View {
         busy = true
         defer { busy = false }
         let starts: Int64 = when == 0 ? 0 : (when > 0 ? PulseRules.nowMs() + Int64(when) * 60_000 : Int64(at.timeIntervalSince1970 * 1000))
-        var body: [String: Any] = ["title": String(title.prefix(80)), "activity": activity, "dest_name": String(place.prefix(80)),
+        var body: [String: Any] = ["title": PulseRules.runes(title.trimmingCharacters(in: .whitespaces), 60), "activity": activity, "dest_name": PulseRules.runes(place.trimmingCharacters(in: .whitespaces), 80),
                                    "starts_at": starts, "duration_min": Int(hours) * 60, "invite": Array(chosen),
                                    "policy": majority ? "majority" : "organizer", "party": UserDefaults.standard.bool(forKey: "tf.pulse.party"),
                                    "instant": instant]

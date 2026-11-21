@@ -16,7 +16,8 @@ struct PulseMapPerson: Equatable {
     var status: String?
     var statusAt: Int64?
     var isMe: Bool
-    var moving: Bool
+    /// metres to the meeting place (the server's distance_m), nil without a place
+    var toPlaceM: Double?
     var measuredAt: Int64
     var glide: Double // seconds to glide from the previous real position (0 = jump)
     /// this person's SOS is active: the ring turns red and blinks, two red waves go out
@@ -25,7 +26,21 @@ struct PulseMapPerson: Equatable {
     static func == (a: PulseMapPerson, b: PulseMapPerson) -> Bool {
         a.id == b.id && a.coordinate.latitude == b.coordinate.latitude && a.coordinate.longitude == b.coordinate.longitude
             && a.accuracy == b.accuracy && a.ring == b.ring && a.line == b.line && a.status == b.status && a.name == b.name
-            && a.avatarID == b.avatarID && a.moving == b.moving && a.sos == b.sos
+            && a.avatarID == b.avatarID && a.toPlaceM == b.toPlaceM && a.sos == b.sos && a.measuredAt == b.measuredAt
+    }
+
+    /// The dashed line to the place (web PulseMap refreshGeo): everyone not arrived and more than 60 m away; a stale position's
+    /// line is drawn faint, never hidden (it came and went before).
+    var drawsLine: Bool { ring != .arrived && (toPlaceM ?? 0) > 60 }
+}
+
+/// A place someone proposed (web: "📍 name · proposed"), or the spot being picked.
+struct PulseMapPin: Equatable {
+    let id: String
+    var coordinate: CLLocationCoordinate2D
+    var name: String
+    static func == (a: PulseMapPin, b: PulseMapPin) -> Bool {
+        a.id == b.id && a.coordinate.latitude == b.coordinate.latitude && a.coordinate.longitude == b.coordinate.longitude && a.name == b.name
     }
 }
 
@@ -38,9 +53,11 @@ struct PulseMapDest: Equatable {
     }
 }
 
-/// What the camera should do now (a new `nonce` = do it again).
+/// What the camera should do now (a new `nonce` = do it again). As on the web, a mode keeps being applied while positions
+/// change (everyone stays framed, me / a friend stays centred) until a hand moves or zooms the map (`none` = free).
+/// `center` shows one spot at zoom 15 (Create's "Near me": the map moves, the pin does not).
 struct PulseCamera: Equatable {
-    enum Mode: Equatable { case everyone, place, me, follow(String), none }
+    enum Mode: Equatable { case everyone, place, me, follow(String), center(Double, Double), none }
     var mode: Mode = .everyone
     var nonce = 0
 }
@@ -63,6 +80,9 @@ struct PulseMapView: UIViewRepresentable {
     var onTilesFailed: ((Bool) -> Void)?
     /// SOS senders with no live position here but a position in their SOS: a red beacon
     var beacons: [PulseSOSBeacon] = []
+    /// open proposals (drawn as "📍 name · proposed") and the spot being picked for a new one
+    var proposals: [PulseMapPin] = []
+    var pick: PulseMapPin?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -92,6 +112,9 @@ struct PulseMapView: UIViewRepresentable {
         var camera: PulseCamera
         var selected: String?
         var beacons: [PulseSOSBeacon]
+        var proposals: [PulseMapPin]
+        var pick: PulseMapPin?
+        var size: CGSize
         var bucket: Int
     }
 
@@ -99,7 +122,7 @@ struct PulseMapView: UIViewRepresentable {
         let c = context.coordinator
         c.parent = self
         let key = SyncKey(style: styleURL, people: people, dest: dest, camera: camera, selected: selected, beacons: beacons,
-                          bucket: Int(Date().timeIntervalSince1970 / 10))
+                          proposals: proposals, pick: pick, size: map.bounds.size, bucket: Int(Date().timeIntervalSince1970 / 10))
         guard key != c.lastSync else { return }
         c.lastSync = key
         c.sync()
@@ -114,6 +137,8 @@ struct PulseMapView: UIViewRepresentable {
     static var offlineStyle: URL? { Bundle.main.url(forResource: "pulse-offline-style", withExtension: "json") }
 
     static let poiLayer = "pulse-poi"
+    /// The id of the spot being picked among `PulseMapPin`s.
+    static let pickID = "__pick"
 
     /// The badge group of an OpenMapTiles poi class (desktop pulsePoi.ts poiGroup), or nil.
     static func poiGroupKey(_ cls: String?) -> String? {
@@ -170,6 +195,7 @@ struct PulseMapView: UIViewRepresentable {
     final class PersonAnnotation: MLNPointAnnotation { var personID = "" }
     final class BeaconAnnotation: MLNPointAnnotation { var beaconID = ""; var name = "" }
     final class DestAnnotation: MLNPointAnnotation {}
+    final class PinAnnotation: MLNPointAnnotation { var pinID = ""; var name = ""; var isPick = false }
 
     @MainActor
     final class Coordinator: NSObject, MLNMapViewDelegate {
@@ -180,27 +206,37 @@ struct PulseMapView: UIViewRepresentable {
         private var shown: [String: PulseMapPerson] = [:]
         private var destAnnotation: DestAnnotation?
         private var beaconAnnotations: [String: BeaconAnnotation] = [:]
+        private var pinAnnotations: [String: PinAnnotation] = [:]
         private var styleReady = false
         private var cameraNonce = -1
         private var usedOffline = false
-        private var fitted = false
 
         init(_ p: PulseMapView) { parent = p }
+
+        /// The first name that says something (web: name:latin || name_en || name, trimmed): an empty "name:latin" no longer
+        /// hides the place's real name.
+        static func placeName(_ a: [String: Any]) -> String {
+            for k in ["name:latin", "name_en", "name"] {
+                if let s = (a[k] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty { return s }
+            }
+            return ""
+        }
 
         @objc func tapped(_ g: UITapGestureRecognizer) {
             guard let map else { return }
             let pt = g.location(in: map)
-            // a place badge under the finger (a 22 pt box: the badges are small)
+            // the place badge nearest the finger (badges may overlap: the first hit could be the café next door)
             if let onPlace = parent.onTapPlace {
                 let box = CGRect(x: pt.x - 22, y: pt.y - 22, width: 44, height: 44)
-                if let f = map.visibleFeatures(in: box, styleLayerIdentifiers: [PulseMapView.poiLayer]).first {
-                    let a = f.attributes
-                    let name = (a["name:latin"] as? String) ?? (a["name_en"] as? String) ?? (a["name"] as? String) ?? ""
-                    if !name.isEmpty {
-                        let c = (f as? MLNPointFeature)?.coordinate ?? map.convert(pt, toCoordinateFrom: map)
-                        onPlace(name, c, a["class"] as? String)
-                        return
-                    }
+                let named: [(MLNFeature, String, CGPoint)] = map.visibleFeatures(in: box, styleLayerIdentifiers: [PulseMapView.poiLayer]).compactMap { f in
+                    let n = Coordinator.placeName(f.attributes)
+                    guard !n.isEmpty, let p = f as? MLNPointFeature else { return nil }
+                    return (f, n, map.convert(p.coordinate, toPointTo: map))
+                }
+                if let best = named.min(by: { hypot($0.2.x - pt.x, $0.2.y - pt.y) < hypot($1.2.x - pt.x, $1.2.y - pt.y) }),
+                   let p = best.0 as? MLNPointFeature {
+                    onPlace(best.1, p.coordinate, best.0.attributes["class"] as? String)
+                    return
                 }
             }
             parent.onTapMap?(map.convert(pt, toCoordinateFrom: map))
@@ -242,6 +278,7 @@ struct PulseMapView: UIViewRepresentable {
             for b in parent.beacons {
                 if let a = beaconAnnotations[b.id] {
                     a.coordinate = b.coordinate
+                    if a.name != b.name { a.name = b.name; (map.view(for: a) as? SOSBeaconView)?.show(name: b.name) }
                 } else {
                     let a = BeaconAnnotation()
                     a.beaconID = b.id
@@ -266,6 +303,25 @@ struct PulseMapView: UIViewRepresentable {
                 map.removeAnnotation(a)
                 destAnnotation = nil
             }
+            // open proposals and the spot being picked
+            var pins = parent.proposals
+            if let p = parent.pick { pins.append(p) }
+            let pinIDs = Set(pins.map(\.id))
+            for (id, a) in pinAnnotations where !pinIDs.contains(id) { map.removeAnnotation(a); pinAnnotations[id] = nil }
+            for p in pins {
+                if let a = pinAnnotations[p.id], a.name == p.name {
+                    a.coordinate = p.coordinate
+                } else {
+                    if let old = pinAnnotations[p.id] { map.removeAnnotation(old) }
+                    let a = PinAnnotation()
+                    a.pinID = p.id
+                    a.name = p.name
+                    a.isPick = p.id == PulseMapView.pickID
+                    a.coordinate = p.coordinate
+                    pinAnnotations[p.id] = a
+                    map.addAnnotation(a)
+                }
+            }
             updateShapes()
             regroup()
             applyCamera()
@@ -273,37 +329,73 @@ struct PulseMapView: UIViewRepresentable {
 
         // MARK: camera
 
+        /// The web's camera (PulseMap.tsx "camera"): applied again on every change while not free; a place, me or a friend at
+        /// zoom max(current, 15.5); everyone framed without stale or rough (> 1 km) positions while a good one exists, with
+        /// margins in proportion to the map and at most zoom 16.5.
+        /// What the camera depends on: the ask, where people and the place are, the map's size. Labels change every second
+        /// ("Last updated 45 s ago"); they redraw the pins but never move the camera.
+        private struct CameraKey: Equatable {
+            var camera: PulseCamera
+            var spots: [Double]
+            var size: CGSize
+        }
+        private var lastCameraKey: CameraKey?
+
         private func applyCamera() {
             guard let map else { return }
             let cam = parent.camera
-            if case .follow(let id) = cam.mode, let p = parent.people.first(where: { $0.id == id }) {
-                if cam.nonce != cameraNonce { cameraNonce = cam.nonce; map.setCenter(p.coordinate, zoomLevel: max(map.zoomLevel, 15), animated: true) } else { map.setCenter(p.coordinate, animated: true) }
-                return
-            }
-            guard cam.nonce != cameraNonce || (!fitted && !parent.people.isEmpty) else { return }
+            let key = CameraKey(camera: cam,
+                                spots: parent.people.flatMap { [$0.coordinate.latitude, $0.coordinate.longitude, $0.accuracy] }
+                                    + (parent.dest.map { [$0.coordinate.latitude, $0.coordinate.longitude] } ?? []),
+                                size: map.bounds.size)
+            guard key != lastCameraKey else { return }
+            lastCameraKey = key
+            if case .none = cam.mode { cameraNonce = cam.nonce; return }
+            // not laid out yet (zero size): the fit waits for the real size instead of landing at zoom 0 (SyncKey has the size)
+            guard map.bounds.width > 1, map.bounds.height > 1 else { return }
+            let asked = cam.nonce != cameraNonce
             cameraNonce = cam.nonce
-            fitted = true
+            let close = max(map.zoomLevel, 15.5)
             switch cam.mode {
             case .place:
-                if let d = parent.dest { map.setCenter(d.coordinate, zoomLevel: 16, animated: true) }
+                if let d = parent.dest { map.setCenter(d.coordinate, zoomLevel: close, animated: true) }
             case .me:
-                if let me = parent.people.first(where: \.isMe) { map.setCenter(me.coordinate, zoomLevel: 16, animated: true) }
+                if let me = parent.people.first(where: \.isMe) { map.setCenter(me.coordinate, zoomLevel: close, animated: true) }
+            case .follow(let id):
+                if let p = parent.people.first(where: { $0.id == id }) { map.setCenter(p.coordinate, zoomLevel: close, animated: true) }
+            case .center(let lat, let lon):
+                // once per ask: a pin set afterwards must not pull the map back
+                if asked { map.setCenter(CLLocationCoordinate2D(latitude: lat, longitude: lon), zoomLevel: 15, animated: true) }
             case .everyone:
-                var coords = parent.people.map(\.coordinate) + (parent.dest.map { [$0.coordinate] } ?? [])
+                let t = PulseRules.nowMs()
+                let good = parent.people.filter { PulseRules.freshness($0.measuredAt, now: t) != .stale && $0.accuracy <= 1000 }
+                let coords = (good.isEmpty ? parent.people : good).map(\.coordinate) + (parent.dest.map { [$0.coordinate] } ?? [])
+                guard let first = coords.first else { return }
                 if coords.count == 1 {
-                    map.setCenter(coords[0], zoomLevel: 15, animated: true)
-                } else if coords.count > 1 {
-                    map.setVisibleCoordinates(&coords, count: UInt(coords.count), edgePadding: UIEdgeInsets(top: 90, left: 50, bottom: 140, right: 50), animated: true)
+                    map.setCenter(first, zoomLevel: 15, animated: true)
+                    return
                 }
-            default: break
+                let lats = coords.map(\.latitude), lons = coords.map(\.longitude)
+                let bounds = MLNCoordinateBounds(sw: CLLocationCoordinate2D(latitude: lats.min()!, longitude: lons.min()!),
+                                                 ne: CLLocationCoordinate2D(latitude: lats.max()!, longitude: lons.max()!))
+                let w = map.bounds.width, h = map.bounds.height
+                let pad = UIEdgeInsets(top: min(120, h * 0.22), left: min(80, w * 0.16), bottom: min(110, h * 0.18), right: min(90, w * 0.2))
+                let fit = map.cameraThatFitsCoordinateBounds(bounds, edgePadding: pad)
+                let z = MLNZoomLevelForAltitude(fit.altitude, fit.pitch, fit.centerCoordinate.latitude, map.bounds.size)
+                if z > 16.5 {
+                    map.setCenter(fit.centerCoordinate, zoomLevel: 16.5, animated: true)
+                } else {
+                    map.setCamera(fit, animated: true)
+                }
+            case .none:
+                break
             }
         }
 
         func mapView(_ mapView: MLNMapView, regionWillChangeWith reason: MLNCameraChangeReason, animated: Bool) {
-            // a hand on the map stops following
-            if reason.contains(.gesturePan) || reason.contains(.gesturePinch) || reason.contains(.gestureZoomIn) || reason.contains(.gestureZoomOut) {
-                parent.onUserMoved?()
-            }
+            // a hand on the map (drag, pinch, double tap, two-finger tap, one-finger zoom): the camera stays where it is put
+            let hand: MLNCameraChangeReason = [.gesturePan, .gesturePinch, .gestureZoomIn, .gestureZoomOut, .gestureOneFingerZoom]
+            if !reason.intersection(hand).isEmpty { parent.onUserMoved?() }
         }
 
         func mapView(_ mapView: MLNMapView, regionDidChangeAnimated animated: Bool) { regroup() }
@@ -316,8 +408,10 @@ struct PulseMapView: UIViewRepresentable {
             for (name, img) in PulseMapView.poiBadges { style.setImage(img, forName: name) }
             let acc = MLNShapeSource(identifier: "pulse-accuracy", shape: nil, options: nil)
             let lines = MLNShapeSource(identifier: "pulse-lines", shape: nil, options: nil)
+            let staleLines = MLNShapeSource(identifier: "pulse-lines-stale", shape: nil, options: nil)
             style.addSource(acc)
             style.addSource(lines)
+            style.addSource(staleLines)
             let fill = MLNFillStyleLayer(identifier: "pulse-accuracy-fill", source: acc)
             fill.fillColor = NSExpression(forConstantValue: UIColor(red: 0, green: 0.83, blue: 0.87, alpha: 1))
             fill.fillOpacity = NSExpression(forConstantValue: 0.14)
@@ -329,8 +423,15 @@ struct PulseMapView: UIViewRepresentable {
             line.lineWidth = NSExpression(forConstantValue: 2.5)
             line.lineDashPattern = NSExpression(forConstantValue: [1.5, 2])
             line.lineCap = NSExpression(forConstantValue: "round")
+            // a stale position's line: the same dashes, faint (web line-opacity 0.25)
+            let faint = MLNLineStyleLayer(identifier: "pulse-direction-stale", source: staleLines)
+            faint.lineColor = NSExpression(forConstantValue: UIColor(red: 0.24, green: 0.94, blue: 0.93, alpha: 0.25))
+            faint.lineWidth = NSExpression(forConstantValue: 2.5)
+            faint.lineDashPattern = NSExpression(forConstantValue: [1.5, 2])
+            faint.lineCap = NSExpression(forConstantValue: "round")
             style.addLayer(fill)
             style.addLayer(edge)
+            style.addLayer(faint)
             style.addLayer(line)
             updateShapes()
             parent.onTilesFailed?(usedOffline)
@@ -349,18 +450,23 @@ struct PulseMapView: UIViewRepresentable {
             guard styleReady, let style = map?.style else { return }
             var circles: [MLNPolygonFeature] = []
             var lines: [MLNPolylineFeature] = []
+            var staleLines: [MLNPolylineFeature] = []
+            let t = PulseRules.nowMs()
             for p in parent.people {
                 if p.accuracy >= 25 {
-                    var ring = PulseRules.circlePolygon(lat: p.coordinate.latitude, lon: p.coordinate.longitude, radiusM: p.accuracy)
+                    // at most 3 km (web): an internet-provider position of ±50 km must not paint the whole map
+                    var ring = PulseRules.circlePolygon(lat: p.coordinate.latitude, lon: p.coordinate.longitude, radiusM: min(p.accuracy, 3000))
                     circles.append(MLNPolygonFeature(coordinates: &ring, count: UInt(ring.count)))
                 }
-                if p.moving, p.ring != .arrived, p.ring != .stale, let d = parent.dest {
+                if p.drawsLine, let d = parent.dest {
                     var pts = [p.coordinate, d.coordinate]
-                    lines.append(MLNPolylineFeature(coordinates: &pts, count: 2))
+                    let f = MLNPolylineFeature(coordinates: &pts, count: 2)
+                    if PulseRules.freshness(p.measuredAt, now: t) == .stale { staleLines.append(f) } else { lines.append(f) }
                 }
             }
             (style.source(withIdentifier: "pulse-accuracy") as? MLNShapeSource)?.shape = MLNShapeCollectionFeature(shapes: circles)
             (style.source(withIdentifier: "pulse-lines") as? MLNShapeSource)?.shape = MLNShapeCollectionFeature(shapes: lines)
+            (style.source(withIdentifier: "pulse-lines-stale") as? MLNShapeSource)?.shape = MLNShapeCollectionFeature(shapes: staleLines)
         }
 
         // MARK: annotations
@@ -369,6 +475,14 @@ struct PulseMapView: UIViewRepresentable {
             if let a = annotation as? PersonAnnotation {
                 let v = (mapView.dequeueReusableAnnotationView(withIdentifier: "person") as? PersonPinView) ?? PersonPinView(reuseIdentifier: "person")
                 if let p = shown[a.personID] { v.show(p, token: parent.token, selected: parent.selected == p.id) }
+                // a reused view may still be hidden under someone else's "+N": shown alone, then grouped again right after
+                v.setGroup(1, showStatus: true)
+                Task { @MainActor [weak self] in self?.regroup() }
+                return v
+            }
+            if let a = annotation as? PinAnnotation {
+                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: "pin") as? ProposalPinView) ?? ProposalPinView(reuseIdentifier: "pin")
+                v.show(name: a.name, pick: a.isPick)
                 return v
             }
             if let b = annotation as? BeaconAnnotation {
@@ -388,6 +502,7 @@ struct PulseMapView: UIViewRepresentable {
             mapView.deselectAnnotation(annotation, animated: false)
             guard let a = annotation as? PersonAnnotation else { return }
             if let v = mapView.view(for: a) as? PersonPinView, v.groupCount > 1 {
+                parent.onUserMoved?() // the camera is free now, or the next update would pan away again (web: "free")
                 mapView.setCenter(a.coordinate, zoomLevel: min(19, mapView.zoomLevel + 2), animated: true) // a "+N" group: zoom in
                 return
             }
@@ -447,7 +562,8 @@ final class PersonPinView: MLNAnnotationView {
             w.opacity = 0
             layer.addSublayer(w)
         }
-        centerOffset = CGVector(dx: 0, dy: -6)
+        // the photo's centre (y 48) on the position, not the view's (y 52): the line and the accuracy circle meet the avatar
+        centerOffset = CGVector(dx: 0, dy: 52 - 48)
         photo.frame = CGRect(x: 38, y: 26, width: 44, height: 44)
         photo.layer.cornerRadius = 22
         photo.clipsToBounds = true
@@ -491,6 +607,20 @@ final class PersonPinView: MLNAnnotationView {
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        setGroup(1, showStatus: true)
+    }
+
+    /// Core Animation drops running animations when the app goes to the background or the view leaves the window (MapLibre
+    /// reuses annotation views): an SOS ring and its waves are started again when the view is back on screen.
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, sosOn, ring.animation(forKey: "sos") == nil else { return }
+        sosOn = false
+        setSOS(true)
+    }
 
     func show(_ p: PulseMapPerson, token: String, selected: Bool) {
         let colour: UIColor
@@ -544,6 +674,7 @@ final class PersonPinView: MLNAnnotationView {
         blink.duration = 0.45 * k
         blink.autoreverses = true
         blink.repeatCount = .infinity
+        blink.isRemovedOnCompletion = false
         ring.add(blink, forKey: "sos")
         for (i, w) in sosWaves.enumerated() {
             let s = CABasicAnimation(keyPath: "transform.scale")
@@ -558,6 +689,7 @@ final class PersonPinView: MLNAnnotationView {
             g.beginTime = CACurrentMediaTime() + Double(i) * 0.9 * k
             g.repeatCount = .infinity
             g.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            g.isRemovedOnCompletion = false
             w.add(g, forKey: "wave")
         }
     }
@@ -580,6 +712,8 @@ final class DestPinView: MLNAnnotationView {
     override init(reuseIdentifier: String?) {
         super.init(reuseIdentifier: reuseIdentifier)
         frame = CGRect(x: 0, y: 0, width: 140, height: 74)
+        // the gold dot's centre (y 22) on the place, not the view's (y 37): the dashed lines end in the dot
+        centerOffset = CGVector(dx: 0, dy: 37 - 22)
         dot.frame = CGRect(x: 48, y: 0, width: 44, height: 44)
         dot.textAlignment = .center
         dot.font = .systemFont(ofSize: 22)
@@ -605,8 +739,50 @@ final class DestPinView: MLNAnnotationView {
 
     func show(_ d: PulseMapDest) {
         dot.text = d.icon
-        label.text = d.name
-        accessibilityLabel = String(format: NSLocalizedString("pulse.place.ax", comment: ""), d.name)
+        // a place without a name still says what it is (web "Meeting place")
+        let n = d.name.trimmingCharacters(in: .whitespaces).isEmpty ? NSLocalizedString("pulse.place.default", comment: "") : d.name
+        label.text = n
+        accessibilityLabel = String(format: NSLocalizedString("pulse.place.ax", comment: ""), n)
+    }
+}
+
+/// A proposed place ("📍 name · proposed", web PulseMap proposals) or the spot being picked (a cyan pin).
+final class ProposalPinView: MLNAnnotationView {
+    private let dot = UILabel()
+    private let label = UILabel()
+
+    override init(reuseIdentifier: String?) {
+        super.init(reuseIdentifier: reuseIdentifier)
+        frame = CGRect(x: 0, y: 0, width: 160, height: 58)
+        centerOffset = CGVector(dx: 0, dy: 29 - 16) // the dot's centre on the spot
+        dot.frame = CGRect(x: 64, y: 0, width: 32, height: 32)
+        dot.text = "📍"
+        dot.textAlignment = .center
+        dot.font = .systemFont(ofSize: 17)
+        dot.backgroundColor = UIColor(red: 0.03, green: 0.1, blue: 0.14, alpha: 0.95)
+        dot.layer.cornerRadius = 16
+        dot.layer.borderWidth = 2
+        dot.clipsToBounds = true
+        label.frame = CGRect(x: 0, y: 35, width: 160, height: 20)
+        label.textAlignment = .center
+        label.font = .systemFont(ofSize: 11.5, weight: .bold)
+        label.textColor = .white
+        label.shadowColor = UIColor(white: 0, alpha: 0.8)
+        label.shadowOffset = CGSize(width: 0, height: 1)
+        addSubview(dot)
+        addSubview(label)
+        isAccessibilityElement = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func show(name: String, pick: Bool) {
+        let cyan = UIColor(red: 0.24, green: 0.94, blue: 0.93, alpha: 1)
+        dot.layer.borderColor = (pick ? cyan : UIColor(red: 1, green: 0.86, blue: 0.4, alpha: 1)).cgColor
+        let n = name.trimmingCharacters(in: .whitespaces)
+        label.text = pick ? n : String(format: NSLocalizedString("pulse.proposal.pin", comment: ""), n)
+        label.isHidden = label.text?.isEmpty ?? true
+        accessibilityLabel = label.text
     }
 }
 
@@ -641,6 +817,7 @@ final class SOSBeaconView: MLNAnnotationView {
             g.duration = 1.8 * k
             g.beginTime = CACurrentMediaTime() + Double(i) * 0.9 * k
             g.repeatCount = .infinity
+            g.isRemovedOnCompletion = false // kept through the background and a reuse
             w.add(g, forKey: "wave")
         }
         disc.frame = CGRect(x: 48, y: 4, width: 44, height: 44)
