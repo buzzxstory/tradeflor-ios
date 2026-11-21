@@ -115,6 +115,17 @@ struct MeetupPeek: Decodable {
 enum FlashTarget: Equatable {
     case user(String), mutual(String), meet(String), group(String), pin(String), username(String)
 
+    /// A Pulse Instant Circle QR (https://app.tradeflor.com/?pulse=<code>, TRADEFLOR's hosts only): its code, else nil. The
+    /// scanner said "not a Tradeflor code" for these; only a link tapped in the app reached the join preview.
+    static func pulseCode(_ text: String) -> String? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count <= 600, let u = URLComponents(string: t), ["http", "https"].contains(u.scheme?.lowercased() ?? ""),
+              let host = u.host?.lowercased(), ["app.tradeflor.com", "tradeflor.com", "www.tradeflor.com"].contains(host),
+              let code = u.queryItems?.first(where: { $0.name == "pulse" })?.value,
+              code.range(of: "^[A-Za-z0-9_-]{8,128}$", options: .regularExpression) != nil else { return nil }
+        return code
+    }
+
     static func parse(_ text: String) -> FlashTarget? {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty, t.count <= 600 else { return nil }

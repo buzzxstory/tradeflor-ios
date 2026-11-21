@@ -1,6 +1,7 @@
 import SwiftUI
 import CoreLocation
 import AVFoundation
+import Combine
 
 /// The meetup screen (PULSE_PRODUCT_SPEC.md "The meetup screen"): a top bar with the countdown and the Safety center, the map,
 /// a one-line panel (Participants / Activity), the bubble field, My Status / Walkie-Talkie / Find Friend / More, and Stop
@@ -43,6 +44,13 @@ struct PulseMeetupScreen: View {
     @State private var panelOpen = false
     @State private var panelTab = 0
     @State private var bubbleText = ""
+    /// My Status' own text (it shared the map message field: a half-typed message became the status)
+    @State private var statusText = ""
+    @State private var flashSince: Date?
+    /// End / Leave was chosen in a sheet: its confirmation comes once the sheet is gone (presented together, UIKit dropped it)
+    @State private var leaveAfterSheet = false
+    @State private var inviteError: String?
+    @State private var badgeSpin = false
     @State private var sheet: Sheet?
     @State private var proposing = false
     @State private var proposalAt: CLLocationCoordinate2D?
@@ -63,8 +71,10 @@ struct PulseMeetupScreen: View {
     }
 
     private var circle: PulseCircle? { view?.circle ?? invitation?.circle }
+    /// The people of the meetup as the web counts them (CircleScreen: going, maybe, the organizer): an invitation not
+    /// answered yet (or a join request) is no member; they were listed, counted in "N of M" and offered as alert recipients.
     private var members: [PulseMember] {
-        (view?.members ?? []).filter { !["left", "removed", "declined"].contains($0.response ?? "") }
+        (view?.members ?? []).filter { $0.response == "going" || $0.response == "maybe" || $0.role == "organizer" }
     }
     private var going: [PulseMember] { members.filter { $0.response == "going" || $0.role == "organizer" } }
     private var isOrganizer: Bool { view?.me?.role == "organizer" }
@@ -99,10 +109,16 @@ struct PulseMeetupScreen: View {
         .foregroundStyle(.white)
         .task { await load() }
         .onReceive(secondTicker) { d in
+            // in the background (sharing keeps the app running) the screen is not redrawn every second
+            guard UIApplication.shared.applicationState == .active else { return }
             now = d
             flashBubble = flashBubble.filter { $0.value.until > d }
+            if let f = flashSince, d.timeIntervalSince(f) > 4 { flash = nil }
             safetyReload()
         }
+        .onChange(of: flash) { f in flashSince = f == nil ? nil : Date() }
+        // the screen closes: no microphone and no clip left on
+        .onDisappear { walkie.shutDown() }
         // back in front: what happened meanwhile (the socket may have stayed up and still missed frames)
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             Task { await load() }
@@ -118,7 +134,9 @@ struct PulseMeetupScreen: View {
             } onCancel: { sosCountdown = false }
         }
         .onReceive(LiveConnection.shared.opened.receive(on: RunLoop.main)) { Task { await load() } } // missed frames: reload, never replay
-        .sheet(item: $sheet) { s in sheetView(s).tfColorScheme().modifier(PulseSheetLook()) }
+        .sheet(item: $sheet, onDismiss: {
+            if leaveAfterSheet { leaveAfterSheet = false; confirmLeave = true }
+        }) { s in sheetView(s).tfColorScheme().modifier(PulseSheetLook()) }
         .confirmationDialog(Text(LocalizedStringKey(isOrganizer ? "pulse.end.q" : "pulse.leave.q")), isPresented: $confirmLeave, titleVisibility: .visible) {
             Button(LocalizedStringKey(isOrganizer ? "pulse.end" : "pulse.leave"), role: .destructive) { Task { await leaveOrEnd() } }
         }
@@ -231,14 +249,16 @@ struct PulseMeetupScreen: View {
         let colors: [Color] = ended ? [Color.gray, Color.gray.opacity(0.5), Color.gray]
             : (startsLater || circle?.state == "inviting") ? [PulseInk.amber, PulseInk.amber.opacity(0.5), PulseInk.amber]
             : [PulseInk.cyan, Color(red: 0.6, green: 0.97, blue: 1), PulseInk.amber, Color(red: 1, green: 0.5, blue: 0.4), PulseInk.cyan]
-        let turn = reduceMotion || ended ? 0 : (now.timeIntervalSince1970 * 24).truncatingRemainder(dividingBy: 360)
+        // one 15 s turn repeated by Core Animation (it was a new 1 s animation every second, which spun back ~336° at 360)
+        let turning = !reduceMotion && !ended
         return ZStack(alignment: .bottomTrailing) {
             Image(systemName: circle?.symbol ?? "mappin").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .background(Theme.hex(0x071A24), in: Circle())
                 .padding(3)
-                .overlay(Circle().stroke(AngularGradient(colors: colors, center: .center), lineWidth: 3).rotationEffect(.degrees(turn))
-                    .animation(.linear(duration: 1), value: turn))
+                .overlay(Circle().stroke(AngularGradient(colors: colors, center: .center), lineWidth: 3).rotationEffect(.degrees(badgeSpin && turning ? 360 : 0))
+                    .animation(turning ? .linear(duration: 15).repeatForever(autoreverses: false) : .default, value: badgeSpin))
+                .onAppear { badgeSpin = true }
                 .frame(width: 46, height: 46)
             if stateKey == "pulse.hdr.live" {
                 Circle().fill(PulseInk.green).frame(width: 10, height: 10).overlay(Circle().stroke(Theme.hex(0x00161F), lineWidth: 2))
@@ -496,41 +516,67 @@ struct PulseMeetupScreen: View {
         .buttonStyle(.plain)
         .contextMenu {
             if isOrganizer && m.user_id != me {
-                Button(role: .destructive) { Task { _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "remove", body: ["user_id": m.user_id]); await load() } } label: {
+                Button(role: .destructive) {
+                    Task {
+                        do { _ = try await APIClient.shared.pulsePost(token: token, circle: circleID, "remove", body: ["user_id": m.user_id]) }
+                        catch { flash = failText(error) }
+                        await load()
+                    }
+                } label: {
                     Label("pulse.remove", systemImage: "person.badge.minus")
                 }
             }
         }
     }
 
-    @ViewBuilder private var activityList: some View {
-        let bubbles = (view?.bubbles ?? []).sorted { ($0.created_at ?? 0) > ($1.created_at ?? 0) }
-        ForEach(view?.voice ?? []) { v in
-            HStack {
-                Text(verbatim: "🎙️ " + pulse.name(v.user_id ?? "")).font(.caption.weight(.semibold))
-                Spacer()
-                Button { walkie.play(token: token, id: v.id) } label: {
-                    Image(systemName: walkie.playing == v.id ? "stop.fill" : "play.fill").frame(width: 44, height: 36)
-                }
-                .accessibilityLabel(Text("pulse.voice.play"))
-            }
-        }
-        ForEach(bubbles) { b in
-            HStack(alignment: .top) {
-                Text(verbatim: name(b.user_id ?? "") + ":").font(.caption.weight(.bold))
-                Text(verbatim: b.text ?? "").font(.caption)
-            }
-        }
-        ForEach(Array((view?.activity ?? []).enumerated()), id: \.offset) { _, a in
-            Text(verbatim: activityLine(a)).font(.caption).foregroundStyle(.white.opacity(0.6))
-        }
+    /// One line of the Activity tab: a map message, an event or a voice clip.
+    private struct FeedItem: Identifiable {
+        let id: String
+        let at: Int64
+        let text: String
+        var voice: PulseVoice?
     }
 
-    private func activityLine(_ a: PulseActivityItem) -> String {
-        let who = name(a.user_id ?? "")
-        let key = "pulse.act.log." + (a.kind ?? "")
-        let t = NSLocalizedString(key, comment: "")
-        return t == key ? who + " · " + (a.text ?? a.kind ?? "") : String(format: t, who)
+    /// The web's feed (CircleScreen ActivityList): messages, events and voice clips in one list, newest first, at most 80,
+    /// each with its age; the events in the app's language (they showed the server's raw words, even in Arabic).
+    private var feed: [FeedItem] {
+        var out: [FeedItem] = []
+        for b in view?.bubbles ?? [] {
+            out.append(FeedItem(id: "b" + b.id, at: b.created_at ?? 0, text: name(b.user_id ?? "") + " “" + (b.text ?? "") + "”"))
+        }
+        for (i, a) in (view?.activity ?? []).enumerated() {
+            let who = (a.user_id ?? "").isEmpty ? "" : name(a.user_id ?? "")
+            out.append(FeedItem(id: "a" + (a.id ?? String(i)), at: a.created_at ?? 0,
+                                text: PulseRules.activityText(kind: a.kind ?? "", who: who, text: a.text ?? "")))
+        }
+        for v in view?.voice ?? [] {
+            out.append(FeedItem(id: "v" + v.id, at: v.created_at ?? 0, text: name(v.user_id ?? ""), voice: v))
+        }
+        return Array(out.sorted { $0.at > $1.at }.prefix(80))
+    }
+
+    @ViewBuilder private var activityList: some View {
+        let items = feed
+        if items.isEmpty {
+            Text("pulse.feed.empty").font(.caption).foregroundStyle(.white.opacity(0.6))
+        }
+        ForEach(items) { i in
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let v = i.voice {
+                    Text(verbatim: i.text).font(.caption.weight(.bold))
+                    Button { walkie.play(token: token, id: v.id) { flash = NSLocalizedString("pulse.voice.cantplay", comment: "") } } label: {
+                        Label(String(format: NSLocalizedString("pulse.voice.len", comment: ""), Int((Double(v.duration_ms ?? 0) / 1000).rounded())),
+                              systemImage: walkie.playing == v.id ? "pause.fill" : "play.fill")
+                            .font(.caption.weight(.semibold)).frame(minHeight: 36)
+                    }
+                    .accessibilityLabel(Text("pulse.voice.play"))
+                } else {
+                    Text(verbatim: i.text).font(.caption).foregroundStyle(.white.opacity(0.85))
+                }
+                Spacer(minLength: 4)
+                if i.at > 0 { Text(verbatim: PulseRules.agoText(i.at, now: nowMs)).font(.caption2).foregroundStyle(.white.opacity(0.45)) }
+            }
+        }
     }
 
     // MARK: the bottom
@@ -882,7 +928,8 @@ struct PulseMeetupScreen: View {
         case .more: moreSheet.presentationDetents([.medium, .large])
         case .safety:
             PulseSafetyCenter(token: token, me: me, circleID: circleID, members: members.filter { $0.user_id != me }, people: people,
-                              sharingHere: sharingHere, onLeave: { sheet = nil; confirmLeave = true })
+                              sharingHere: sharingHere, onLeave: { leaveAfterSheet = true; sheet = nil },
+                              isOrganizer: isOrganizer, ended: ended, onSent: { Task { await load() } })
         case .code: PulseInstantCodeSheet(token: token, circleID: circleID, people: people)
         case .invite: PulseInviteMore(token: token, circleID: circleID, already: Set(members.map(\.user_id)))
         case .capsule: PulseCapsuleView(token: token, me: me, circleID: circleID, title: circle?.title ?? "")
@@ -972,10 +1019,10 @@ struct PulseMeetupScreen: View {
                 }
                 HStack(spacing: 8) {
                     Image(systemName: "pencil").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.hex(0x7FB5C2))
-                    TextField(NSLocalizedString("pulse.status.own2", comment: ""), text: $bubbleText)
+                    TextField(NSLocalizedString("pulse.status.own2", comment: ""), text: $statusText)
                         .font(.system(size: 14.5)).foregroundStyle(.white).submitLabel(.done)
                         .onSubmit { sendOwnStatus() }
-                    let empty = bubbleText.trimmingCharacters(in: .whitespaces).isEmpty
+                    let empty = statusText.trimmingCharacters(in: .whitespaces).isEmpty
                     Button { sendOwnStatus() } label: {
                         Text("pulse.status.set").font(.system(size: 14, weight: .heavy)).padding(.horizontal, 18).frame(minHeight: 40)
                             .foregroundStyle(empty ? Color.white.opacity(0.45) : Theme.hex(0x00242B))
@@ -991,7 +1038,12 @@ struct PulseMeetupScreen: View {
                 .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(PulseInk.cyan.opacity(0.22), lineWidth: 1))
                 // "I'm here" works without location (said, not measured)
                 menuRow("mappin.and.ellipse", .green, arrived ? "pulse.imhere.undo" : "pulse.imhere2", arrived ? "pulse.imhere.undo.sub" : "pulse.imhere.sub") {
-                    Task { _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "here", body: ["here": !arrived]); sheet = nil; await load() }
+                    Task {
+                        do { _ = try await APIClient.shared.pulsePost(token: token, circle: circleID, "here", body: ["here": !arrived]) }
+                        catch { flash = failText(error) }
+                        sheet = nil
+                        await load()
+                    }
                 }
             }
             .padding(20)
@@ -999,9 +1051,9 @@ struct PulseMeetupScreen: View {
     }
 
     private func sendOwnStatus() {
-        let t = bubbleText.trimmingCharacters(in: .whitespaces)
+        let t = statusText.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return }
-        Task { await setStatus(PulseRules.runes(t, 40), nil); bubbleText = "" }
+        Task { if await setStatus(PulseRules.runes(t, 40), nil) { statusText = "" } }
     }
 
     private func statusTile(_ text: String, _ emoji: String, current: String) -> some View {
@@ -1009,7 +1061,7 @@ struct PulseMeetupScreen: View {
         let label = NSLocalizedString("pulse.qs." + text, comment: "")
         let on = current == label || current == text
         let tc = look.tone.stops.0
-        return Button { Task { await setStatus(label, emoji) } } label: {
+        return Button { Task { _ = await setStatus(label, emoji) } } label: {
             HStack(spacing: 10) {
                 toneChip(look.icon, look.tone, size: 36)
                 Text(verbatim: label).font(PulseFont.display(14, 800)).foregroundStyle(Theme.hex(0xF2FBFD)).lineLimit(2)
@@ -1050,12 +1102,21 @@ struct PulseMeetupScreen: View {
         .buttonStyle(.plain)
     }
 
-    private func setStatus(_ text: String, _ emoji: String?) async {
+    /// Sets (or with "" clears) my status; on a refusal (ended, too long) the sheet stays and says why. true = done.
+    @discardableResult
+    private func setStatus(_ text: String, _ emoji: String?) async -> Bool {
         var body: [String: Any] = ["text": text]
         if let emoji { body["emoji"] = emoji }
-        _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "status", body: body)
+        do {
+            _ = try await APIClient.shared.pulsePost(token: token, circle: circleID, "status", body: body)
+        } catch {
+            flash = failText(error)
+            sheet = nil
+            return false
+        }
         sheet = nil
         await load()
+        return true
     }
 
     /// Find My Friend (web 208efd39): per friend, the face, the name and one coloured state line; Updated / Accuracy /
@@ -1064,14 +1125,14 @@ struct PulseMeetupScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 sheetHeader("pulse.findfriend")
-                let sharing = members.filter { $0.user_id != me && locations[$0.user_id] != nil }
-                let others = members.filter { $0.user_id != me && ($0.response == "going" || $0.response == "maybe" || $0.role == "organizer") }
-                ForEach(sharing) { m in if let l = locations[m.user_id] { friendCard(m, l) } }
-                // nobody shares: the first friend is shown, with what to expect and a way to reach them
-                if sharing.isEmpty {
-                    if let first = others.first { notSharingCard(first) } else {
-                        Text("pulse.find.nobody").font(PulseFont.text(14)).foregroundStyle(PulseInk.muted)
-                    }
+                // every other member (web): the ones sharing first, each with a way to reach them
+                let others = members.filter { $0.user_id != me }
+                    .sorted { (locations[$0.user_id] != nil ? 0 : 1) < (locations[$1.user_id] != nil ? 0 : 1) }
+                ForEach(others) { m in
+                    if let l = locations[m.user_id] { friendCard(m, l) } else { notSharingCard(m) }
+                }
+                if others.isEmpty {
+                    Text("pulse.find.nobody").font(PulseFont.text(14)).foregroundStyle(PulseInk.muted)
                 }
             }
             .padding(20)
@@ -1123,12 +1184,19 @@ struct PulseMeetupScreen: View {
                     selected = m.user_id
                     camera = PulseCamera(mode: .follow(m.user_id), nonce: camera.nonce + 1)
                     Task {
-                        var fix = sharer.lastFix
-                        if fix == nil { fix = await sharer.readOnce() }
-                        guard let mine = fix else { flash = NSLocalizedString("pulse.find.needyou", comment: ""); return }
-                        _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "proposals",
-                                                                 body: ["name": NSLocalizedString("pulse.halfway", comment: ""),
-                                                                        "lat": (mine.coordinate.latitude + loc.lat) / 2, "lon": (mine.coordinate.longitude + loc.lon) / 2])
+                        // only from the position I already share in THIS meetup (web): the midpoint of a private reading
+                        // (another meetup, "Near me", a fresh read) gave my exact spot away (2 × midpoint − friend)
+                        guard let mine = locations[me] else { flash = NSLocalizedString("pulse.find.needyou", comment: ""); return }
+                        // web: "Halfway with <name>", then "Meeting point proposed", or why it was refused
+                        let n = PulseRules.runes(String(format: NSLocalizedString("pulse.halfway.with", comment: ""), name(m.user_id)), 80)
+                        do {
+                            _ = try await APIClient.shared.pulsePost(token: token, circle: circleID, "proposals",
+                                                                     body: ["name": n, "lat": (mine.lat + loc.lat) / 2,
+                                                                            "lon": (mine.lon + loc.lon) / 2])
+                            flash = NSLocalizedString("pulse.halfway.sent", comment: "")
+                        } catch {
+                            flash = failText(error)
+                        }
                         sheet = nil
                         await load()
                     }
@@ -1136,6 +1204,8 @@ struct PulseMeetupScreen: View {
                     Label("pulse.find.halfway2", systemImage: "person.2.fill").font(PulseFont.display(14, 800)).frame(maxWidth: .infinity, minHeight: 44)
                         .background(PulseInk.gradient, in: Capsule()).foregroundStyle(Theme.hex(0x04222C))
                 }
+                .disabled(locations[me] == nil)
+                .opacity(locations[me] == nil ? 0.45 : 1)
             }
             .buttonStyle(.plain)
         }
@@ -1217,10 +1287,10 @@ struct PulseMeetupScreen: View {
                 menuRow("shield.lefthalf.filled", .green, "pulse.safety", "pulse.more.safety.sub") { sheet = .safety }
                 if isOrganizer {
                     if !ended {
-                        menuRow("power", .red, "pulse.more.end", "pulse.more.end.sub", danger: true) { sheet = nil; confirmLeave = true }
+                        menuRow("power", .red, "pulse.more.end", "pulse.more.end.sub", danger: true) { leaveAfterSheet = true; sheet = nil }
                     }
                 } else {
-                    menuRow("rectangle.portrait.and.arrow.right", .red, "pulse.more.leave", "pulse.more.leave.sub", danger: true) { sheet = nil; confirmLeave = true }
+                    menuRow("rectangle.portrait.and.arrow.right", .red, "pulse.more.leave", "pulse.more.leave.sub", danger: true) { leaveAfterSheet = true; sheet = nil }
                 }
             }
             .padding(20)
@@ -1235,11 +1305,18 @@ struct PulseMeetupScreen: View {
             Text(verbatim: inv.circle.title ?? "").font(.title2.weight(.bold))
             Text(verbatim: String(format: NSLocalizedString("pulse.invited.by", comment: ""), name(inv.invited_by ?? ""))).foregroundStyle(.white.opacity(0.7))
             if let d = inv.circle.dest_name, !d.isEmpty { Label(d, systemImage: "mappin") }
-            Button { Task { await respond("going"); sheet = .share } } label: { wide("pulse.join.share", primary: true) }
+            if let inviteError { Text(verbatim: inviteError).font(.footnote).foregroundStyle(Theme.danger).multilineTextAlignment(.center) }
+            if inv.response == "requested" {
+                // a join request waiting for the organizer: nothing to answer here (the server refuses an answer)
+                Text("pulse.join.requested").multilineTextAlignment(.center).foregroundStyle(.white.opacity(0.75))
+            } else {
+            // the share sheet only once the answer went through (it opened anyway, and sharing then failed)
+            Button { Task { if await respond("going") { sheet = .share } } } label: { wide("pulse.join.share", primary: true) }
             Button { Task { await respond("going") } } label: { wide("pulse.join.noshare") }
             HStack {
                 Button { Task { await respond("maybe") } } label: { wide("pulse.maybe") }
-                Button { Task { await respond("declined"); dismiss() } } label: { wide("pulse.decline") }
+                Button { Task { if await respond("declined") { dismiss() } } } label: { wide("pulse.decline") }
+            }
             }
             Button("chat.close") { dismiss() }
         }
@@ -1254,10 +1331,19 @@ struct PulseMeetupScreen: View {
     }
 
     /// Answering never shares a location.
-    private func respond(_ r: String) async {
-        _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "respond", body: ["response": r])
+    /// The answer to an invitation; a refusal (a join request still waiting, an ended meetup) is said on the card. true = done.
+    @discardableResult
+    private func respond(_ r: String) async -> Bool {
+        do {
+            _ = try await APIClient.shared.pulsePost(token: token, circle: circleID, "respond", body: ["response": r])
+            inviteError = nil
+        } catch {
+            inviteError = failText(error)
+            return false
+        }
         await load()
         await pulse.reload()
+        return true
     }
 
     // MARK: data
@@ -1353,7 +1439,8 @@ struct PulseMeetupScreen: View {
         guard let e = d["e"] as? String else { return }
         switch e {
         case "location":
-            guard let raw = d["loc"], let data = try? JSONSerialization.data(withJSONObject: raw),
+            guard let raw = d["loc"] as? [String: Any], JSONSerialization.isValidJSONObject(raw),
+                  let data = try? JSONSerialization.data(withJSONObject: raw),
                   let loc = try? JSONDecoder().decode(PulseLocation.self, from: data) else { return }
             if let old = locations[loc.user_id], old.measured_at >= loc.measured_at { return } // never older than what is shown
             lastNews = PulseRules.nowMs()
@@ -1400,8 +1487,14 @@ struct PulseMeetupScreen: View {
         bubbleText = ""
         var body: [String: Any] = ["text": PulseRules.runes(t, 80)]
         if let s = selected, s != me { body["reply_to"] = s }
-        _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "bubble", body: body)
-        flashBubble[me] = (t, Date().addingTimeInterval(6))
+        do {
+            _ = try await APIClient.shared.pulsePost(token: token, circle: circleID, "bubble", body: body)
+            flashBubble[me] = (t, Date().addingTimeInterval(6))
+        } catch {
+            // not sent (12 a minute, ended, offline): said, and the text comes back to send again (it was shown as sent)
+            flash = failText(error)
+            if bubbleText.isEmpty { bubbleText = t }
+        }
     }
 
     /// Leave / End: sharing stops here at once and its revocation is retried until the server confirms (audit 9); without
@@ -1423,6 +1516,10 @@ struct PulseMeetupScreen: View {
 
 /// Hold to talk (AAC in an .m4a, at most 30 s); the microphone is asked for on the first press only and never left on.
 /// Clips play on tap, never by themselves.
+/// Audit (2026-11-21): the first press only asks for the microphone (the prompt took the finger away and recording then
+/// started with nobody holding the button); a press always ends, also when the touch is cancelled (a call, a system alert,
+/// the app leaving the front: the clip is dropped); the session is given back to other apps' audio after recording and after
+/// a clip played; a clip recorded on the website (WebM / Ogg) plays through the web player; the screen closing stops all.
 @MainActor
 final class PulseWalkie: NSObject, ObservableObject, AVAudioRecorderDelegate, AVAudioPlayerDelegate {
     @Published var recording = false
@@ -1430,55 +1527,129 @@ final class PulseWalkie: NSObject, ObservableObject, AVAudioRecorderDelegate, AV
     private var recorder: AVAudioRecorder?
     private var player: AVAudioPlayer?
     private var started = Date()
-    private var limit: Task<Void, Never>?
+    private var links = Set<AnyCancellable>()
     private var url: URL { FileManager.default.temporaryDirectory.appendingPathComponent("tf-pulse-walkie.m4a") }
 
-    func begin() async -> Bool {
-        guard !CallManager.shared.lineInUse else { return false } // never during a call
-        let ok: Bool = await withCheckedContinuation { c in AVAudioSession.sharedInstance().requestRecordPermission { c.resume(returning: $0) } }
-        guard ok else { return false }
+    enum Start { case recording, askedForMic, noMic }
+
+    override init() {
+        super.init()
+        // the app leaves the front or a call / Siri takes the audio: the clip being recorded is dropped, never sent half
+        NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)
+            .sink { [weak self] _ in Task { @MainActor in self?.cancel() } }.store(in: &links)
+        NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+            .sink { [weak self] _ in Task { @MainActor in self?.cancel(); self?.stopPlaying() } }.store(in: &links)
+    }
+
+    /// Never waits: a microphone not asked yet is asked now and this press records nothing (the next one does).
+    func begin() -> Start {
+        guard !CallManager.shared.lineInUse, recorder == nil else { return .noMic } // never during a call
         let s = AVAudioSession.sharedInstance()
+        switch s.recordPermission {
+        case .undetermined:
+            s.requestRecordPermission { _ in }
+            return .askedForMic
+        case .denied:
+            return .noMic
+        default:
+            break
+        }
+        stopPlaying()
         try? s.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
         try? s.setActive(true)
         let settings: [String: Any] = [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 22050, AVNumberOfChannelsKey: 1,
                                        AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue]
-        guard let r = try? AVAudioRecorder(url: url, settings: settings) else { return false }
+        guard let r = try? AVAudioRecorder(url: url, settings: settings) else { release(); return .noMic }
+        r.delegate = self
         recorder = r
         r.record(forDuration: 30)
         started = Date()
         recording = true
-        return true
+        return .recording
     }
 
-    /// The clip, or nil when it was too short.
+    /// The clip, or nil when it was too short (or nothing was recording).
     func end() -> (Data, Int)? {
         guard let r = recorder else { return nil }
         r.stop()
         recorder = nil
         recording = false
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        release()
         let ms = min(30_000, Int(Date().timeIntervalSince(started) * 1000))
         defer { try? FileManager.default.removeItem(at: url) }
         guard ms >= 500, let d = try? Data(contentsOf: url) else { return nil }
         return (d, ms)
     }
 
-    func play(token: String, id: String) {
-        if playing == id { player?.stop(); playing = nil; return }
+    /// Recording dropped (touch cancelled, app left the front, screen closed): nothing is sent.
+    func cancel() {
+        guard let r = recorder else { return }
+        r.stop()
+        r.deleteRecording()
+        recorder = nil
+        recording = false
+        release()
+    }
+
+    func stopPlaying() {
+        player?.stop()
+        player = nil
+        if playing != nil { playing = nil; release() }
+    }
+
+    /// The screen closes: nothing keeps recording or playing.
+    func shutDown() {
+        cancel()
+        stopPlaying()
+    }
+
+    /// Other apps' music comes back.
+    private func release() {
+        guard !CallManager.shared.lineInUse else { return }
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    func play(token: String, id: String, onFail: @escaping () -> Void) {
+        if playing == id { stopPlaying(); return }
+        stopPlaying()
+        playing = id
         Task {
-            guard let d = try? await APIClient.shared.pulseCall("pulse/voice/\(APIClient.pSeg(id))", token: token) else { return }
-            guard !CallManager.shared.lineInUse else { return }
-            try? AVAudioSession.sharedInstance().setCategory(.playback)
-            try? AVAudioSession.sharedInstance().setActive(true)
-            player = try? AVAudioPlayer(data: d)
-            player?.delegate = self
-            player?.play()
-            playing = id
+            guard let d = try? await APIClient.shared.pulseCall("pulse/voice/\(APIClient.pSeg(id))", token: token) else {
+                if playing == id { playing = nil }
+                onFail()
+                return
+            }
+            guard playing == id, !CallManager.shared.lineInUse else { return }
+            if let p = try? AVAudioPlayer(data: d) {
+                try? AVAudioSession.sharedInstance().setCategory(.playback)
+                try? AVAudioSession.sharedInstance().setActive(true)
+                p.delegate = self
+                player = p
+                p.play()
+            } else if PulseWalkie.isWebAudio(d) {
+                // recorded on the website (WebM / Ogg Opus): AVFoundation cannot decode it, the web player can
+                playing = nil
+                VoicePlayer.shared.playData(id: "pulse-" + id, data: d,
+                                            mime: d.starts(with: [0x4F, 0x67, 0x67, 0x53]) ? "audio/ogg" : "audio/webm")
+            } else {
+                playing = nil
+                onFail()
+            }
         }
     }
 
+    /// WebM (EBML header) or Ogg ("OggS").
+    nonisolated static func isWebAudio(_ d: Data) -> Bool {
+        d.starts(with: [0x1A, 0x45, 0xDF, 0xA3]) || d.starts(with: [0x4F, 0x67, 0x67, 0x53])
+    }
+
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor in self.playing = nil }
+        Task { @MainActor in self.player = nil; self.playing = nil; self.release() }
+    }
+
+    /// The 30 s limit stopped the recorder by itself: the button no longer says "Release" (the release still sends it).
+    nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+        Task { @MainActor in self.recording = false }
     }
 }
 
@@ -1526,7 +1697,8 @@ struct PulseWalkieButton: View {
     let token: String
     let circleID: String
     let onNote: (String) -> Void
-    @State private var pressing = false
+    /// true while the finger is down; a cancelled touch (a call, an alert) resets it too, which a plain onEnded never did
+    @GestureState private var held = false
 
     var body: some View {
         VStack(spacing: 4) {
@@ -1540,29 +1712,35 @@ struct PulseWalkieButton: View {
                 .minimumScaleFactor(0.7).foregroundStyle(Theme.hex(0x3CF0EE))
         }
         .contentShape(Rectangle())
-        .gesture(DragGesture(minimumDistance: 0)
-            .onChanged { _ in
-                guard !pressing else { return }
-                pressing = true
-                Task { if !(await walkie.begin()) { onNote(NSLocalizedString("pulse.walkie.nomic", comment: "")) } }
-            }
-            .onEnded { _ in
-                pressing = false
-                guard let clip = walkie.end() else { return }
-                let data = clip.0, ms = clip.1
-                Task {
-                    do {
-                        _ = try await APIClient.shared.pulseUpload(token: token, path: "pulse/circles/\(APIClient.pSeg(circleID))/voice",
-                                                                   fields: ["duration_ms": String(ms)], fileField: "audio", fileName: "walkie.m4a",
-                                                                   mime: "audio/mp4", data: data)
-                    } catch {
-                        onNote(NSLocalizedString("pulse.walkie.failed", comment: ""))
-                    }
+        .gesture(DragGesture(minimumDistance: 0).updating($held) { _, state, _ in state = true })
+        .onChange(of: held) { down in
+            if down {
+                switch walkie.begin() {
+                case .recording: break
+                case .askedForMic: onNote(NSLocalizedString("pulse.walkie.askmic", comment: ""))
+                case .noMic: onNote(NSLocalizedString("pulse.walkie.nomic", comment: ""))
                 }
-            })
+            } else {
+                send()
+            }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text("pulse.walkie"))
         .accessibilityHint(Text("pulse.walkie.hint"))
+    }
+
+    private func send() {
+        guard let clip = walkie.end() else { return }
+        let data = clip.0, ms = clip.1
+        Task {
+            do {
+                _ = try await APIClient.shared.pulseUpload(token: token, path: "pulse/circles/\(APIClient.pSeg(circleID))/voice",
+                                                           fields: ["duration_ms": String(ms)], fileField: "audio", fileName: "walkie.m4a",
+                                                           mime: "audio/mp4", data: data)
+            } catch {
+                onNote(NSLocalizedString("pulse.walkie.failed", comment: ""))
+            }
+        }
     }
 }
 
@@ -1599,25 +1777,28 @@ struct PulseSOSButton: View {
     var disc: CGFloat = 58
     let action: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var wave = false
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: 4) {
-                TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
-                    let t = ctx.date.timeIntervalSinceReferenceDate * (reduceMotion ? 0.7 : 1)
-                    let phase = (t / 1.6).truncatingRemainder(dividingBy: 1)
-                    ZStack {
-                        Circle().stroke(Theme.hex(0xFF3B4E).opacity(0.7 * (1 - phase)), lineWidth: 3)
-                            .frame(width: disc + disc * 0.5 * phase, height: disc + disc * 0.5 * phase)
-                        Circle().fill(RadialGradient(colors: [Theme.hex(0xFF8A95), Theme.hex(0xFF3B4E), Theme.hex(0xB8102A)], center: .init(x: 0.4, y: 0.35),
-                                                     startRadius: 2, endRadius: disc * 0.6))
-                            .frame(width: disc, height: disc)
-                            .overlay(Circle().stroke(.white, lineWidth: disc < 56 ? 2.5 : 3))
-                            .shadow(color: Theme.hex(0xFF3B4E).opacity(0.6), radius: 10)
-                        Image(systemName: "light.beacon.max.fill").font(.system(size: disc * 0.42, weight: .bold)).foregroundStyle(.white)
-                    }
-                    .frame(width: disc * 1.5, height: disc * 1.5)
+                // the wave runs as one repeating animation (Core Animation draws it); the screen is no longer rebuilt 30 times a
+                // second for as long as the meetup is open (battery, heat)
+                ZStack {
+                    Circle().stroke(Theme.hex(0xFF3B4E), lineWidth: 3)
+                        .frame(width: disc, height: disc)
+                        .scaleEffect(wave ? 1.5 : 1)
+                        .opacity(wave ? 0 : 0.7)
+                        .animation(.easeOut(duration: reduceMotion ? 2.3 : 1.6).repeatForever(autoreverses: false), value: wave)
+                    Circle().fill(RadialGradient(colors: [Theme.hex(0xFF8A95), Theme.hex(0xFF3B4E), Theme.hex(0xB8102A)], center: .init(x: 0.4, y: 0.35),
+                                                 startRadius: 2, endRadius: disc * 0.6))
+                        .frame(width: disc, height: disc)
+                        .overlay(Circle().stroke(.white, lineWidth: disc < 56 ? 2.5 : 3))
+                        .shadow(color: Theme.hex(0xFF3B4E).opacity(0.6), radius: 10)
+                    Image(systemName: "light.beacon.max.fill").font(.system(size: disc * 0.42, weight: .bold)).foregroundStyle(.white)
                 }
+                .frame(width: disc * 1.5, height: disc * 1.5)
+                .onAppear { wave = true }
                 .frame(width: disc + 8, height: disc + 4) // the wave may spread past the column; it is never clipped
                 Text(verbatim: "SOS").font(PulseFont.brand(disc < 56 ? 11 : 12)).tracking(disc < 56 ? 2 : 3).foregroundStyle(.white)
                     .padding(.horizontal, 10).padding(.vertical, 3)

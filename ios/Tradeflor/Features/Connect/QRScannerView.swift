@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import ImageIO
 import CoreImage
 import os
 
@@ -23,8 +24,12 @@ enum ScanTiming {
 
 /// Reads a QR code from a picture, on the phone.
 enum QRDecode {
+    /// Call it off the main thread: a 48 MP photo took 0.5-2 s. The picture is read at 1600 px at most (a QR needs no more).
     static func decode(_ data: Data) -> String? {
-        guard let ci = CIImage(data: data),
+        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 1600,
+                                     kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceShouldCacheImmediately: true]
+        let small = CGImageSourceCreateWithData(data as CFData, nil).flatMap { CGImageSourceCreateThumbnailAtIndex($0, 0, opts as CFDictionary) }
+        guard let ci = small.map({ CIImage(cgImage: $0) }) ?? CIImage(data: data),
               let detector = CIDetector(ofType: CIDetectorTypeQRCode, context: nil, options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]) else { return nil }
         return detector.features(in: ci).compactMap { ($0 as? CIQRCodeFeature)?.messageString }.first
     }

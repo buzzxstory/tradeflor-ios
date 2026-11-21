@@ -20,7 +20,9 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     @Published private(set) var shares: [String: Share] = [:]
-    @Published private(set) var lastFix: CLLocation?
+    /// The latest reading. Not published: with readings every second it redrew every screen observing the sharer (the
+    /// meetup, Home) once a second for nothing; the meetup reads it on its own 1 s tick.
+    private(set) var lastFix: CLLocation?
     @Published private(set) var reducedAccuracy = false
     /// Stopped on this device, the server has not confirmed yet (offline): retried every 5 s; never resumed meanwhile and no
     /// position is kept for later.
@@ -86,6 +88,7 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
         struct U: Decodable { var until: Int64? }
         let until = (try? JSONDecoder().decode(U.self, from: data))?.until
         shares[circle] = Share(until: (until ?? 0) > 0 ? until : nil, dest: dest)
+        Self.startedHere.insert(circle)
         // 5. positions
         updateMeasuring()
         await consider(first, for: circle)
@@ -126,6 +129,7 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
         allEpoch += 1
         let ids = Array(shares.keys)
         shares = [:]
+        Self.startedHere = []
         updateMeasuring()
         do {
             _ = try await APIClient.shared.pulseCall("pulse/stop-all", method: "POST", token: token)
@@ -140,6 +144,7 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// The server or the circle ended it (409/410/404, removed, ended, my own sharing:false): measuring stops, no call.
     func stopLocally(_ circle: String) {
+        Self.startedHere.remove(circle)
         guard shares[circle] != nil else { return }
         shares[circle] = nil
         updateMeasuring()
@@ -149,6 +154,7 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     func forgetAll() {
         allEpoch += 1
         shares = [:]
+        Self.startedHere = []
         for t in stopRetry.values { t.cancel() }
         stopRetry = [:]
         stopPending = []
@@ -168,6 +174,9 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     func resume(circle: String, until: Int64?, dest: CLLocationCoordinate2D?, ask: Bool = false) async -> Bool {
         if shares[circle] != nil { return true }
         guard !stopPending.contains(circle) else { return false } // stopped here, the server has not heard yet: never resume
+        // only on the device that gave the consent: the consent is per account, and an iPad or a second phone opening the
+        // meetup must not start sending its own position (maybe home) without a tap there ("Resume" is that tap)
+        guard ask || Self.startedHere.contains(circle) else { return false }
         if let u = until, u > 0, u <= PulseRules.nowMs() { return false }
         let started = epoch(circle)
         let s = ask ? await permission() : manager.authorizationStatus
@@ -175,8 +184,16 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard started == epoch(circle), shares[circle] == nil, !stopPending.contains(circle) else { return shares[circle] != nil }
         reducedAccuracy = manager.accuracyAuthorization == .reducedAccuracy
         shares[circle] = Share(until: (until ?? 0) > 0 ? until : nil, dest: dest)
+        Self.startedHere.insert(circle)
         updateMeasuring()
         return true
+    }
+
+    /// The meetups whose sharing this device started (kept across launches, ids only): only these resume by themselves.
+    nonisolated private static let startedKey = "tf.pulse.startedHere"
+    private static var startedHere: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: startedKey) ?? []) }
+        set { UserDefaults.standard.set(Array(newValue.prefix(50)), forKey: startedKey) }
     }
 
     /// One reading for a screen ("Near me" when creating a meetup): never shared.
@@ -240,6 +257,8 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
         let s = manager.authorizationStatus
         Task { @MainActor in
             guard s != .notDetermined else { return }
+            // precise location switched off (or on) in Settings while sharing: the positions say "network" from now on
+            self.reducedAccuracy = manager.accuracyAuthorization == .reducedAccuracy
             let w = self.permissionWaiters
             self.permissionWaiters = []
             for c in w { c.resume(returning: s) }
@@ -254,7 +273,8 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
             self.lastDelivery = Date()
             self.lastFix = l
             self.finishFixWaiters(l)
-            for id in Array(self.shares.keys) { await self.consider(l, for: id) }
+            // each meetup sends on its own: one slow answer (up to 8 s) no longer holds the reading back for the others
+            for id in Array(self.shares.keys) { Task { await self.consider(l, for: id) } }
             self.updateAccuracy()
         }
     }
@@ -304,6 +324,10 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
                 // come every second: no radio woken every second, no run into the 40 a minute limit)
                 shares[circle]?.holdUntil = now + PulseRules.retryHoldMs(status: e.status, retryAfter: e.retryAfter)
             }
+        } catch APIError.badCredentials {
+            // the session is gone (401): sending stops here at once, not a try every 3 s until the socket notices
+            shares[circle]?.sending = false
+            stopLocally(circle)
         } catch {
             shares[circle]?.sending = false
             shares[circle]?.holdUntil = now + PulseRules.retryHoldMs(status: 0, retryAfter: nil)
@@ -374,11 +398,11 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
         guard !shares.isEmpty else { return }
         // no distance filter: a still phone otherwise gets no reading at all and turns "Last seen"; what is sent is decided by
         // PulseRules.shouldSend (25 s still, 10 s walking, 5 s driving, 4 s near the place)
-        manager.distanceFilter = kCLDistanceFilterNone
+        if manager.distanceFilter != kCLDistanceFilterNone { manager.distanceFilter = kCLDistanceFilterNone }
         // Low Power Mode: ten metres at most too (a hundred metres is served from Wi-Fi with readings far apart, the restart
         // hands back the cached one, which is not sent: a still phone sent nothing); the cadence still keeps the radio calm
         if ProcessInfo.processInfo.isLowPowerModeEnabled {
-            manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+            if manager.desiredAccuracy != kCLLocationAccuracyNearestTenMeters { manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters }
             return
         }
         var best: PulseRules.Motion = .still
@@ -391,10 +415,13 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
                 if m == .near { best = .near } else if m == .driving && best != .near { best = .driving } else if m == .walking && best == .still { best = .walking }
             }
         }
+        // set only when it changes: writing it on every reading can make Core Location reconfigure each second
+        let want: CLLocationAccuracy
         switch best {
-        case .near, .driving: manager.desiredAccuracy = kCLLocationAccuracyBest
+        case .near, .driving: want = kCLLocationAccuracyBest
         // still: GPS-grade too (a "hundred metres" request is served from Wi-Fi now and then, with readings far apart)
-        case .walking, .still: manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+        case .walking, .still: want = kCLLocationAccuracyNearestTenMeters
         }
+        if manager.desiredAccuracy != want { manager.desiredAccuracy = want }
     }
 }

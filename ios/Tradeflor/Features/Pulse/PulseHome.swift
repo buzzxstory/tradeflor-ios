@@ -56,7 +56,8 @@ struct PulseHomeView: View {
 
     private var invitations: [PulseCircleEntry] { pulse.circles.filter { $0.response == "invited" && $0.circle.isOpen } }
     private var meetups: [PulseCircleEntry] {
-        pulse.circles.filter { $0.response != "invited" && $0.response != "declined" && $0.circle.isOpen }
+        // a join request still waiting for the organizer is not a meetup of mine yet (web PulseHub)
+        pulse.circles.filter { $0.response != "invited" && $0.response != "declined" && $0.response != "requested" && $0.circle.isOpen }
     }
     private var nowMs: Int64 { Int64(now.timeIntervalSince1970 * 1000) }
     private var liveCount: Int { meetups.filter { ($0.circle.starts_at ?? 0) <= nowMs }.count }

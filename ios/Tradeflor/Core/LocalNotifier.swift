@@ -570,7 +570,12 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         // in front, a missed call is already on screen (the end-of-call card): only kept in Notification Center
         let tf = notification.request.content.userInfo["tf"] as? [AnyHashable: Any]
-        if (tf?["kind"] as? String) == "pulse-alert" {
+        let info = notification.request.content.userInfo as? [String: Any] ?? [:]
+        if (tf?["kind"] as? String) == "pulse-alert",
+           !NotificationRouting.belongsToCurrentAccount(info, knownSubscriptionIDs: PushKeys.knownIDs()) {
+            // an SOS of an account no longer signed in here: its name and reason are not shown over this account
+            completionHandler([.list])
+        } else if (tf?["kind"] as? String) == "pulse-alert" {
             // an SOS in front: the emergency screen comes from GET /pulse/sos (also when the live connection was down);
             // the notice stays in Notification Center
             Task { @MainActor in SOSCenter.shared.reloadSoon() }

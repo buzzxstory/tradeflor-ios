@@ -113,11 +113,13 @@ struct PulseVoice: Decodable, Identifiable, Equatable {
     var created_at: Int64?
 }
 
+/// One activity line as the server sends it (pulse/social.go ActivityItem: id, user_id, kind, text, created_at).
 struct PulseActivityItem: Decodable, Equatable {
+    var id: String?
     var kind: String?
     var user_id: String?
     var text: String?
-    var at: Int64?
+    var created_at: Int64?
 }
 
 struct PulseView: Decodable, Equatable {
@@ -195,6 +197,8 @@ struct PulseCodePreview: Decodable, Equatable {
     var people: Int?
 }
 
+/// A safety alert or an SOS as the server sends it (pulse/sos.go Alert): the sender is `user_id` and the position comes as
+/// flat `lat` / `lon` / `accuracy` (it was read as `sender_id` and a nested `position`: no name and never the location).
 struct PulseAlert: Decodable, Identifiable, Equatable {
     let id: String
     var circle_id: String?
@@ -203,6 +207,23 @@ struct PulseAlert: Decodable, Identifiable, Equatable {
     var text: String?
     var position: PulseAlertPosition?
     var created_at: Int64?
+
+    private enum K: String, CodingKey { case id, circle_id, user_id, sender_id, kind, text, lat, lon, accuracy, position, created_at }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: K.self)
+        id = try c.decode(String.self, forKey: .id)
+        circle_id = try c.decodeIfPresent(String.self, forKey: .circle_id)
+        sender_id = try c.decodeIfPresent(String.self, forKey: .user_id) ?? c.decodeIfPresent(String.self, forKey: .sender_id)
+        kind = try c.decodeIfPresent(String.self, forKey: .kind)
+        text = try c.decodeIfPresent(String.self, forKey: .text)
+        if let lat = try c.decodeIfPresent(Double.self, forKey: .lat), let lon = try c.decodeIfPresent(Double.self, forKey: .lon) {
+            position = PulseAlertPosition(lat: lat, lon: lon, accuracy: try c.decodeIfPresent(Double.self, forKey: .accuracy))
+        } else {
+            position = try c.decodeIfPresent(PulseAlertPosition.self, forKey: .position)
+        }
+        created_at = try c.decodeIfPresent(Int64.self, forKey: .created_at)
+    }
 }
 
 struct PulseAlertPosition: Decodable, Equatable {
@@ -211,10 +232,19 @@ struct PulseAlertPosition: Decodable, Equatable {
     var accuracy: Double?
 }
 
+/// One recipient's delivery as the server knows it (pulse/sos.go RecipientState).
 struct PulseAlertDelivery: Decodable, Equatable {
     var user_id: String
     var pushed_at: Int64?
+    var live_at: Int64?
+    var push_status: String?
+    var delivered_at: Int64?
     var seen_at: Int64?
+    var responding_at: Int64?
+
+    var seen: Bool { (seen_at ?? 0) > 0 || (responding_at ?? 0) > 0 }
+    /// their app has it: confirmed delivered, handed over live, or the push service accepted it
+    var reached: Bool { (delivered_at ?? 0) > 0 || (live_at ?? 0) > 0 || (pushed_at ?? 0) > 0 || push_status == "sent" }
 }
 
 struct PulseCapsuleItem: Decodable, Identifiable, Equatable {
@@ -377,6 +407,25 @@ enum PulseRules {
         case 404, 410: return true
         case 409: return !text.lowercased().contains("older position")
         default: return false
+        }
+    }
+
+    /// The kinds the server writes to a meetup's activity (pulse.go / social.go / sos.go `activity(...)`), as the web words
+    /// them (CircleScreen ActivityList); an unknown kind shows as it is.
+    static let activityKinds: Set<String> = ["created", "response", "sharing", "arrived", "proposed", "destination", "left", "removed",
+                                             "joined-code", "ended", "expired", "alert", "sos-safe", "sos-cancelled"]
+
+    static func activityText(kind: String, who: String, text: String) -> String {
+        guard activityKinds.contains(kind) else { return kind }
+        var key = "pulse.log." + kind
+        if kind == "arrived", text == "manual" { key += ".manual" }
+        if kind == "alert" { key += text == "sos" ? ".sos" : ".safety" }
+        let f = NSLocalizedString(key, comment: "")
+        switch kind {
+        case "ended", "expired": return f
+        case "destination": return String(format: f, text)
+        case "response", "proposed": return String(format: f, who, text)
+        default: return String(format: f, who)
         }
     }
 
@@ -637,7 +686,9 @@ final class PulseStore: ObservableObject {
 
     /// Sign-out: sharing stops everywhere (on the server too, while the session still works) and measuring stops.
     func signOut(token: String) async {
-        if !token.isEmpty, PulseSharer.shared.isSharingAnywhere {
+        // always while the session still works: a paused share (the app was relaunched) or a Stop still waiting for the server
+        // has no local share any more, but its consent and last position were left on the server
+        if !token.isEmpty {
             _ = try? await APIClient.shared.pulseCall("pulse/stop-all", method: "POST", token: token)
         }
         PulseSharer.shared.forgetAll()

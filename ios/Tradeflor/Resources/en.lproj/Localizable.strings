@@ -2784,3 +2784,28 @@
 "pulse.paused.denied" = "Location permission is needed to resume.";
 "pulse.create.finding" = "Finding…";
 "pulse.create.nearme.failed" = "Your location could not be found";
+"pulse.halfway.with" = "Halfway with %@";
+"pulse.halfway.sent" = "Meeting point proposed";
+
+/* Pulse page audit: walkie, activity feed (2026-11-21) */
+"pulse.walkie.askmic" = "Allow the microphone, then hold to talk.";
+"pulse.voice.cantplay" = "This voice message could not be played";
+"pulse.voice.len" = "Voice %d s";
+"pulse.feed.empty" = "Nothing yet.";
+"pulse.log.created" = "%@ created the meetup";
+"pulse.log.response" = "%@ answered: %@";
+"pulse.log.sharing" = "%@ started sharing location";
+"pulse.log.arrived" = "%@ arrived";
+"pulse.log.arrived.manual" = "%@ arrived (said “I'm here”)";
+"pulse.log.proposed" = "%@ proposed %@";
+"pulse.log.destination" = "Meeting place changed to %@";
+"pulse.log.left" = "%@ left";
+"pulse.log.removed" = "%@ was removed";
+"pulse.log.joined-code" = "%@ joined with the QR code";
+"pulse.log.ended" = "The organizer ended the meetup";
+"pulse.log.expired" = "The meetup ended (time)";
+"pulse.log.alert.sos" = "%@ sent an SOS alert";
+"pulse.log.alert.safety" = "%@ sent a safety alert";
+"pulse.log.sos-safe" = "%@ marked themself safe";
+"pulse.log.sos-cancelled" = "%@ cancelled their SOS";
+"pulse.code.expired" = "The code expired: make a new one";

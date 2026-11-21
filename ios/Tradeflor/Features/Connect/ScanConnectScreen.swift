@@ -96,6 +96,7 @@ struct ScanConnectScreen: View {
             ScanTiming.mark("tap to scanner screen")
             hub.present(presenterID)
             camera.onCode = { code in
+                if openPulse(code) { return }
                 if FlashTarget.parse(code) != nil {
                     camera.stop()
                     onResult(code)
@@ -441,6 +442,7 @@ struct ScanConnectScreen: View {
     private func openPasted() {
         let t = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
+        if openPulse(t) { return }
         guard FlashTarget.parse(t) != nil else { note = NSLocalizedString("sc.not.ours", comment: ""); return }
         pasteFocused = false
         camera.stop()
@@ -454,11 +456,25 @@ struct ScanConnectScreen: View {
             return
         }
         if data.count > Self.maxPhoto { note = NSLocalizedString("sc.photo.big", comment: ""); return }
-        guard let code = QRDecode.decode(data) else { note = NSLocalizedString("sc.photo.none", comment: ""); return }
+        guard let code = await Task.detached(priority: .userInitiated, operation: { QRDecode.decode(data) }).value else { note = NSLocalizedString("sc.photo.none", comment: ""); return }
+        if openPulse(code) { return }
         guard FlashTarget.parse(code) != nil else { note = NSLocalizedString("sc.not.ours", comment: ""); return }
         note = nil
         camera.stop()
         onResult(code)
+    }
+
+    /// A meetup's Instant Circle QR: the scanner closes, then the join preview opens (it is presented from the app's root,
+    /// so the scanner's cover must be gone first). Joining never shares a location.
+    private func openPulse(_ text: String) -> Bool {
+        guard let code = FlashTarget.pulseCode(text) else { return false }
+        camera.stop()
+        dismiss()
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            PulseStore.shared.joinCode = PulseStore.PulseJoinCode(id: code)
+        }
+        return true
     }
 
     private func close() {

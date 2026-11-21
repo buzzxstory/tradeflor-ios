@@ -2784,3 +2784,28 @@
 "pulse.paused.denied" = "يلزم إذن الموقع للاستئناف.";
 "pulse.create.finding" = "جارٍ التحديد…";
 "pulse.create.nearme.failed" = "تعذّر تحديد موقعك";
+"pulse.halfway.with" = "في منتصف الطريق مع %@";
+"pulse.halfway.sent" = "اقتُرحت نقطة اللقاء";
+
+/* Pulse page audit: walkie, activity feed (2026-11-21) */
+"pulse.walkie.askmic" = "اسمح باستخدام الميكروفون، ثم اضغط مطولاً للتحدث.";
+"pulse.voice.cantplay" = "تعذّر تشغيل هذه الرسالة الصوتية";
+"pulse.voice.len" = "صوت %d ث";
+"pulse.feed.empty" = "لا شيء بعد.";
+"pulse.log.created" = "%@ أنشأ اللقاء";
+"pulse.log.response" = "%@ أجاب: %@";
+"pulse.log.sharing" = "%@ بدأ مشاركة موقعه";
+"pulse.log.arrived" = "%@ وصل";
+"pulse.log.arrived.manual" = "%@ وصل (قال “أنا هنا”)";
+"pulse.log.proposed" = "%@ اقترح %@";
+"pulse.log.destination" = "تغيّر مكان اللقاء إلى %@";
+"pulse.log.left" = "%@ غادر";
+"pulse.log.removed" = "أُزيل %@";
+"pulse.log.joined-code" = "%@ انضم برمز QR";
+"pulse.log.ended" = "أنهى المنظّم اللقاء";
+"pulse.log.expired" = "انتهى اللقاء (انتهى الوقت)";
+"pulse.log.alert.sos" = "%@ أرسل نداء SOS";
+"pulse.log.alert.safety" = "%@ أرسل تنبيه أمان";
+"pulse.log.sos-safe" = "%@ أعلن أنه بأمان";
+"pulse.log.sos-cancelled" = "%@ ألغى نداء SOS";
+"pulse.code.expired" = "انتهت صلاحية الرمز: أنشئ رمزاً جديداً";

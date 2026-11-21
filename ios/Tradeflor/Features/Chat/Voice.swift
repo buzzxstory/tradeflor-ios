@@ -409,6 +409,25 @@ final class VoicePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
         }
     }
 
+    /// A clip already downloaded that AVFoundation cannot decode (a Pulse walkie clip recorded on the website as WebM / Ogg
+    /// Opus): played from memory in the web player, like a website voice note.
+    func playData(id: String, data: Data, mime: String) {
+        stop()
+        current = id
+        currentSpot = nil
+        startAt = 0
+        knownDuration = 0
+        progress = 0
+        begun = true
+        loading = true
+        webFallback = nil
+        Task {
+            await activateSession()
+            guard current == id else { return }
+            webLoad("data:\(mime);base64,\(data.base64EncodedString())")
+        }
+    }
+
     /// M4A / AAC plays in AVAudioPlayer; anything else (WebM / Ogg Opus from the website) in the web player.
     nonisolated static func isNative(_ mime: String?) -> Bool {
         let m = mime ?? ""

@@ -15,6 +15,12 @@ struct PulseSafetyCenter: View {
     let people: [String: PulsePerson]
     let sharingHere: Bool
     let onLeave: () -> Void
+    /// the organizer has no Leave here (for them it ended the meetup for everyone, under a "Leave" label; web hides it)
+    var isOrganizer = false
+    /// an ended meetup: no alert and no SOS (the server answers 410)
+    var ended = false
+    /// an alert or an SOS went out: the meetup reloads (its banner and the SOS button come from the view)
+    var onSent: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
     @State private var to = Set<String>()
     @State private var text = ""
@@ -33,12 +39,15 @@ struct PulseSafetyCenter: View {
                         Button { Task { await PulseSharer.shared.stop(circleID); dismiss() } } label: { Label("pulse.safety.stophere", systemImage: "location.slash") }
                     }
                     Button { Task { await PulseSharer.shared.stopAll(); dismiss() } } label: { Label("pulse.safety.stopall", systemImage: "location.slash.fill") }
-                    Button(role: .destructive) { onLeave() } label: { Label("pulse.leave", systemImage: "rectangle.portrait.and.arrow.right") }
+                    if !isOrganizer {
+                        Button(role: .destructive) { onLeave() } label: { Label("pulse.leave", systemImage: "rectangle.portrait.and.arrow.right") }
+                    }
                     Menu {
                         ForEach(members) { m in Button(name(m.user_id)) { blocking = m.user_id } }
                     } label: { Label("pulse.safety.block", systemImage: "hand.raised") }
                 } header: { Text("pulse.safety.yourlocation") }
 
+                if !ended {
                 Section {
                     ForEach(members) { m in
                         Button { if to.contains(m.user_id) { to.remove(m.user_id) } else { to.insert(m.user_id) } } label: {
@@ -69,12 +78,13 @@ struct PulseSafetyCenter: View {
                             HStack {
                                 Text(verbatim: name(d.user_id))
                                 Spacer()
-                                Text(LocalizedStringKey((d.seen_at ?? 0) > 0 ? "pulse.safety.seen" : (d.pushed_at ?? 0) > 0 ? "pulse.safety.reached" : "pulse.safety.notyet"))
-                                    .font(.caption).foregroundStyle((d.seen_at ?? 0) > 0 ? Theme.online : Theme.muted)
+                                Text(LocalizedStringKey(d.seen ? "pulse.safety.seen" : d.reached ? "pulse.safety.reached" : "pulse.safety.notyet"))
+                                    .font(.caption).foregroundStyle(d.seen ? Theme.online : Theme.muted)
                             }
                         }
                     }
                 } header: { Text("pulse.safety.alert") }
+                }
 
                 Section {
                     Text("pulse.safety.emergency").font(.footnote).foregroundStyle(Theme.muted)
@@ -85,7 +95,18 @@ struct PulseSafetyCenter: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
             .confirmationDialog(Text("pulse.safety.block.q"), isPresented: Binding(get: { blocking != nil }, set: { if !$0 { blocking = nil } }), titleVisibility: .visible) {
                 Button("pulse.safety.block", role: .destructive) {
-                    if let u = blocking { Task { try? await APIClient.shared.block(token: token, userID: u); await PulseStore.shared.reload(); dismiss() } }
+                    if let u = blocking {
+                        Task {
+                            do {
+                                try await APIClient.shared.block(token: token, userID: u)
+                                await PulseStore.shared.reload()
+                                onSent() // the meetup reloads without them
+                                dismiss()
+                            } catch {
+                                self.error = NSLocalizedString("pulse.err.other", comment: "")
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -94,6 +115,7 @@ struct PulseSafetyCenter: View {
                 sosCountdown = false
                 Task {
                     if await SOSCenter.shared.sendFromCountdown(circle: circleID, reason: reason, key: key, attach: attach) != nil {
+                        onSent()
                         dismiss()
                     } else {
                         error = NSLocalizedString("pulse.sos.failed", comment: "")
@@ -127,6 +149,7 @@ struct PulseSafetyCenter: View {
             sent = r.alert
             delivery = r.delivery ?? []
             error = nil
+            onSent()
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         } catch {
             self.error = NSLocalizedString((error as? PulseHTTPError)?.status == 429 ? "pulse.safety.toomany" : "pulse.err.other", comment: "")
@@ -187,23 +210,41 @@ struct PulseInstantCodeSheet: View {
     @State private var names: [String: PulsePerson] = [:]
     @State private var now = Date()
     @State private var error: String?
+    /// The QR, drawn once per code (it was drawn again, with a new CIContext, every second the countdown ticked)
+    @State private var qrImage: UIImage?
+    /// one timer for the sheet (one written in body is made again on every redraw)
+    @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private var link: String { "https://app.tradeflor.com/?pulse=" + (code ?? "") }
+    private var left: Int64 { max(0, expires - Int64(now.timeIntervalSince1970 * 1000)) }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    if let code, !code.isEmpty, let img = Self.qr(link) {
+                    // an expired code is not shown to be scanned (it only answered "expired"): make a new one (web)
+                    if let code, !code.isEmpty, expires > 0, left == 0 {
+                        Text("pulse.code.expired").font(.headline).multilineTextAlignment(.center)
+                        Button { Task { await newCode() } } label: { Label("pulse.code.make", systemImage: "qrcode").frame(minHeight: 44) }.buttonStyle(.borderedProminent)
+                    } else if let code, !code.isEmpty, let img = qrImage {
                         Image(uiImage: img).interpolation(.none).resizable().scaledToFit().frame(width: 240, height: 240)
                             .padding(12).background(.white, in: RoundedRectangle(cornerRadius: 16))
                             .accessibilityLabel(Text("pulse.code.qr"))
-                        let left = max(0, expires - Int64(now.timeIntervalSince1970 * 1000))
                         Text(verbatim: String(format: NSLocalizedString("pulse.code.valid", comment: ""), PulseRules.countdown(left))).font(.headline)
                         HStack {
                             ShareLink(item: link) { Label("pulse.code.share", systemImage: "square.and.arrow.up") }
                             Button { Task { await newCode() } } label: { Label("pulse.code.new", systemImage: "arrow.clockwise") }
-                            Button(role: .destructive) { Task { try? await APIClient.shared.pulseDelete(token: token, path: "pulse/circles/\(APIClient.pSeg(circleID))/code"); self.code = nil } } label: {
+                            Button(role: .destructive) {
+                                Task {
+                                    // shown as off only once the server turned it off (it said off even when that failed)
+                                    do {
+                                        try await APIClient.shared.pulseDelete(token: token, path: "pulse/circles/\(APIClient.pSeg(circleID))/code")
+                                        self.code = nil
+                                    } catch {
+                                        self.error = NSLocalizedString("pulse.err.other", comment: "")
+                                    }
+                                }
+                            } label: {
                                 Label("pulse.code.off", systemImage: "xmark.circle")
                             }
                         }
@@ -232,19 +273,22 @@ struct PulseInstantCodeSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("chat.close") { dismiss() } } }
         }
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { now = $0 }
+        .onReceive(ticker) { now = $0 }
+        .onChange(of: code) { c in qrImage = (c ?? "").isEmpty ? nil : Self.qr(link) }
         .onReceive(PulseStore.shared.frames.filter { [circleID] d in (d["circle_id"] as? String) == circleID && (d["e"] as? String) == "request" }) { _ in
             Task { await loadRequests() }
         }
         .task { await newCode(); await loadRequests() }
     }
 
+    private static let qrContext = CIContext()
+
     static func qr(_ text: String) -> UIImage? {
         let f = CIFilter.qrCodeGenerator()
         f.message = Data(text.utf8)
         f.correctionLevel = "M"
         guard let out = f.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)),
-              let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
+              let cg = qrContext.createCGImage(out, from: out.extent) else { return nil }
         return UIImage(cgImage: cg)
     }
 
