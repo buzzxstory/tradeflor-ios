@@ -4,7 +4,7 @@
 "NSPhotoLibraryUsageDescription" = "Tradeflor opens your photo library so you can send photos and videos and post statuses.";
 "NSPhotoLibraryAddUsageDescription" = "Tradeflor saves photos and videos you choose to keep into your library.";
 "NSFaceIDUsageDescription" = "Tradeflor uses Face ID to unlock your locked chats.";
-"NSLocationWhenInUseUsageDescription" = "Tradeflor shares your live location in a chat only when you choose to, for the time you pick, also while the app is in the background.";
+"NSLocationWhenInUseUsageDescription" = "Tradeflor shares your live location in a chat or a meetup only when you choose to, for the time you pick, also while the app is in the background. An SOS you send can include one snapshot of where you are.";
 "NSLocalNetworkUsageDescription" = "Tradeflor uses your local network to connect voice calls directly and with the best sound.";
 "QuickSearch" = "Search";
 "QuickNewChat" = "New Chat";

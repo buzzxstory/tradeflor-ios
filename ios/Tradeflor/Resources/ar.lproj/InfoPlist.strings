@@ -4,7 +4,7 @@
 "NSPhotoLibraryUsageDescription" = "يفتح Tradeflor مكتبة الصور لترسل صوراً وفيديوهات وتنشر حالات.";
 "NSPhotoLibraryAddUsageDescription" = "يحفظ Tradeflor في مكتبتك الصور والفيديوهات التي تختار الاحتفاظ بها.";
 "NSFaceIDUsageDescription" = "يستخدم Tradeflor بصمة الوجه Face ID لفتح المحادثات المقفلة.";
-"NSLocationWhenInUseUsageDescription" = "يشارك Tradeflor موقعك المباشر في محادثة فقط عندما تختار ذلك، وللمدة التي تحددها، حتى والتطبيق في الخلفية.";
+"NSLocationWhenInUseUsageDescription" = "يشارك Tradeflor موقعك المباشر في محادثة أو لقاء فقط عندما تختار ذلك، وللمدة التي تحددها، حتى والتطبيق في الخلفية. يمكن أن يتضمن نداء SOS الذي ترسله لقطة واحدة لمكانك.";
 "NSLocalNetworkUsageDescription" = "يستخدم Tradeflor شبكتك المحلية لتوصيل المكالمات الصوتية مباشرة وبأفضل جودة صوت.";
 "QuickSearch" = "بحث";
 "QuickNewChat" = "محادثة جديدة";

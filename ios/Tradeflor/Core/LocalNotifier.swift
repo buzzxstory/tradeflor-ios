@@ -574,7 +574,7 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
             // an SOS in front: the emergency screen comes from GET /pulse/sos (also when the live connection was down);
             // the notice stays in Notification Center
             Task { @MainActor in SOSCenter.shared.reloadSoon() }
-            completionHandler([.list])
+            completionHandler([.banner, .list, .sound])
         } else if notification.request.content.userInfo["tf"] != nil {
             completionHandler([]) // a remote push ("New message"): the app in front shows the real message itself
         } else if notification.request.content.categoryIdentifier == LocalNotifier.missedCallCategory {

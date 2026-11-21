@@ -29,7 +29,10 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     private let manager = CLLocationManager()
     private var permissionWaiters: [CheckedContinuation<CLAuthorizationStatus, Never>] = []
-    private var fixWaiters: [CheckedContinuation<CLLocation?, Never>] = []
+    /// One waiter per caller: a caller's own time limit ends only its own wait (audit 13).
+    private var fixWaiters: [UUID: CheckedContinuation<CLLocation?, Never>] = [:]
+    /// Bumped by every Stop: a start() that was still asking when the person stopped does not switch sharing back on.
+    private var stopEpoch = 0
     private var expiryTimer: Timer?
     private var token: String { PulseStore.shared.token }
 
@@ -49,6 +52,7 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// Share my location in this meetup (0 minutes = until it ends). Throws `denied` when the system permission is not
     /// given, `noFix` when no position came, `server` when the consent was refused; nothing is shared then.
     func start(circle: String, minutes: Int, dest: CLLocationCoordinate2D?) async throws {
+        let epoch = stopEpoch
         // 1-2. the system permission (asked only now, after the person tapped Share)
         // a stop the server has not confirmed comes first: sharing never resumes while it is pending
         if stopPending.contains(circle) {
@@ -68,6 +72,12 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
         } catch let e as PulseHTTPError {
             throw ShareError.server(e.status)
         }
+        // Stop (here or everywhere) while this was asking: the stop wins, the consent just given is taken back (audit 14)
+        guard epoch == stopEpoch else {
+            stopPending.insert(circle)
+            await confirmStop(circle)
+            throw ShareError.server(0)
+        }
         struct U: Decodable { var until: Int64? }
         let until = (try? JSONDecoder().decode(U.self, from: data))?.until
         shares[circle] = Share(until: (until ?? 0) > 0 ? until : nil, dest: dest)
@@ -79,6 +89,7 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// Stop Sharing: the server deletes my position at once (never rate limited); measuring stops here first.
     /// Without an answer: "Stopped on this device. Waiting for the server to confirm..." and retried until it answers.
     func stop(_ circle: String) async {
+        stopEpoch += 1
         stopLocally(circle)
         stopPending.insert(circle)
         await confirmStop(circle)
@@ -107,15 +118,17 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// Stop sharing everywhere (offline: each meetup is stopped one by one as soon as the server answers).
     func stopAll() async {
+        stopEpoch += 1
         let ids = Array(shares.keys)
         shares = [:]
         updateMeasuring()
         do {
             _ = try await APIClient.shared.pulseCall("pulse/stop-all", method: "POST", token: token)
         } catch is PulseHTTPError {
+            // every meetup retried at the same time, not one after the other (audit 15)
             for id in ids {
                 stopPending.insert(id)
-                await confirmStop(id)
+                Task { await self.confirmStop(id) }
             }
         } catch {}
     }
@@ -129,6 +142,7 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
 
     /// Sign-out: nothing keeps measuring.
     func forgetAll() {
+        stopEpoch += 1
         shares = [:]
         for t in stopRetry.values { t.cancel() }
         stopRetry = [:]
@@ -148,6 +162,17 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
         return await firstFix()
     }
 
+    /// The one position an SOS or a safety alert may carry (audit 3, 11): never a permission prompt in an emergency, at most
+    /// `maxWait` seconds, and never an old reading (older than 2 minutes = none). nil = the alert goes without a position.
+    func snapshotFix(maxWait: Double = 3) async -> CLLocation? {
+        let s = manager.authorizationStatus
+        guard s == .authorizedWhenInUse || s == .authorizedAlways else { return nil }
+        if let l = lastFix, -l.timestamp.timeIntervalSinceNow < 30 { return l }
+        let l = await firstFix(timeout: maxWait) ?? lastFix
+        guard let l, -l.timestamp.timeIntervalSinceNow < 120 else { return nil }
+        return l
+    }
+
     // MARK: permission and fixes
 
     private func permission() async -> CLAuthorizationStatus {
@@ -159,23 +184,28 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
     }
 
-    private func firstFix() async -> CLLocation? {
+    private func firstFix(timeout: Double = 20) async -> CLLocation? {
         if let l = lastFix, abs(l.timestamp.timeIntervalSinceNow) < 20 { return l }
+        let id = UUID()
         return await withCheckedContinuation { c in
-            fixWaiters.append(c)
+            fixWaiters[id] = c
             manager.desiredAccuracy = kCLLocationAccuracyBest
             manager.requestLocation()
             Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 20_000_000_000)
-                self?.finishFixWaiters(nil)
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                self?.finishWaiter(id)
             }
         }
     }
 
+    private func finishWaiter(_ id: UUID) {
+        fixWaiters.removeValue(forKey: id)?.resume(returning: nil)
+    }
+
     private func finishFixWaiters(_ l: CLLocation?) {
         let w = fixWaiters
-        fixWaiters = []
-        for c in w { c.resume(returning: l) }
+        fixWaiters = [:]
+        for c in w.values { c.resume(returning: l) }
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
@@ -268,8 +298,9 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func checkExpiry() {
         let now = PulseRules.nowMs()
         for (id, s) in shares where (s.until ?? .max) <= now { stopLocally(id) }
-        // a still person stays "live": the heartbeat goes even when no new reading arrived
-        if let l = lastFix { for id in Array(shares.keys) { Task { await self.consider(l, for: id) } } }
+        // a still person stays "live" (audit 4): the distance filter gives no new reading when nobody moves, and the same
+        // reading again is never sent (shouldSend refuses a 0 ms gap), so a fresh one is measured
+        if let l = lastFix, -l.timestamp.timeIntervalSinceNow > 20 { manager.requestLocation() }
     }
 
     /// The finest accuracy any shared meetup needs now; Low Power Mode: the still settings at most.

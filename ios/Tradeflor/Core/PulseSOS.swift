@@ -123,6 +123,9 @@ final class SOSCenter: ObservableObject {
     /// The emergency screen on show (nil = closed or minimized).
     @Published var shown: String?
     @Published var toast: String?
+    /// Alerts known to be over (resolved, cancelled, lapsed, or gone from the list): their screen says so; any other id not in
+    /// the list yet is still loading (an event can come before GET /pulse/sos has it, audit 8).
+    @Published private(set) var closed = Set<String>()
 
     private var token = ""
     private(set) var me = ""
@@ -139,6 +142,11 @@ final class SOSCenter: ObservableObject {
         NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification).receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.reloadSoon() }.store(in: &subs)
         PulseStore.shared.frames.receive(on: RunLoop.main).sink { [weak self] d in self?.frame(d) }.store(in: &subs)
+        // "seen" only once the person can really see it: the app in front and not under App Lock (audit 5)
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification).receive(on: RunLoop.main)
+            .sink { [weak self] _ in if let s = self?.shown { self?.markSeen(s) } }.store(in: &subs)
+        AppLock.shared.$locked.receive(on: RunLoop.main)
+            .sink { [weak self] locked in if !locked, let s = self?.shown { self?.markSeen(s) } }.store(in: &subs)
     }
 
     func attach(token: String, me: String) {
@@ -156,7 +164,7 @@ final class SOSCenter: ObservableObject {
     func clear() {
         reloadTask?.cancel()
         token = ""; me = ""
-        active = []; people = [:]; shown = nil; toast = nil
+        active = []; people = [:]; shown = nil; toast = nil; closed = []
         delivered = []; seenSent = []; opened = []
         pendingPush = nil
     }
@@ -183,6 +191,8 @@ final class SOSCenter: ObservableObject {
         people.merge(r.people ?? [:]) { _, n in n }
         PulseStore.shared.noteName(r.people ?? [:])
         let gone = Set(active.map(\.id)).subtracting(list.map(\.id))
+        closed.formUnion(gone)
+        closed.formUnion(list.filter { !$0.isActive }.map(\.id))
         active = list
         if let s = shown, gone.contains(s) { shown = nil }
         for e in list where e.user_id != me && e.isActive {
@@ -198,12 +208,20 @@ final class SOSCenter: ObservableObject {
         }
     }
 
-    /// The app received this SOS (event, push or list): told once.
+    /// The app received this SOS (event, push or list): told once it went through; a failure is tried again on the next list
+    /// (audit 6). `inFlight` keeps two reloads from sending it twice at the same time.
+    private var inFlight = Set<String>()
+
     private func acknowledge(_ id: String) {
-        guard !delivered.contains(id), !token.isEmpty else { return }
-        delivered.insert(id)
+        let k = "d:" + id
+        guard !delivered.contains(id), !inFlight.contains(k), !token.isEmpty else { return }
+        inFlight.insert(k)
         let tok = token
-        Task { _ = try? await APIClient.shared.pulseCall("pulse/alerts/\(APIClient.pSeg(id))/delivered", method: "POST", token: tok, body: [:]) }
+        Task {
+            let ok = (try? await APIClient.shared.pulseCall("pulse/alerts/\(APIClient.pSeg(id))/delivered", method: "POST", token: tok, body: [:])) != nil
+            inFlight.remove(k)
+            if ok, tok == token { delivered.insert(id) }
+        }
     }
 
     func open(_ id: String) {
@@ -211,12 +229,19 @@ final class SOSCenter: ObservableObject {
         shown = id
     }
 
-    /// The screen is on show: seen, once.
+    /// The screen is on show and the person can see it (app in front, not under App Lock): seen, once it went through.
     func markSeen(_ id: String) {
-        guard let e = emergency(id), e.user_id != me, !seenSent.contains(id), !token.isEmpty else { return }
-        seenSent.insert(id)
+        guard shown == id, let e = emergency(id), e.user_id != me, !seenSent.contains(id), !token.isEmpty,
+              UIApplication.shared.applicationState == .active, !AppLock.shared.locked else { return }
+        let k = "s:" + id
+        guard !inFlight.contains(k) else { return }
+        inFlight.insert(k)
         let tok = token
-        Task { _ = try? await APIClient.shared.pulseCall("pulse/alerts/\(APIClient.pSeg(id))/seen", method: "POST", token: tok, body: [:]); reloadSoon() }
+        Task {
+            let ok = (try? await APIClient.shared.pulseCall("pulse/alerts/\(APIClient.pSeg(id))/seen", method: "POST", token: tok, body: [:])) != nil
+            inFlight.remove(k)
+            if ok, tok == token { seenSent.insert(id); reloadSoon() }
+        }
     }
 
     /// A push tapped (pulse-alert-<id>): find it and open it.
@@ -228,9 +253,37 @@ final class SOSCenter: ObservableObject {
         }
     }
 
-    func setResponding(_ id: String, _ on: Bool) async {
-        _ = try? await APIClient.shared.pulseCall("pulse/alerts/\(APIClient.pSeg(id))/responding", method: "POST", token: token, body: ["on": on])
-        await reload()
+    /// false = it did not go through (the screen says so, audit 10).
+    func setResponding(_ id: String, _ on: Bool) async -> Bool {
+        do {
+            _ = try await APIClient.shared.pulseCall("pulse/alerts/\(APIClient.pSeg(id))/responding", method: "POST", token: token, body: ["on": on])
+            await reload()
+            return true
+        } catch {
+            await reload()
+            return false
+        }
+    }
+
+    /// The screen is open on an alert the list does not have yet: asked again a few times.
+    func loadMissing(_ id: String) async {
+        for _ in 0..<4 where emergency(id) == nil && !closed.contains(id) {
+            await reload()
+            if emergency(id) != nil { return }
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+    }
+
+    /// Countdown finished: the snapshot (only if "Attach my location" stayed on, at most 3 s, never a permission prompt),
+    /// then the alert with this confirmation's key; the emergency screen opens on success. nil = not sent.
+    func sendFromCountdown(circle: String, reason: String, key: String, attach: Bool) async -> String? {
+        var position: [String: Any]?
+        if attach, let l = await PulseSharer.shared.snapshotFix(maxWait: 3) { position = Self.snapshot(l) }
+        guard let id = await send(circle: circle, reason: reason, key: key, position: position) else { return nil }
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        toast = NSLocalizedString("sos.toast.created", comment: "")
+        if !id.isEmpty { open(id) }
+        return id
     }
 
     func resolve(_ id: String, how: String) async -> Bool {
@@ -276,7 +329,8 @@ final class SOSCenter: ObservableObject {
         case "alert":
             guard let a = d["alert"] as? [String: Any], (a["kind"] as? String) == "sos", let id = a["id"] as? String else { return }
             acknowledge(id)
-            Task { await reload(); open(id) }
+            open(id) // the screen shows "loading" until the list has it
+            Task { await loadMissing(id) }
         case "alert-delivery", "alert-seen":
             reloadSoon()
         case "sos-responding":
@@ -289,7 +343,10 @@ final class SOSCenter: ObservableObject {
             let how = d["how"] as? String ?? "safe"
             let key = how == "cancelled" ? "sos.toast.cancelled" : how == "lapsed" ? "sos.toast.lapsed" : "sos.toast.safe"
             if u != me { toast = String(format: NSLocalizedString(key, comment: ""), name(u)) }
-            if let id = d["alert_id"] as? String, shown == id { shown = nil }
+            if let id = d["alert_id"] as? String {
+                closed.insert(id)
+                if shown == id { shown = nil }
+            }
             reloadSoon()
         default: break
         }

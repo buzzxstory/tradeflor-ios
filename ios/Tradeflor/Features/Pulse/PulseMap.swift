@@ -84,9 +84,24 @@ struct PulseMapView: UIViewRepresentable {
         return map
     }
 
+    /// What the map shows; the meetup redraws every second, the map only when this changed (audit 19).
+    struct SyncKey: Equatable {
+        var style: String?
+        var people: [PulseMapPerson]
+        var dest: PulseMapDest?
+        var camera: PulseCamera
+        var selected: String?
+        var beacons: [PulseSOSBeacon]
+        var bucket: Int
+    }
+
     func updateUIView(_ map: MLNMapView, context: Context) {
         let c = context.coordinator
         c.parent = self
+        let key = SyncKey(style: styleURL, people: people, dest: dest, camera: camera, selected: selected, beacons: beacons,
+                          bucket: Int(Date().timeIntervalSince1970 / 10))
+        guard key != c.lastSync else { return }
+        c.lastSync = key
         c.sync()
     }
 
@@ -159,6 +174,7 @@ struct PulseMapView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, MLNMapViewDelegate {
         var parent: PulseMapView
+        var lastSync: SyncKey?
         weak var map: MLNMapView?
         private var annotations: [String: PersonAnnotation] = [:]
         private var shown: [String: PulseMapPerson] = [:]

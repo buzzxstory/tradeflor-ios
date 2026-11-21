@@ -4,8 +4,9 @@ import PhotosUI
 
 // MARK: Safety center
 
-/// Stop here / everywhere, leave, block; an alert to chosen people (location off by default), SOS held for 2 s, the
-/// delivery shown honestly, and the emergency note: Tradeflor does not contact emergency services.
+/// Stop here / everywhere, leave, block; an alert to chosen people (location off by default); SOS opens the same countdown
+/// as the map's SOS button (one key, pauses in the background, one snapshot, audit 2); the delivery shown honestly, and the
+/// emergency note: Tradeflor does not contact emergency services.
 struct PulseSafetyCenter: View {
     let token: String
     let me: String
@@ -20,7 +21,7 @@ struct PulseSafetyCenter: View {
     @State private var withLocation = false
     @State private var sent: PulseAlert?
     @State private var delivery: [PulseAlertDelivery] = []
-    @State private var sosProgress = false
+    @State private var sosCountdown = false
     @State private var error: String?
     @State private var blocking: String?
 
@@ -53,15 +54,15 @@ struct PulseSafetyCenter: View {
                     Toggle("pulse.safety.withloc", isOn: $withLocation)
                     Button { Task { await send("safety") } } label: { Label("pulse.safety.send", systemImage: "exclamationmark.bubble.fill") }
                         .disabled(to.isEmpty)
-                    // SOS: held for 2 seconds, never a single tap
-                    Text("pulse.safety.sos")
-                        .font(.headline.weight(.heavy)).foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, minHeight: 54)
-                        .background(sosProgress ? Theme.danger.opacity(0.7) : Theme.danger, in: RoundedRectangle(cornerRadius: 12))
-                        .onLongPressGesture(minimumDuration: 2, pressing: { sosProgress = $0 }) { Task { await send("sos") } }
-                        .accessibilityLabel(Text("pulse.safety.sos.ax"))
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityAction { Task { await send("sos") } }
+                    // SOS: the same countdown as the map's button (never sent by one tap)
+                    Button { sosCountdown = true } label: {
+                        Text("pulse.safety.sos2")
+                            .font(.headline.weight(.heavy)).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, minHeight: 54)
+                            .background(Theme.danger, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(SOSCenter.shared.active.contains { $0.isActive && $0.user_id == me && $0.circle_id == circleID })
                     if let error { Text(verbatim: error).foregroundStyle(Theme.danger).font(.footnote) }
                     if sent != nil {
                         ForEach(delivery, id: \.user_id) { d in
@@ -88,6 +89,18 @@ struct PulseSafetyCenter: View {
                 }
             }
         }
+        .fullScreenCover(isPresented: $sosCountdown) {
+            PulseSOSCountdown(others: members.count) { reason, key, attach in
+                sosCountdown = false
+                Task {
+                    if await SOSCenter.shared.sendFromCountdown(circle: circleID, reason: reason, key: key, attach: attach) != nil {
+                        dismiss()
+                    } else {
+                        error = NSLocalizedString("pulse.sos.failed", comment: "")
+                    }
+                }
+            } onCancel: { sosCountdown = false }
+        }
         .task(id: sent?.id) {
             // the delivery, honestly: reached their app / saw it
             guard let a = sent else { return }
@@ -105,11 +118,8 @@ struct PulseSafetyCenter: View {
     private func send(_ kind: String) async {
         let recipients = to.isEmpty ? members.map(\.user_id) : Array(to)
         var body: [String: Any] = ["kind": kind, "text": String(text.prefix(280)), "to": recipients]
-        var fix = PulseSharer.shared.lastFix
-        if withLocation, fix == nil { fix = await PulseSharer.shared.readOnce() }
-        if withLocation, let l = fix {
-            body["position"] = ["lat": l.coordinate.latitude, "lon": l.coordinate.longitude, "accuracy": l.horizontalAccuracy]
-        }
+        // a fresh reading only (at most 2 minutes old, with its time and source), or none (audit 11)
+        if withLocation, let l = await PulseSharer.shared.snapshotFix(maxWait: 3) { body["position"] = SOSCenter.snapshot(l) }
         do {
             let d = try await APIClient.shared.pulsePost(token: token, circle: circleID, "alerts", body: body)
             struct R: Decodable { var alert: PulseAlert; var delivery: [PulseAlertDelivery]? }

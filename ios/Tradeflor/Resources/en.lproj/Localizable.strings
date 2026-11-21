@@ -2457,8 +2457,6 @@
 "pulse.safety.message" = "Message";
 "pulse.safety.withloc" = "Include my current location";
 "pulse.safety.send" = "Send safety alert";
-"pulse.safety.sos" = "SOS — hold for 2 seconds";
-"pulse.safety.sos.ax" = "SOS. Hold for 2 seconds to send.";
 "pulse.safety.seen" = "✓ saw it";
 "pulse.safety.reached" = "reached their app, not confirmed yet";
 "pulse.safety.notyet" = "not reached yet";
@@ -2596,8 +2594,6 @@
 /* Meetup SOS (2026-11-21) */
 "pulse.sos.button" = "SOS. Alert everyone in this meetup";
 "pulse.sos.sending" = "Sending SOS";
-"pulse.sos.to" = "To %d people in this meetup, with your location (live, until you say you're safe)";
-"pulse.sos.to.sharing" = "To %d people in this meetup, with your live location";
 "pulse.sos.r.help" = "I need help";
 "pulse.sos.r.accident" = "Accident";
 "pulse.sos.r.danger" = "I'm in danger";
@@ -2605,7 +2601,6 @@
 "pulse.sos.now" = "Send now";
 "pulse.sos.note" = "Tradeflor alerts your friends. It does not call emergency services and cannot promise anyone sees the alert in time.";
 "pulse.sos.mine" = "Your SOS is active";
-"pulse.sos.mine.sub" = "Everyone in this meetup was alerted";
 "pulse.sos.safe" = "I'm safe";
 "pulse.sos.other" = "%@ needs help";
 "pulse.sos.ago" = "%d min ago";
@@ -2765,3 +2760,9 @@
 "sos.attach2" = "Attach my location";
 "sos.footer.1" = "Alerts your friends only — not emergency services.";
 "sos.footer.2" = "Delivery can't be guaranteed.";
+
+/* Pulse audit fixes */
+"sos.loading" = "Loading the SOS…";
+"sos.responding.failed" = "Could not update. Check the connection and try again.";
+"pulse.leave.offline" = "No connection: your sharing stopped on this device; leaving will work once you are online.";
+"pulse.safety.sos2" = "SOS";

@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 /// The emergency screen, on any tab (PULSE_SAFETY_RESPONSE_SPEC.md sections 2 and 3). A recipient sees "EMERGENCY — FRIEND
 /// NEEDS HELP" with Call, Message, View on map, the attached position, I'm responding and Contact emergency services (a
@@ -14,6 +15,8 @@ struct PulseEmergencyScreen: View {
     @State private var lines = false
     @State private var busy = false
     @State private var problem: String?
+    // one timer for the life of the screen (a Timer.publish written in body is made again on every redraw, audit 20)
+    @State private var ticker = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
     private var e: PulseEmergency? { center.emergency(alertID) }
     private var mine: Bool { e?.user_id == center.me }
@@ -25,18 +28,26 @@ struct PulseEmergencyScreen: View {
                 .ignoresSafeArea()
             if let e {
                 ScrollView { content(e).padding(20) }
-            } else {
+            } else if center.closed.contains(alertID) {
                 VStack(spacing: 14) {
                     Text("sos.closed").font(.headline)
                     Button("chat.close") { center.shown = nil }
                 }
+            } else {
+                // an event came before the list had it: loading, asked again (audit 8)
+                VStack(spacing: 14) {
+                    ProgressView().tint(.white)
+                    Text("sos.loading").font(.headline)
+                    Button("sos.minimize") { center.shown = nil }.font(.footnote.weight(.semibold))
+                }
+                .task(id: alertID) { await center.loadMissing(alertID) }
             }
         }
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
         .onAppear { center.markSeen(alertID) }
         .onChange(of: center.active) { _ in center.markSeen(alertID) } // opened from a push before the list came
-        .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { now = $0 }
+        .onReceive(ticker) { now = $0 }
         .alert(Text("sos.safe.q"), isPresented: $askSafe) {
             Button("sos.safe.confirm") { Task { await close("safe") } }
             Button("sos.safe.keep", role: .cancel) {}
@@ -167,7 +178,13 @@ struct PulseEmergencyScreen: View {
                 }
             }
         }
-        Button { Task { busy = true; await center.setResponding(e.id, !responding); busy = false } } label: {
+        Button {
+            Task {
+                busy = true
+                problem = await center.setResponding(e.id, !responding) ? nil : NSLocalizedString("sos.responding.failed", comment: "")
+                busy = false
+            }
+        } label: {
             Label(LocalizedStringKey(responding ? "sos.responding.undo" : "sos.responding"), systemImage: responding ? "arrow.uturn.backward" : "figure.run")
                 .font(.headline.weight(.heavy)).frame(maxWidth: .infinity, minHeight: 52)
                 .background(.white, in: RoundedRectangle(cornerRadius: 16)).foregroundStyle(Theme.hex(0xB8102A))
@@ -269,5 +286,117 @@ struct PulseSOSToast: View {
                     if center.toast == t { center.toast = nil }
                 }
         }
+    }
+}
+
+
+/// Pulse SOS above every sheet and full-screen cover (audit 1): the emergency screen, a safety alert sent to me, the red
+/// pill and the toasts live in their own window over the app's window (under App Lock's window, so nothing shows while the
+/// app is locked). Outside the full screen only the pill takes touches; the rest passes through to the app.
+@MainActor
+final class SOSWindow {
+    static let shared = SOSWindow()
+    private var window: SOSPassWindow?
+    private var host: UIHostingController<AnyView>?
+    private var subs = Set<AnyCancellable>()
+    private var token = ""
+    /// The pill's frame in the window (the only place that takes touches while nothing covers the screen).
+    var hot: CGRect = .zero
+    /// The emergency screen or a safety alert is up: the whole window takes touches.
+    private(set) var full = false
+
+    private init() {
+        let c = SOSCenter.shared, p = PulseStore.shared, calls = CallManager.shared
+        Publishers.CombineLatest4(c.$shown, c.$active, c.$toast, p.$incomingAlert)
+            .combineLatest(calls.$showScreen)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.update() }
+            .store(in: &subs)
+    }
+
+    func attach(token: String) {
+        guard token != self.token else { return }
+        self.token = token
+        window?.isHidden = true
+        window = nil
+        host = nil
+        update()
+    }
+
+    func detach() {
+        token = ""
+        window?.isHidden = true
+        window = nil
+        host = nil
+    }
+
+    private func update() {
+        let c = SOSCenter.shared
+        let callUp = CallManager.shared.showScreen // a call screen is never hidden under it
+        full = !callUp && (c.shown != nil || PulseStore.shared.incomingAlert != nil)
+        let wanted = !token.isEmpty && !callUp && (full || c.active.contains(where: \.isActive) || c.toast != nil)
+        if wanted, window == nil { make() }
+        guard let w = window else { return }
+        w.isHidden = !wanted
+        host?.view.accessibilityViewIsModal = full
+        if full, !w.isKeyWindow { w.makeKey() }
+    }
+
+    private func make() {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first(where: { $0.activationState != .unattached })
+        else { return }
+        let w = SOSPassWindow(windowScene: scene)
+        w.windowLevel = .alert - 1 // over the app's sheets and covers, under App Lock (.alert + 1 / + 2)
+        let h = UIHostingController(rootView: AnyView(SOSLayer(token: token)))
+        h.view.backgroundColor = .clear
+        w.rootViewController = h
+        w.overrideUserInterfaceStyle = .dark
+        w.isHidden = false
+        window = w
+        host = h
+    }
+}
+
+final class SOSPassWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let s = SOSWindow.shared
+        guard s.full || s.hot.insetBy(dx: -6, dy: -6).contains(point) else { return nil }
+        return super.hitTest(point, with: event)
+    }
+}
+
+private struct SOSHotKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { let n = nextValue(); if n != .zero { value = n } }
+}
+
+/// What the SOS window shows: the emergency screen, else a safety alert, else the pill and the toast at the top.
+private struct SOSLayer: View {
+    let token: String
+    @ObservedObject private var center = SOSCenter.shared
+    @ObservedObject private var pulse = PulseStore.shared
+    @ObservedObject private var calls = CallManager.shared
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.clear.ignoresSafeArea().allowsHitTesting(false)
+            if calls.showScreen {
+                EmptyView()
+            } else if let id = center.shown {
+                PulseEmergencyScreen(token: token, alertID: id).id(id)
+                    .transition(.move(edge: .bottom))
+            } else if let a = pulse.incomingAlert {
+                PulseAlertScreen(token: token, alert: a) { pulse.incomingAlert = nil }
+                    .transition(.opacity)
+            } else {
+                VStack(spacing: 6) {
+                    PulseEmergencyPill()
+                        .background(GeometryReader { g in Color.clear.preference(key: SOSHotKey.self, value: g.frame(in: .global)) })
+                    PulseSOSToast().allowsHitTesting(false)
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: center.shown)
+        .onPreferenceChange(SOSHotKey.self) { SOSWindow.shared.hot = $0 }
     }
 }

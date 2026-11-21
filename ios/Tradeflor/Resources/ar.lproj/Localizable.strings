@@ -2457,8 +2457,6 @@
 "pulse.safety.message" = "الرسالة";
 "pulse.safety.withloc" = "أرفق موقعي الحالي";
 "pulse.safety.send" = "أرسل تنبيه أمان";
-"pulse.safety.sos" = "SOS — اضغط ثانيتين";
-"pulse.safety.sos.ax" = "SOS. اضغط ثانيتين للإرسال.";
 "pulse.safety.seen" = "✓ رآه";
 "pulse.safety.reached" = "وصل إلى تطبيقه، لم يُؤكَّد بعد";
 "pulse.safety.notyet" = "لم يصل بعد";
@@ -2596,8 +2594,6 @@
 /* Meetup SOS (2026-11-21) */
 "pulse.sos.button" = "SOS. نبّه كل من في هذا اللقاء";
 "pulse.sos.sending" = "جارٍ إرسال SOS";
-"pulse.sos.to" = "إلى %d أشخاص في هذا اللقاء، مع موقعك (مباشرة، حتى تقول إنك بأمان)";
-"pulse.sos.to.sharing" = "إلى %d أشخاص في هذا اللقاء، مع موقعك المباشر";
 "pulse.sos.r.help" = "أحتاج مساعدة";
 "pulse.sos.r.accident" = "حادث";
 "pulse.sos.r.danger" = "أنا في خطر";
@@ -2605,7 +2601,6 @@
 "pulse.sos.now" = "أرسل الآن";
 "pulse.sos.note" = "Tradeflor ينبّه أصدقاءك. لا يتصل بخدمات الطوارئ ولا يضمن أن يرى أحد التنبيه في الوقت المناسب.";
 "pulse.sos.mine" = "نداء SOS الخاص بك نشط";
-"pulse.sos.mine.sub" = "نُبّه كل من في هذا اللقاء";
 "pulse.sos.safe" = "أنا بأمان";
 "pulse.sos.other" = "%@ يحتاج مساعدة";
 "pulse.sos.ago" = "قبل %d د";
@@ -2765,3 +2760,9 @@
 "sos.attach2" = "إرفاق موقعي";
 "sos.footer.1" = "ينبّه أصدقاءك فقط — ليس خدمات الطوارئ.";
 "sos.footer.2" = "لا يمكن ضمان الوصول.";
+
+/* Pulse audit fixes */
+"sos.loading" = "جارٍ تحميل نداء SOS…";
+"sos.responding.failed" = "تعذّر التحديث. تحقق من الاتصال وحاول مجددًا.";
+"pulse.leave.offline" = "لا يوجد اتصال: توقفت مشاركتك على هذا الجهاز، وستنجح المغادرة عند عودة الاتصال.";
+"pulse.safety.sos2" = "SOS";

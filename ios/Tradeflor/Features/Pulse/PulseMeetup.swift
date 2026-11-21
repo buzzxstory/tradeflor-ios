@@ -14,6 +14,7 @@ struct PulseMeetupScreen: View {
     @ObservedObject private var pulse = PulseStore.shared
     @ObservedObject private var sharer = PulseSharer.shared
     @ObservedObject private var sos = SOSCenter.shared
+    @State private var secondTicker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     @State private var view: PulseView?
     @State private var invitation: PulseInvitation?
@@ -86,7 +87,7 @@ struct PulseMeetupScreen: View {
         }
         .foregroundStyle(.white)
         .task { await load() }
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { d in
+        .onReceive(secondTicker) { d in
             now = d
             flashBubble = flashBubble.filter { $0.value.until > d }
         }
@@ -643,19 +644,11 @@ struct PulseMeetupScreen: View {
     /// Sends the SOS to the meetup: one key per confirmation (its retries reuse it), at most one position snapshot (only when
     /// "Attach my current location" stayed on), and never starts live sharing because of it.
     private func sendSOS(_ reason: String, key: String, attach: Bool) async {
-        var position: [String: Any]?
-        if attach {
-            var fix = sharer.lastFix
-            if fix.map({ -$0.timestamp.timeIntervalSinceNow > 60 }) ?? true { fix = await sharer.readOnce() ?? fix }
-            if let l = fix { position = SOSCenter.snapshot(l) }
-        }
-        guard let id = await SOSCenter.shared.send(circle: circleID, reason: reason, key: key, position: position) else {
+        // the snapshot waits at most 3 s and never asks for permission in an emergency (audit 3)
+        guard await SOSCenter.shared.sendFromCountdown(circle: circleID, reason: reason, key: key, attach: attach) != nil else {
             flash = NSLocalizedString("pulse.sos.failed", comment: "")
             return
         }
-        UINotificationFeedbackGenerator().notificationOccurred(.warning)
-        SOSCenter.shared.toast = NSLocalizedString("sos.toast.created", comment: "")
-        if !id.isEmpty { SOSCenter.shared.open(id) }
         await load()
     }
 
@@ -1010,7 +1003,7 @@ struct PulseMeetupScreen: View {
                 sheetHeader("pulse.findfriend")
                 let sharing = members.filter { $0.user_id != me && locations[$0.user_id] != nil }
                 let others = members.filter { $0.user_id != me && ($0.response == "going" || $0.response == "maybe" || $0.role == "organizer") }
-                ForEach(sharing) { m in friendCard(m, locations[m.user_id]!) }
+                ForEach(sharing) { m in if let l = locations[m.user_id] { friendCard(m, l) } }
                 // nobody shares: the first friend is shown, with what to expect and a way to reach them
                 if sharing.isEmpty {
                     if let first = others.first { notSharingCard(first) } else {
@@ -1287,9 +1280,16 @@ struct PulseMeetupScreen: View {
         flashBubble[me] = (t, Date().addingTimeInterval(6))
     }
 
+    /// Leave / End: sharing stops here at once and its revocation is retried until the server confirms (audit 9); without
+    /// an answer the screen stays and says so.
     private func leaveOrEnd() async {
-        PulseSharer.shared.stopLocally(circleID)
-        _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, isOrganizer ? "end" : "leave")
+        if sharer.isSharing(circleID) || sharer.stopPending.contains(circleID) { await sharer.stop(circleID) }
+        do {
+            _ = try await APIClient.shared.pulsePost(token: token, circle: circleID, isOrganizer ? "end" : "leave")
+        } catch let e as PulseHTTPError where e.status == 0 || e.status >= 500 {
+            flash = NSLocalizedString("pulse.leave.offline", comment: "")
+            return
+        } catch {}
         await pulse.reload()
         dismiss()
     }
@@ -1519,6 +1519,8 @@ struct PulseSOSCountdown: View {
     @State private var paused = false
     @State private var sent = false
     @State private var key = PulseSOSRules.newKey()
+    // one timer for the whole countdown (one written in body is made again on every redraw and the seconds jitter)
+    @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private static let reasons = ["pulse.sos.r.help", "pulse.sos.r.accident", "pulse.sos.r.danger", "pulse.sos.r.medical"]
     /// web d68efdfc: lifebuoy, car, warning triangle, square with a plus
@@ -1582,7 +1584,7 @@ struct PulseSOSCountdown: View {
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RadialGradient(colors: [Theme.hex(0xD0182F), Theme.hex(0x7A0716), Theme.hex(0x3A020A)], center: .center, startRadius: 20, endRadius: 520).ignoresSafeArea())
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in tick() }
+        .onReceive(ticker) { _ in tick() }
         .onChange(of: phase) { p in if p != .active { pause() } }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in pause() }
         .onAppear {

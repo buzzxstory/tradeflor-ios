@@ -35,7 +35,6 @@ struct TradeflorApp: App {
 struct RootView: View {
     @EnvironmentObject private var store: SessionStore
     @ObservedObject private var pulse = PulseStore.shared
-    @ObservedObject private var sos = SOSCenter.shared
     /// Used for its events and calls only (nothing it publishes is shown here), so it is not observed: a contact coming
     /// online no longer works out the whole root again. The App still hands it to every screen (environmentObject).
     private let live = LiveConnection.shared
@@ -62,22 +61,6 @@ struct RootView: View {
         return "chats"
         #endif
     }()
-
-    /// Pulse SOS: the emergency screen on any tab (signed in only).
-    private var sosItem: Binding<SOSShown?> {
-        Binding(get: { store.session == nil ? nil : sos.shown.map { SOSShown(id: $0) } },
-                set: { if $0 == nil { sos.shown = nil } })
-    }
-
-    /// Minimized, a red pill at the top reopens it; the short "<name> is responding / is safe" line under it.
-    @ViewBuilder private var sosOverlay: some View {
-        if store.session != nil {
-            VStack(spacing: 6) {
-                PulseEmergencyPill()
-                PulseSOSToast()
-            }
-        }
-    }
 
     var body: some View {
         Group {
@@ -129,14 +112,9 @@ struct RootView: View {
         // Tradeflor links tapped inside the app open here instead of the browser
         .environment(\.openURL, OpenURLAction { url in DeepLinks.shared.handle(url) ? .handled : .systemAction })
         .fullScreenCover(item: $links.pending) { p in DeepLinkSheet(target: p.target).environmentObject(store) }
-        // Pulse: a safety alert sent to me shows over everything until "I've seen it"; a Pulse code opened by a link
-        .fullScreenCover(item: $pulse.incomingAlert) { a in
-            PulseAlertScreen(token: store.session?.token ?? "", alert: a) { pulse.incomingAlert = nil }
-        }
+        // Pulse: a safety alert sent to me and the SOS emergency screen live in SOSWindow, over every sheet and cover; a Pulse
+        // code opened by a link
         .sheet(item: $pulse.joinCode) { c in PulseJoinSheet(token: store.session?.token ?? "", code: c.id).tfColorScheme() }
-        // Pulse SOS: the emergency screen on any tab; minimized, a red pill at the top reopens it
-        .fullScreenCover(item: sosItem) { s in PulseEmergencyScreen(token: store.session?.token ?? "", alertID: s.id) }
-        .overlay(alignment: .top) { sosOverlay }
         // someone scanned my connect code: Connection Request (Accept / Decline) wherever I am
         .sheet(item: Binding(get: { links.pending == nil ? flash.request(for: nil) : nil },
                              set: { if $0 == nil, let r = flash.request { flash.answered(r.id) } })) { r in
@@ -306,6 +284,7 @@ struct RootView: View {
             StickerStore.shared.attach(token: s.token, account: s.userID) // stickers on or off, and this account's library
             PulseStore.shared.attach(token: s.token, me: s.userID) // Pulse on or off, and this account's meetups
             SOSCenter.shared.attach(token: s.token, me: s.userID) // every active SOS I sent or may see
+            SOSWindow.shared.attach(token: s.token) // its screen over everything
         } else {
             FlashHub.shared.detach()
             PushManager.shared.stop()
