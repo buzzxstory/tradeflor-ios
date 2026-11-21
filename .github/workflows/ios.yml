@@ -260,7 +260,8 @@ jobs:
   # The build number is the UTC time (YYMMDDHHMM): every upload is newer than the last, as Apple requires.
   testflight:
     if: github.event_name == 'workflow_dispatch' && inputs.testflight
-    runs-on: macos-15
+    # App Store Connect takes only apps built with the iOS 26 SDK or later (Xcode 26+)
+    runs-on: macos-26
     timeout-minutes: 60
     defaults:
       run:
@@ -284,6 +285,21 @@ jobs:
           done
           if [ -n "$missing" ]; then echo "::error::missing repository secrets:$missing"; exit 1; fi
           echo "all secrets present"
+
+      - name: Pick Xcode 26 or later
+        run: |
+          best=""; bestv=0
+          for x in /Applications/Xcode*.app; do
+            v=$(defaults read "$x/Contents/Info" CFBundleShortVersionString 2>/dev/null || echo 0)
+            major=${v%%.*}
+            if [ "${major:-0}" -ge 26 ] 2>/dev/null; then
+              n=$(echo "$v" | awk -F. '{printf "%d%03d%03d", $1, $2, $3}')
+              if [ "$n" -gt "$bestv" ]; then bestv=$n; best=$x; fi
+            fi
+          done
+          if [ -z "$best" ]; then echo "::error::no Xcode 26 or later on this runner (App Store Connect needs the iOS 26 SDK)"; ls -d /Applications/Xcode*.app; exit 1; fi
+          sudo xcode-select -s "$best/Contents/Developer"
+          xcodebuild -version
 
       - name: Generate Xcode project
         run: |
