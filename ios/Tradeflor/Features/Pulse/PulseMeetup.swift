@@ -386,7 +386,7 @@ struct PulseMeetupScreen: View {
             .padding(3)
             .background(Theme.hex(0x0B2833), in: Capsule())
             .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
-            // one dock row: My Status, Find Friend, the raised walkie-talkie, More, and Share / Stop sharing (always visible)
+            // one dock row: My Status, Find Friend, the walkie-talkie, More, and Share / Stop sharing (always visible)
             HStack(alignment: .bottom, spacing: 0) {
                 tool("face.smiling", "pulse.mystatus") { sheet = .status }
                 tool("location.viewfinder", "pulse.findfriend") { sheet = .find }
@@ -398,6 +398,7 @@ struct PulseMeetupScreen: View {
                 }
                 .frame(maxWidth: .infinity)
             }
+            .padding(.top, 8) // about 22-24 pt between the message box and the round button
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
         .background(Theme.hex(0x04111E))
@@ -926,6 +927,8 @@ struct PulseShareTile: View {
 
 struct PulseWalkieButton: View {
     @ObservedObject var walkie: PulseWalkie
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    private var wide: Bool { sizeClass == .regular }
     let token: String
     let circleID: String
     let onNote: (String) -> Void
@@ -935,12 +938,10 @@ struct PulseWalkieButton: View {
         VStack(spacing: 4) {
             Image(systemName: walkie.recording ? "waveform" : "mic.fill").font(.system(size: 24, weight: .bold))
                 .foregroundStyle(walkie.recording ? .white : Theme.onAccent)
-                .frame(width: 62, height: 62)
+                // never above its row (it covered the message box): 56 pt on phones, 60 pt on wide screens
+                .frame(width: wide ? 60 : 56, height: wide ? 60 : 56)
                 .background(walkie.recording ? Theme.danger : Theme.accent, in: Circle())
-                .overlay(Circle().stroke(Theme.hex(0x04111E), lineWidth: 4))
-                .shadow(color: Theme.hex(0x3CF0EE, 0.45), radius: 12, y: 2)
-                .offset(y: -10)
-                .padding(.bottom, -10)
+                .shadow(color: Theme.hex(0x3CF0EE, 0.45), radius: 10, y: 2)
             Text(LocalizedStringKey(walkie.recording ? "pulse.walkie.release" : "pulse.walkie.hold")).font(.system(size: 10, weight: .bold)).lineLimit(1)
                 .minimumScaleFactor(0.7).foregroundStyle(Theme.hex(0x3CF0EE))
         }
