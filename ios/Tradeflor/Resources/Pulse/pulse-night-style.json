@@ -722,6 +722,194 @@
    }
   },
   {
+   "id": "pulse-poi",
+   "type": "symbol",
+   "source": "omt",
+   "source-layer": "poi",
+   "minzoom": 14.5,
+   "filter": [
+    "all",
+    [
+     "match",
+     [
+      "geometry-type"
+     ],
+     [
+      "Point",
+      "MultiPoint"
+     ],
+     true,
+     false
+    ],
+    [
+     "match",
+     [
+      "get",
+      "class"
+     ],
+     [
+      "cafe",
+      "restaurant",
+      "fast_food",
+      "bar",
+      "beer",
+      "ice_cream",
+      "bakery"
+     ],
+     true,
+     false
+    ],
+    [
+     "has",
+     "name"
+    ]
+   ],
+   "layout": {
+    "symbol-sort-key": [
+     "coalesce",
+     [
+      "get",
+      "rank"
+     ],
+     99
+    ],
+    "icon-image": [
+     "match",
+     [
+      "get",
+      "class"
+     ],
+     [
+      "cafe"
+     ],
+     "pulse-poi-cafe",
+     [
+      "restaurant"
+     ],
+     "pulse-poi-food",
+     [
+      "fast_food"
+     ],
+     "pulse-poi-fast",
+     [
+      "bar",
+      "beer"
+     ],
+     "pulse-poi-bar",
+     [
+      "ice_cream",
+      "bakery"
+     ],
+     "pulse-poi-sweet",
+     "pulse-poi-food"
+    ],
+    "icon-size": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     14.5,
+     0.46,
+     16,
+     0.56,
+     18,
+     0.68
+    ],
+    "icon-allow-overlap": true,
+    "icon-ignore-placement": false,
+    "text-field": [
+     "coalesce",
+     [
+      "get",
+      "name:latin"
+     ],
+     [
+      "get",
+      "name_en"
+     ],
+     [
+      "get",
+      "name"
+     ]
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     14.5,
+     0,
+     15,
+     10,
+     17,
+     12
+    ],
+    "text-anchor": "top",
+    "text-offset": [
+     0,
+     1.35
+    ],
+    "text-max-width": 8,
+    "text-optional": true
+   },
+   "paint": {
+    "text-color": [
+     "match",
+     [
+      "get",
+      "class"
+     ],
+     [
+      "cafe"
+     ],
+     "#f7d29a",
+     [
+      "restaurant"
+     ],
+     "#ffb8a8",
+     [
+      "fast_food"
+     ],
+     "#ffd0a0",
+     [
+      "bar",
+      "beer"
+     ],
+     "#d6c2ff",
+     [
+      "ice_cream",
+      "bakery"
+     ],
+     "#ffc4e3",
+     "#ffb8a8"
+    ],
+    "text-halo-color": "#02060a",
+    "text-halo-width": 1.5,
+    "icon-opacity": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     14.5,
+     0.8,
+     15.2,
+     1
+    ]
+   }
+  },
+  {
    "id": "water-name",
    "type": "symbol",
    "source": "omt",

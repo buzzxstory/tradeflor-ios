@@ -2496,3 +2496,5 @@
 "pulse.capsule.remove" = "إزالة صورتي";
 "pulse.capsule.empty" = "لا صور بعد.";
 "pulse.capsule.closed" = "أُغلقت كبسولة الزمن هذه.";
+"pulse.walkie.hold" = "اضغط للتحدث";
+"pulse.share.short" = "شارك";

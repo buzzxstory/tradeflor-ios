@@ -2496,3 +2496,5 @@
 "pulse.capsule.remove" = "Remove my photo";
 "pulse.capsule.empty" = "No photos yet.";
 "pulse.capsule.closed" = "This Time Capsule is closed.";
+"pulse.walkie.hold" = "Hold to talk";
+"pulse.share.short" = "Share";

@@ -54,6 +54,8 @@ struct PulseMapView: UIViewRepresentable {
     var selected: String?
     var compact = false
     var onTapMap: ((CLLocationCoordinate2D) -> Void)?
+    /// A café, restaurant, bar... tapped on the map (its name and where it is): offered as the meeting place.
+    var onTapPlace: ((String, CLLocationCoordinate2D) -> Void)?
     var onSelect: ((String) -> Void)?
     var onUserMoved: (() -> Void)?
     var onTilesFailed: ((Bool) -> Void)?
@@ -92,6 +94,44 @@ struct PulseMapView: UIViewRepresentable {
 
     static var offlineStyle: URL? { Bundle.main.url(forResource: "pulse-offline-style", withExtension: "json") }
 
+    static let poiLayer = "pulse-poi"
+
+    /// The place groups (desktop pulsePoi.ts POI_GROUPS): emoji and ring colour.
+    static let poiGroups: [(key: String, emoji: String, ring: UInt32)] = [
+        ("cafe", "☕", 0xF2B155), ("food", "🍽️", 0xFF7F66), ("fast", "🍔", 0xFFA64D), ("bar", "🍹", 0xB48CFF), ("sweet", "🍦", 0xFF8FC8),
+    ]
+
+    /// One badge per group, as the web paints it: a 96 px canvas at pixel ratio 2, a soft radial glow of the ring colour,
+    /// a dark disc (#071a24, radius 34), a 5 px ring and the emoji at 40 px.
+    static let poiBadges: [String: UIImage] = {
+        var out: [String: UIImage] = [:]
+        let f = UIGraphicsImageRendererFormat()
+        f.scale = 2
+        f.opaque = false
+        let size = CGSize(width: 48, height: 48) // 96 px
+        for g in poiGroups {
+            let ring = UIColor(red: CGFloat((g.ring >> 16) & 0xFF) / 255, green: CGFloat((g.ring >> 8) & 0xFF) / 255, blue: CGFloat(g.ring & 0xFF) / 255, alpha: 1)
+            out["pulse-poi-" + g.key] = UIGraphicsImageRenderer(size: size, format: f).image { rc in
+                let ctx = rc.cgContext
+                let mid = CGPoint(x: 24, y: 24)
+                let colors = [ring.withAlphaComponent(0x55 / 255.0).cgColor, ring.withAlphaComponent(0).cgColor] as CFArray
+                if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) {
+                    ctx.drawRadialGradient(grad, startCenter: mid, startRadius: 13, endCenter: mid, endRadius: 24, options: [])
+                }
+                let disc = CGRect(x: 24 - 17, y: 24 - 17, width: 34, height: 34)
+                ctx.setFillColor(UIColor(red: 0x07 / 255.0, green: 0x1A / 255.0, blue: 0x24 / 255.0, alpha: 1).cgColor)
+                ctx.fillEllipse(in: disc)
+                ctx.setStrokeColor(ring.cgColor)
+                ctx.setLineWidth(2.5)
+                ctx.strokeEllipse(in: disc)
+                let s = NSAttributedString(string: g.emoji, attributes: [.font: UIFont.systemFont(ofSize: 20)])
+                let b = s.size()
+                s.draw(at: CGPoint(x: 24 - b.width / 2, y: 24 - b.height / 2))
+            }
+        }
+        return out
+    }()
+
     final class PersonAnnotation: MLNPointAnnotation { var personID = "" }
     final class DestAnnotation: MLNPointAnnotation {}
 
@@ -110,8 +150,22 @@ struct PulseMapView: UIViewRepresentable {
         init(_ p: PulseMapView) { parent = p }
 
         @objc func tapped(_ g: UITapGestureRecognizer) {
-            guard let map, let onTap = parent.onTapMap else { return }
-            onTap(map.convert(g.location(in: map), toCoordinateFrom: map))
+            guard let map else { return }
+            let pt = g.location(in: map)
+            // a place badge under the finger (a 22 pt box: the badges are small)
+            if let onPlace = parent.onTapPlace {
+                let box = CGRect(x: pt.x - 22, y: pt.y - 22, width: 44, height: 44)
+                if let f = map.visibleFeatures(in: box, styleLayerIdentifiers: [PulseMapView.poiLayer]).first {
+                    let a = f.attributes
+                    let name = (a["name:latin"] as? String) ?? (a["name_en"] as? String) ?? (a["name"] as? String) ?? ""
+                    if !name.isEmpty {
+                        let c = (f as? MLNPointFeature)?.coordinate ?? map.convert(pt, toCoordinateFrom: map)
+                        onPlace(name, c)
+                        return
+                    }
+                }
+            }
+            parent.onTapMap?(map.convert(pt, toCoordinateFrom: map))
         }
 
         func sync() {
@@ -205,6 +259,8 @@ struct PulseMapView: UIViewRepresentable {
 
         func mapView(_ mapView: MLNMapView, didFinishLoading style: MLNStyle) {
             styleReady = true
+            // the place badges are painted here (they are in no sprite): pulse-poi-cafe|food|fast|bar|sweet
+            for (name, img) in PulseMapView.poiBadges { style.setImage(img, forName: name) }
             let acc = MLNShapeSource(identifier: "pulse-accuracy", shape: nil, options: nil)
             let lines = MLNShapeSource(identifier: "pulse-lines", shape: nil, options: nil)
             style.addSource(acc)

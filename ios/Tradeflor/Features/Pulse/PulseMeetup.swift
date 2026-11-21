@@ -105,6 +105,8 @@ struct PulseMeetupScreen: View {
             ZStack(alignment: .top) {
                 PulseMapView(token: token, styleURL: pulse.config.style_url, people: mapPeople, dest: mapDest, camera: camera, selected: selected,
                              onTapMap: proposing ? { c in proposing = false; proposalName = ""; proposalAt = c } : nil,
+                             // a café or restaurant tapped: offered as the meeting place (nothing is sent until Propose)
+                             onTapPlace: ended ? nil : { name, c in proposing = false; proposalName = name; proposalAt = c },
                              onSelect: { id in selected = id; panelOpen = true; panelTab = 0 },
                              onUserMoved: { if case .follow = camera.mode { camera.mode = .none } },
                              onTilesFailed: { tilesFailed = $0 })
@@ -284,36 +286,35 @@ struct PulseMeetupScreen: View {
                     .padding(.horizontal, 12).frame(minHeight: 40)
                     .background(Theme.hex(0x0B2833), in: Capsule())
             }
-            HStack(spacing: 6) {
+            // one dock row: My Status, Find Friend, the raised walkie-talkie, More, and Share / Stop sharing (always visible)
+            HStack(alignment: .bottom, spacing: 0) {
                 tool("face.smiling", "pulse.mystatus") { sheet = .status }
-                PulseWalkieButton(walkie: walkie, token: token, circleID: circleID) { flash = $0 }
                 tool("location.viewfinder", "pulse.findfriend") { sheet = .find }
-                tool("ellipsis.circle", "pulse.more") { sheet = .more }
+                PulseWalkieButton(walkie: walkie, token: token, circleID: circleID) { flash = $0 }
+                    .frame(maxWidth: .infinity)
+                tool("ellipsis", "pulse.more") { sheet = .more }
+                PulseShareTile(sharing: sharingHere) {
+                    if sharingHere { Task { await sharer.stop(circleID); await load() } } else { sheet = .share }
+                }
+                .frame(maxWidth: .infinity)
             }
-            // always visible while sharing; never pushed off screen
-            Button {
-                if sharingHere { Task { await sharer.stop(circleID); await load() } } else { sheet = .share }
-            } label: {
-                Label(LocalizedStringKey(sharingHere ? "pulse.stopsharing" : "pulse.sharemine"),
-                      systemImage: sharingHere ? "location.slash.fill" : "location.fill")
-                    .font(.body.weight(.bold)).frame(maxWidth: .infinity, minHeight: 48)
-                    .background(sharingHere ? Theme.danger : Theme.accent, in: RoundedRectangle(cornerRadius: 12))
-                    .foregroundStyle(sharingHere ? .white : Theme.onAccent)
-            }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
         .background(Theme.hex(0x04111E))
     }
 
+    /// A dock tile: a 47 pt rounded square (radius 16) with a line icon, its name under it.
     private func tool(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 3) {
-                Image(systemName: icon).font(.system(size: 18, weight: .semibold))
-                Text(LocalizedStringKey(label)).font(.system(size: 10.5, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+            VStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 19, weight: .semibold))
+                    .frame(width: 47, height: 47)
+                    .background(Theme.hex(0x0B2833), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.hex(0x2FE6E6, 0.18), lineWidth: 1))
+                Text(LocalizedStringKey(label)).font(.system(size: 10, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.75)
+                    .foregroundStyle(.white.opacity(0.8))
             }
-            .frame(maxWidth: .infinity, minHeight: 50)
-            .background(Theme.hex(0x0B2833), in: RoundedRectangle(cornerRadius: 12))
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
     }
@@ -716,6 +717,43 @@ final class PulseWalkie: NSObject, ObservableObject, AVAudioRecorderDelegate, AV
     }
 }
 
+/// Share (a filled turquoise tile) or Stop sharing (a red tile with a pulsing ring).
+struct PulseShareTile: View {
+    let sharing: Bool
+    let action: () -> Void
+    @State private var pulse = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: sharing ? "location.slash.fill" : "location.fill").font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(sharing ? .white : Theme.onAccent)
+                    .frame(width: 47, height: 47)
+                    .background(sharing ? Theme.danger : Theme.accent, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay {
+                        if sharing {
+                            RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.danger.opacity(pulse ? 0 : 0.7), lineWidth: 3)
+                                .padding(-4).scaleEffect(pulse ? 1.18 : 1)
+                        }
+                    }
+                Text(LocalizedStringKey(sharing ? "pulse.stopsharing" : "pulse.share.short")).font(.system(size: 10, weight: .bold)).lineLimit(1)
+                    .minimumScaleFactor(0.7).foregroundStyle(sharing ? Theme.danger : Theme.hex(0x3CF0EE))
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(LocalizedStringKey(sharing ? "pulse.stopsharing" : "pulse.sharemine")))
+        .onAppear { startPulse() }
+        .onChange(of: sharing) { _ in startPulse() }
+    }
+
+    private func startPulse() {
+        pulse = false
+        guard sharing, !reduceMotion else { return }
+        withAnimation(.easeOut(duration: 1.3).repeatForever(autoreverses: false)) { pulse = true }
+    }
+}
+
 struct PulseWalkieButton: View {
     @ObservedObject var walkie: PulseWalkie
     let token: String
@@ -724,12 +762,19 @@ struct PulseWalkieButton: View {
     @State private var pressing = false
 
     var body: some View {
-        VStack(spacing: 3) {
-            Image(systemName: walkie.recording ? "waveform" : "mic.fill").font(.system(size: 18, weight: .semibold))
-            Text(LocalizedStringKey(walkie.recording ? "pulse.walkie.release" : "pulse.walkie")).font(.system(size: 10.5, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+        VStack(spacing: 4) {
+            Image(systemName: walkie.recording ? "waveform" : "mic.fill").font(.system(size: 24, weight: .bold))
+                .foregroundStyle(walkie.recording ? .white : Theme.onAccent)
+                .frame(width: 62, height: 62)
+                .background(walkie.recording ? Theme.danger : Theme.accent, in: Circle())
+                .overlay(Circle().stroke(Theme.hex(0x04111E), lineWidth: 4))
+                .shadow(color: Theme.hex(0x3CF0EE, 0.45), radius: 12, y: 2)
+                .offset(y: -10)
+                .padding(.bottom, -10)
+            Text(LocalizedStringKey(walkie.recording ? "pulse.walkie.release" : "pulse.walkie.hold")).font(.system(size: 10, weight: .bold)).lineLimit(1)
+                .minimumScaleFactor(0.7).foregroundStyle(Theme.hex(0x3CF0EE))
         }
-        .frame(maxWidth: .infinity, minHeight: 50)
-        .background(walkie.recording ? Theme.danger : Theme.hex(0x0B2833), in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(Rectangle())
         .gesture(DragGesture(minimumDistance: 0)
             .onChanged { _ in
                 guard !pressing else { return }

@@ -314,7 +314,8 @@ struct PulseCreateView: View {
                     ZStack(alignment: .topTrailing) {
                         PulseMapView(token: token, styleURL: pulse.config.style_url, people: [],
                                      dest: pin.map { PulseMapDest(coordinate: $0, name: place, icon: PulseRules.activityIcon[activity] ?? "📍") },
-                                     camera: camera, selected: nil, compact: true, onTapMap: { c in pin = c })
+                                     camera: camera, selected: nil, compact: true, onTapMap: { c in pin = c },
+                                     onTapPlace: { name, c in pin = c; place = name })
                             .frame(height: 200).clipShape(RoundedRectangle(cornerRadius: 12))
                         Button {
                             Task {
