@@ -122,14 +122,25 @@ struct AppLockPatternPad: View {
     @State private var drawing = false
     @State private var gen = 0
 
+    /// The nine dots' centres (split out: Xcode 26 could not type-check the expression inline).
+    static func dotPoints(side: CGFloat, ox: CGFloat, oy: CGFloat) -> [CGPoint] {
+        var out: [CGPoint] = []
+        for i in 0..<9 {
+            let col = CGFloat(i % 3)
+            let row = CGFloat(i / 3)
+            let x: CGFloat = ox + side * (col * 2 + 1) / 6
+            let y: CGFloat = oy + side * (row * 2 + 1) / 6
+            out.append(CGPoint(x: x, y: y))
+        }
+        return out
+    }
+
     var body: some View {
         GeometryReader { geo in
             let side = min(geo.size.width, geo.size.height)
             let ox = (geo.size.width - side) / 2
             let oy = (geo.size.height - side) / 2
-            let pts: [CGPoint] = (0..<9).map { i in
-                CGPoint(x: ox + side * (CGFloat(i % 3) * 2 + 1) / 6, y: oy + side * (CGFloat(i / 3) * 2 + 1) / 6)
-            }
+            let pts: [CGPoint] = Self.dotPoints(side: side, ox: ox, oy: oy)
             let tint: Color = failed ? lockRed : Theme.accent
             ZStack {
                 Canvas { ctx, _ in

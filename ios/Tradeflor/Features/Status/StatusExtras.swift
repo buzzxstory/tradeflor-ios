@@ -638,7 +638,10 @@ struct StatusVoiceArt<Face: View>: View {
     /// A bar's height factor while it plays (0.45…1 over 1.05 s); still bars at full height when paused.
     private func barWave(_ t: Double, _ k: Int) -> CGFloat {
         guard playing else { return 1 }
-        return CGFloat(0.45 + 0.55 * (0.5 + 0.5 * sin((t + Double(k % 7) * 0.09) * 2 * Double.pi / 1.05)))
+        let shift: Double = Double(k % 7) * 0.09
+        let angle: Double = (t + shift) * 2 * Double.pi / 1.05
+        let wave: Double = 0.5 + 0.5 * sin(angle)
+        return CGFloat(0.45 + 0.55 * wave)
     }
 
     private static func clock(_ ms: Double) -> String {
