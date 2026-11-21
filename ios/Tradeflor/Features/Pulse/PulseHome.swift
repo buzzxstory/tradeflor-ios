@@ -727,10 +727,13 @@ struct PulseIconChip: View {
             .font(.system(size: size * 0.44, weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: size, height: size)
-            .background(ZStack {
-                Theme.hex(0x03202A)
-                LinearGradient(colors: [color, color.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            }, in: shape)
+            .background {
+                ZStack {
+                    Theme.hex(0x03202A)
+                    LinearGradient(colors: [color, color.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                }
+                .clipShape(shape)
+            }
             .overlay(shape.stroke(LinearGradient(colors: [Color.white.opacity(0.4), .clear], startPoint: .top, endPoint: .center), lineWidth: 1))
             .shadow(color: color.opacity(0.5), radius: 8)
             .accessibilityHidden(true)
