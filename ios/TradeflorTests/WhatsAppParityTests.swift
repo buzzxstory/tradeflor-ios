@@ -47,7 +47,7 @@ final class WhatsAppParityTests: XCTestCase {
     /// end of Settings > Notifications stayed under the dock). The room sits on each scroll view itself.
     func testEveryTabScrollViewKeepsRoomForTheDock() throws {
         for f in ["Tradeflor/Features/Chats/ChatListView.swift", "Tradeflor/Features/Groups/GroupsListView.swift",
-                  "Tradeflor/Features/Status/CalendarView.swift", "Tradeflor/Features/Status/TradeFlorView.swift",
+                  "Tradeflor/Features/Status/CalendarView.swift", "Tradeflor/Features/Pulse/PulseHome.swift", // the TradeFlor tab is the Pulse home
                   "Tradeflor/Features/Settings/LinkedDevicesView.swift"] {
             XCTAssertTrue(try source(f).contains(".modifier(DockSpace())"), "\(f) has no room for the dock")
         }
@@ -73,7 +73,7 @@ final class WhatsAppParityTests: XCTestCase {
         for f in ["Tradeflor/Features/Settings/SettingsView.swift", "Tradeflor/Features/Settings/SettingsPages.swift",
                   "Tradeflor/Features/Chat/ContactInfoView.swift", "Tradeflor/Features/Groups/GroupManage.swift",
                   "Tradeflor/Features/Connect/FlashConnectView.swift", "Tradeflor/Features/Connect/ScanConnect.swift",
-                  "Tradeflor/Features/Status/CalendarView.swift", "Tradeflor/Features/Status/TradeFlorView.swift",
+                  "Tradeflor/Features/Status/CalendarView.swift", "Tradeflor/Features/Pulse/PulseHome.swift", // the TradeFlor tab is the Pulse home
                   "Tradeflor/Features/Settings/LinkedDevicesView.swift", "Tradeflor/Features/Contacts/ContactsPanel.swift"] {
             let s = try source(f)
             XCTAssertFalse(s.contains(".toolbarBackground(.visible, for: .navigationBar)"), "\(f): a bar colour of its own")

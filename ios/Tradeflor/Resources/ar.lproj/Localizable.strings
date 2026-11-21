@@ -2592,3 +2592,23 @@
 "stx2.voice" = "رسالة صوتية";
 "stx2.voice.sub" = "حتى دقيقة واحدة";
 "stx2.audience" = "يراها من تدردش معهم · الفيديو حتى 30 ث";
+
+/* Meetup SOS (2026-11-21) */
+"pulse.sos.button" = "SOS. نبّه كل من في هذا اللقاء";
+"pulse.sos.sending" = "جارٍ إرسال SOS";
+"pulse.sos.to" = "إلى %d أشخاص في هذا اللقاء، مع موقعك (مباشرة، حتى تقول إنك بأمان)";
+"pulse.sos.to.sharing" = "إلى %d أشخاص في هذا اللقاء، مع موقعك المباشر";
+"pulse.sos.r.help" = "أحتاج مساعدة";
+"pulse.sos.r.accident" = "حادث";
+"pulse.sos.r.danger" = "أنا في خطر";
+"pulse.sos.r.medical" = "طارئ طبي";
+"pulse.sos.now" = "أرسل الآن";
+"pulse.sos.note" = "Tradeflor ينبّه أصدقاءك؛ ولا يتصل بخدمات الطوارئ. في الخطر، اتصل أيضاً بـ 112";
+"pulse.sos.mine" = "نداء SOS الخاص بك نشط";
+"pulse.sos.mine.sub" = "نُبّه كل من في هذا اللقاء";
+"pulse.sos.safe" = "أنا بأمان";
+"pulse.sos.other" = "%@ يحتاج مساعدة";
+"pulse.sos.ago" = "قبل %d د";
+"pulse.sos.show" = "أظهره";
+"pulse.sos.failed" = "تعذّر إرسال SOS. حاول مجدداً أو اتصل بـ 112.";
+"pulse.sos.beacon.ax" = "SOS من %@";

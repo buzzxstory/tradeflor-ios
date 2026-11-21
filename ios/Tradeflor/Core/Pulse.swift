@@ -122,6 +122,19 @@ struct PulseView: Decodable, Equatable {
     var voice: [PulseVoice]?
     var activity: [PulseActivityItem]?
     var now: Int64?
+    /// Active SOS this viewer sent or received (unresolved, under 2 h old).
+    var sos: [PulseSOS]?
+}
+
+/// An active Meetup SOS (server 57db6394).
+struct PulseSOS: Decodable, Identifiable, Equatable {
+    let id: String
+    var user_id: String
+    var text: String?
+    var lat: Double?
+    var lon: Double?
+    var accuracy: Double?
+    var created_at: Int64?
 }
 
 struct PulseInvitation: Decodable, Equatable {

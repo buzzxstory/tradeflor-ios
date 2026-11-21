@@ -19,11 +19,13 @@ struct PulseMapPerson: Equatable {
     var moving: Bool
     var measuredAt: Int64
     var glide: Double // seconds to glide from the previous real position (0 = jump)
+    /// this person's SOS is active: the ring turns red and blinks, two red waves go out
+    var sos = false
 
     static func == (a: PulseMapPerson, b: PulseMapPerson) -> Bool {
         a.id == b.id && a.coordinate.latitude == b.coordinate.latitude && a.coordinate.longitude == b.coordinate.longitude
             && a.accuracy == b.accuracy && a.ring == b.ring && a.line == b.line && a.status == b.status && a.name == b.name
-            && a.avatarID == b.avatarID && a.moving == b.moving
+            && a.avatarID == b.avatarID && a.moving == b.moving && a.sos == b.sos
     }
 }
 
@@ -59,6 +61,8 @@ struct PulseMapView: UIViewRepresentable {
     var onSelect: ((String) -> Void)?
     var onUserMoved: (() -> Void)?
     var onTilesFailed: ((Bool) -> Void)?
+    /// SOS senders with no live position here but a position in their SOS: a red beacon
+    var beacons: [PulseSOSBeacon] = []
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -149,6 +153,7 @@ struct PulseMapView: UIViewRepresentable {
     }()
 
     final class PersonAnnotation: MLNPointAnnotation { var personID = "" }
+    final class BeaconAnnotation: MLNPointAnnotation { var beaconID = ""; var name = "" }
     final class DestAnnotation: MLNPointAnnotation {}
 
     @MainActor
@@ -158,6 +163,7 @@ struct PulseMapView: UIViewRepresentable {
         private var annotations: [String: PersonAnnotation] = [:]
         private var shown: [String: PulseMapPerson] = [:]
         private var destAnnotation: DestAnnotation?
+        private var beaconAnnotations: [String: BeaconAnnotation] = [:]
         private var styleReady = false
         private var cameraNonce = -1
         private var usedOffline = false
@@ -211,6 +217,21 @@ struct PulseMapView: UIViewRepresentable {
                     a.coordinate = p.coordinate
                     annotations[p.id] = a
                     shown[p.id] = p
+                    map.addAnnotation(a)
+                }
+            }
+            // SOS beacons (a sender with no live position here)
+            let bids = Set(parent.beacons.map(\.id))
+            for (id, a) in beaconAnnotations where !bids.contains(id) { map.removeAnnotation(a); beaconAnnotations[id] = nil }
+            for b in parent.beacons {
+                if let a = beaconAnnotations[b.id] {
+                    a.coordinate = b.coordinate
+                } else {
+                    let a = BeaconAnnotation()
+                    a.beaconID = b.id
+                    a.name = b.name
+                    a.coordinate = b.coordinate
+                    beaconAnnotations[b.id] = a
                     map.addAnnotation(a)
                 }
             }
@@ -334,6 +355,11 @@ struct PulseMapView: UIViewRepresentable {
                 if let p = shown[a.personID] { v.show(p, token: parent.token, selected: parent.selected == p.id) }
                 return v
             }
+            if let b = annotation as? BeaconAnnotation {
+                let v = (mapView.dequeueReusableAnnotationView(withIdentifier: "sos") as? SOSBeaconView) ?? SOSBeaconView(reuseIdentifier: "sos")
+                v.show(name: b.name)
+                return v
+            }
             if annotation is DestAnnotation {
                 let v = (mapView.dequeueReusableAnnotationView(withIdentifier: "dest") as? DestPinView) ?? DestPinView(reuseIdentifier: "dest")
                 if let d = parent.dest { v.show(d) }
@@ -390,10 +416,21 @@ final class PersonPinView: MLNAnnotationView {
     private var avatarKey = ""
     private(set) var groupCount = 1
     private var loadTask: Task<Void, Never>?
+    private let sosWaves = [CAShapeLayer(), CAShapeLayer()]
+    private var sosOn = false
 
     override init(reuseIdentifier: String?) {
         super.init(reuseIdentifier: reuseIdentifier)
         frame = CGRect(x: 0, y: 0, width: 120, height: 104)
+        for w in sosWaves {
+            w.path = UIBezierPath(arcCenter: .zero, radius: 25, startAngle: 0, endAngle: 2 * .pi, clockwise: true).cgPath
+            w.position = CGPoint(x: 60, y: 48)
+            w.fillColor = UIColor.clear.cgColor
+            w.strokeColor = UIColor(red: 1, green: 0.23, blue: 0.31, alpha: 1).cgColor
+            w.lineWidth = 2.5
+            w.opacity = 0
+            layer.addSublayer(w)
+        }
         centerOffset = CGVector(dx: 0, dy: -6)
         photo.frame = CGRect(x: 38, y: 26, width: 44, height: 44)
         photo.layer.cornerRadius = 22
@@ -447,8 +484,9 @@ final class PersonPinView: MLNAnnotationView {
         case .stale: colour = UIColor(white: 0.6, alpha: 1)
         case .arrived: colour = UIColor(red: 0.08, green: 0.76, blue: 0.48, alpha: 1)
         }
-        ring.strokeColor = colour.cgColor
-        ring.lineWidth = selected ? 4.5 : 3
+        ring.strokeColor = (p.sos ? UIColor(red: 1, green: 0.23, blue: 0.31, alpha: 1) : colour).cgColor
+        ring.lineWidth = p.sos ? 4.5 : (selected ? 4.5 : 3)
+        setSOS(p.sos)
         photo.alpha = p.ring == .stale ? 0.55 : 1
         photo.layer.filters = nil
         name.text = p.isMe ? NSLocalizedString("chat.you", comment: "") : p.name
@@ -472,6 +510,39 @@ final class PersonPinView: MLNAnnotationView {
                     self?.initials.isHidden = true
                 }
             }
+        }
+    }
+
+    /// SOS: the ring blinks red (0.9 s) and two red waves go out. It keeps running with Reduce Motion, slower: it is an
+    /// emergency.
+    private func setSOS(_ on: Bool) {
+        guard on != sosOn else { return }
+        sosOn = on
+        ring.removeAnimation(forKey: "sos")
+        for w in sosWaves { w.removeAllAnimations(); w.opacity = 0 }
+        guard on else { return }
+        let k = UIAccessibility.isReduceMotionEnabled ? 1.4 : 1.0
+        let blink = CABasicAnimation(keyPath: "opacity")
+        blink.fromValue = 1
+        blink.toValue = 0.25
+        blink.duration = 0.45 * k
+        blink.autoreverses = true
+        blink.repeatCount = .infinity
+        ring.add(blink, forKey: "sos")
+        for (i, w) in sosWaves.enumerated() {
+            let s = CABasicAnimation(keyPath: "transform.scale")
+            s.fromValue = 1
+            s.toValue = 2.1
+            let o = CABasicAnimation(keyPath: "opacity")
+            o.fromValue = 0.8
+            o.toValue = 0
+            let g = CAAnimationGroup()
+            g.animations = [s, o]
+            g.duration = 1.8 * k
+            g.beginTime = CACurrentMediaTime() + Double(i) * 0.9 * k
+            g.repeatCount = .infinity
+            g.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            w.add(g, forKey: "wave")
         }
     }
 
@@ -520,5 +591,77 @@ final class DestPinView: MLNAnnotationView {
         dot.text = d.icon
         label.text = d.name
         accessibilityLabel = String(format: NSLocalizedString("pulse.place.ax", comment: ""), d.name)
+    }
+}
+
+/// An SOS sender seen only through their SOS position: a red disc reading "SOS", two red waves and the name.
+final class SOSBeaconView: MLNAnnotationView {
+    private let disc = UILabel()
+    private let name = UILabel()
+    private let waves = [CAShapeLayer(), CAShapeLayer()]
+
+    override init(reuseIdentifier: String?) {
+        super.init(reuseIdentifier: reuseIdentifier)
+        frame = CGRect(x: 0, y: 0, width: 140, height: 82)
+        centerOffset = CGVector(dx: 0, dy: 41 - 26)
+        let red = UIColor(red: 1, green: 0.23, blue: 0.31, alpha: 1)
+        let k = UIAccessibility.isReduceMotionEnabled ? 1.4 : 1.0
+        for (i, w) in waves.enumerated() {
+            w.path = UIBezierPath(arcCenter: .zero, radius: 22, startAngle: 0, endAngle: 2 * .pi, clockwise: true).cgPath
+            w.position = CGPoint(x: 70, y: 26)
+            w.fillColor = UIColor.clear.cgColor
+            w.strokeColor = red.cgColor
+            w.lineWidth = 2.5
+            w.opacity = 0
+            layer.addSublayer(w)
+            let s = CABasicAnimation(keyPath: "transform.scale")
+            s.fromValue = 1
+            s.toValue = 2.2
+            let o = CABasicAnimation(keyPath: "opacity")
+            o.fromValue = 0.85
+            o.toValue = 0
+            let g = CAAnimationGroup()
+            g.animations = [s, o]
+            g.duration = 1.8 * k
+            g.beginTime = CACurrentMediaTime() + Double(i) * 0.9 * k
+            g.repeatCount = .infinity
+            w.add(g, forKey: "wave")
+        }
+        disc.frame = CGRect(x: 48, y: 4, width: 44, height: 44)
+        disc.text = "SOS"
+        disc.textAlignment = .center
+        disc.font = .systemFont(ofSize: 13, weight: .black)
+        disc.textColor = .white
+        disc.backgroundColor = red
+        disc.layer.cornerRadius = 22
+        disc.layer.borderColor = UIColor.white.cgColor
+        disc.layer.borderWidth = 2.5
+        disc.clipsToBounds = true
+        name.frame = CGRect(x: 10, y: 54, width: 120, height: 22)
+        name.textAlignment = .center
+        name.font = .systemFont(ofSize: 12, weight: .bold)
+        name.textColor = .white
+        name.backgroundColor = UIColor(red: 0.45, green: 0.04, blue: 0.1, alpha: 0.92)
+        name.layer.cornerRadius = 11
+        name.clipsToBounds = true
+        addSubview(disc)
+        addSubview(name)
+        isAccessibilityElement = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func show(name n: String) {
+        name.text = " " + n + " "
+        accessibilityLabel = String(format: NSLocalizedString("pulse.sos.beacon.ax", comment: ""), n)
+    }
+}
+
+struct PulseSOSBeacon: Equatable {
+    let id: String
+    var coordinate: CLLocationCoordinate2D
+    var name: String
+    static func == (a: PulseSOSBeacon, b: PulseSOSBeacon) -> Bool {
+        a.id == b.id && a.coordinate.latitude == b.coordinate.latitude && a.coordinate.longitude == b.coordinate.longitude && a.name == b.name
     }
 }

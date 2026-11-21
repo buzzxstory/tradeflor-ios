@@ -40,6 +40,7 @@ struct PulseMeetupScreen: View {
     @State private var confirmLeave = false
     @State private var flash: String?
     @StateObject private var walkie = PulseWalkie()
+    @State private var sosCountdown = false
     @Environment(\.horizontalSizeClass) private var sizeClass
     private var wide: Bool { sizeClass == .regular }
 
@@ -88,7 +89,16 @@ struct PulseMeetupScreen: View {
             now = d
             flashBubble = flashBubble.filter { $0.value.until > d }
         }
-        .onReceive(pulse.frames.filter { [circleID] d in (d["circle_id"] as? String) == circleID }) { d in handle(d) }
+        // a frame for this meetup (an alert carries its meetup inside it)
+        .onReceive(pulse.frames.filter { [circleID] d in
+            (d["circle_id"] as? String) == circleID || ((d["alert"] as? [String: Any])?["circle_id"] as? String) == circleID
+        }) { d in handle(d) }
+        .fullScreenCover(isPresented: $sosCountdown) {
+            PulseSOSCountdown(others: max(0, going.count - 1), sharing: sharingHere) { reason in
+                sosCountdown = false
+                Task { await sendSOS(reason) }
+            } onCancel: { sosCountdown = false }
+        }
         .onReceive(LiveConnection.shared.opened.receive(on: RunLoop.main)) { Task { await load() } } // missed frames: reload, never replay
         .sheet(item: $sheet) { s in sheetView(s).tfColorScheme().modifier(PulseSheetLook()) }
         .confirmationDialog(Text(LocalizedStringKey(isOrganizer ? "pulse.end.q" : "pulse.leave.q")), isPresented: $confirmLeave, titleVisibility: .visible) {
@@ -108,17 +118,24 @@ struct PulseMeetupScreen: View {
                              onTapPlace: ended ? nil : { name, c, cls in proposing = false; proposalName = name; pickGroup = PulseMapView.poiGroupKey(cls); proposalAt = c },
                              onSelect: { id in selected = id; panelOpen = true; panelTab = 0 },
                              onUserMoved: { if case .follow = camera.mode { camera.mode = .none } },
-                             onTilesFailed: { tilesFailed = $0 })
+                             onTilesFailed: { tilesFailed = $0 },
+                             beacons: sosBeacons)
                     .ignoresSafeArea(edges: .horizontal)
                 VStack(spacing: 8) {
                     if tilesFailed { banner("pulse.tiles.failed", Theme.gold) }
                     if proposing { banner("pulse.propose.tap", Theme.accent) }
                     if ended { banner("pulse.ended.banner", Theme.faint) }
+                    ForEach(activeSOS) { s in sosBanner(s) }
                     ForEach(openProposals) { p in proposalCard(p) }
                     if let flash { banner(flash, Theme.accent).onTapGesture { self.flash = nil } }
                 }
                 .padding(10)
                 cameraButtons.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(12)
+                // the SOS button: always there while the meetup is live (not while my own SOS is on)
+                if !ended && mySOS == nil && proposalAt == nil {
+                    PulseSOSButton { sosCountdown = true }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading).padding(12)
+                }
                 if let at = proposalAt {
                     pickCard(at).frame(maxHeight: .infinity, alignment: .bottom).padding(10)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -509,7 +526,8 @@ struct PulseMeetupScreen: View {
                                       accuracy: loc.accuracy ?? 0, approximate: loc.approximate, ring: ring, line: personLine(m, loc),
                                       status: status, statusAt: flashBubble[id] != nil ? nowMs : m.status?.at, isMe: id == me,
                                       moving: (loc.speed ?? 0) > 0.6 || (loc.distance_m ?? 0) > 150, measuredAt: loc.measured_at,
-                                      glide: PulseRules.glideMs(prev: previous[id], next: loc, reduceMotion: reduceMotion) / 1000))
+                                      glide: PulseRules.glideMs(prev: previous[id], next: loc, reduceMotion: reduceMotion) / 1000,
+                                      sos: activeSOS.contains { $0.user_id == id }))
         }
         return out
     }
@@ -531,6 +549,91 @@ struct PulseMeetupScreen: View {
     private func name(_ id: String) -> String {
         if id == me { return NSLocalizedString("chat.you", comment: "") }
         return people[id]?.name ?? pulse.name(id)
+    }
+
+    // MARK: SOS
+
+    private var activeSOS: [PulseSOS] { view?.sos ?? [] }
+    private var mySOS: PulseSOS? { activeSOS.first { $0.user_id == me } }
+
+    /// SOS senders whose live position is not here but whose SOS has one: a red beacon.
+    private var sosBeacons: [PulseSOSBeacon] {
+        activeSOS.compactMap { s in
+            guard s.user_id != me, locations[s.user_id] == nil, let lat = s.lat, let lon = s.lon else { return nil }
+            return PulseSOSBeacon(id: s.id, coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), name: name(s.user_id))
+        }
+    }
+
+    /// Sends the SOS to everyone else in the meetup with my position, then (as the screen said) shares my live location until
+    /// the meetup ends, unless I already share.
+    private func sendSOS(_ reason: String) async {
+        let others = members.map(\.user_id).filter { $0 != me }
+        var body: [String: Any] = ["kind": "sos", "text": reason, "to": others]
+        var fix = sharer.lastFix
+        if fix == nil { fix = await sharer.readOnce() }
+        if let l = fix { body["position"] = ["lat": l.coordinate.latitude, "lon": l.coordinate.longitude, "accuracy": l.horizontalAccuracy] }
+        do {
+            _ = try await APIClient.shared.pulsePost(token: token, circle: circleID, "alerts", body: body)
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        } catch {
+            flash = NSLocalizedString("pulse.sos.failed", comment: "")
+            return
+        }
+        if !sharingHere, let c = circle { try? await sharer.start(circle: circleID, minutes: 0, dest: c.dest) }
+        await load()
+    }
+
+    private func resolveSOS(_ s: PulseSOS) async {
+        _ = try? await APIClient.shared.pulseCall("pulse/alerts/\(APIClient.pSeg(s.id))/resolve", method: "POST", token: token, body: [:])
+        await load()
+    }
+
+    /// A red banner per active SOS: mine with "I'm safe", others with "Show".
+    private func sosBanner(_ s: PulseSOS) -> some View {
+        let mine = s.user_id == me
+        let mins = max(0, Int((nowMs - (s.created_at ?? nowMs)) / 60_000))
+        let glow = 0.35 + 0.25 * (0.5 + 0.5 * sin(now.timeIntervalSince1970 * 2 * .pi / 2.4))
+        return HStack(spacing: 10) {
+            Text(verbatim: "SOS").font(.system(size: 11, weight: .black)).foregroundStyle(Theme.hex(0xB8102A))
+                .frame(width: 36, height: 36).background(.white, in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                if mine {
+                    Text("pulse.sos.mine").font(.subheadline.weight(.heavy))
+                    Text("pulse.sos.mine.sub").font(.caption).opacity(0.9)
+                } else {
+                    Text(verbatim: String(format: NSLocalizedString("pulse.sos.other", comment: ""), name(s.user_id))).font(.subheadline.weight(.heavy))
+                    Text(verbatim: [s.text ?? "", String(format: NSLocalizedString("pulse.sos.ago", comment: ""), mins)].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.caption).opacity(0.9).lineLimit(1)
+                }
+            }
+            .foregroundStyle(.white)
+            Spacer(minLength: 4)
+            if mine {
+                Button { Task { await resolveSOS(s) } } label: {
+                    Text("pulse.sos.safe").font(.footnote.weight(.heavy)).padding(.horizontal, 12).frame(minHeight: 36)
+                        .background(PulseInk.green, in: Capsule()).foregroundStyle(Theme.hex(0x04222C))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    if locations[s.user_id] != nil {
+                        selected = s.user_id
+                        camera = PulseCamera(mode: .follow(s.user_id), nonce: camera.nonce + 1)
+                    } else if s.lat != nil {
+                        camera = PulseCamera(mode: .everyone, nonce: camera.nonce + 1)
+                    }
+                } label: {
+                    Text("pulse.sos.show").font(.footnote.weight(.heavy)).padding(.horizontal, 12).frame(minHeight: 36)
+                        .background(.white, in: Capsule()).foregroundStyle(Theme.hex(0xB8102A))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(10)
+        .background(LinearGradient(colors: [Theme.hex(0xFF4A5C), Theme.hex(0xB8102A)], startPoint: .leading, endPoint: .trailing),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: Theme.hex(0xFF3B4E).opacity(glow), radius: 14)
+        .accessibilityElement(children: .contain)
     }
 
     // MARK: proposals
@@ -870,6 +973,9 @@ struct PulseMeetupScreen: View {
         case "ended":
             PulseSharer.shared.stopLocally(circleID)
             Task { await load() }
+        case "alert", "sos-resolved":
+            if e == "alert", ((d["alert"] as? [String: Any])?["kind"] as? String) == "sos" { UINotificationFeedbackGenerator().notificationOccurred(.error) }
+            Task { await load() }
         case "voice", "status", "circle", "alert-seen":
             Task { await load() }
         default: break
@@ -1066,5 +1172,109 @@ struct PulseSheetLook: ViewModifier {
         } else {
             content.presentationDragIndicator(.visible)
         }
+    }
+}
+
+/// The SOS button on the map: a 58 pt red disc with a siren, a white ring, a pulsing red ring, and the "SOS" pill.
+struct PulseSOSButton: View {
+    let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
+                    let t = ctx.date.timeIntervalSinceReferenceDate * (reduceMotion ? 0.7 : 1)
+                    let phase = (t / 1.6).truncatingRemainder(dividingBy: 1)
+                    ZStack {
+                        Circle().stroke(Theme.hex(0xFF3B4E).opacity(0.7 * (1 - phase)), lineWidth: 3).frame(width: 58 + 30 * phase, height: 58 + 30 * phase)
+                        Circle().fill(RadialGradient(colors: [Theme.hex(0xFF8A95), Theme.hex(0xFF3B4E), Theme.hex(0xB8102A)], center: .init(x: 0.4, y: 0.35),
+                                                     startRadius: 2, endRadius: 34))
+                            .frame(width: 58, height: 58)
+                            .overlay(Circle().stroke(.white, lineWidth: 3))
+                            .shadow(color: Theme.hex(0xFF3B4E).opacity(0.6), radius: 10)
+                        Image(systemName: "light.beacon.max.fill").font(.system(size: 24, weight: .bold)).foregroundStyle(.white)
+                    }
+                    .frame(width: 88, height: 88)
+                }
+                .frame(width: 88, height: 76)
+                Text(verbatim: "SOS").font(PulseFont.brand(12)).tracking(3).foregroundStyle(.white)
+                    .padding(.horizontal, 10).padding(.vertical, 3)
+                    .background(Theme.hex(0xB8102A), in: Capsule())
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("pulse.sos.button"))
+    }
+}
+
+/// The full-screen SOS countdown: 5 seconds, the reason, Send now / Cancel, and the honest note (Tradeflor does not call
+/// emergency services; call 112). It sends by itself at 0.
+struct PulseSOSCountdown: View {
+    let others: Int
+    let sharing: Bool
+    let onSend: (String) -> Void
+    let onCancel: () -> Void
+    @State private var left = 5
+    @State private var reason = 0
+    @State private var sent = false
+
+    private static let reasons = ["pulse.sos.r.help", "pulse.sos.r.accident", "pulse.sos.r.danger", "pulse.sos.r.medical"]
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Spacer(minLength: 10)
+            ZStack {
+                Circle().stroke(Color.white.opacity(0.18), lineWidth: 8)
+                Circle().trim(from: 0, to: CGFloat(left) / 5).stroke(.white, style: StrokeStyle(lineWidth: 8, lineCap: .round)).rotationEffect(.degrees(-90))
+                    .animation(.linear(duration: 1), value: left)
+                Text(verbatim: "\(left)").font(.system(size: 64, weight: .black).monospacedDigit())
+            }
+            .frame(width: 150, height: 150)
+            Text("pulse.sos.sending").font(PulseFont.display(26, 900))
+            Text(verbatim: String(format: NSLocalizedString(sharing ? "pulse.sos.to.sharing" : "pulse.sos.to", comment: ""), others))
+                .font(PulseFont.text(15)).multilineTextAlignment(.center).opacity(0.9).padding(.horizontal, 24)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(Self.reasons.indices, id: \.self) { i in
+                    Button { reason = i } label: {
+                        Text(LocalizedStringKey(Self.reasons[i])).font(.footnote.weight(.bold)).frame(maxWidth: .infinity, minHeight: 40)
+                            .background(reason == i ? Color.white : Color.white.opacity(0.14), in: Capsule())
+                            .foregroundStyle(reason == i ? Theme.hex(0xB8102A) : .white)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 24)
+            Button { send() } label: {
+                Text("pulse.sos.now").font(.headline.weight(.heavy)).frame(maxWidth: .infinity, minHeight: 54)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous)).foregroundStyle(Theme.hex(0xB8102A))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 24)
+            Button { sent = true; onCancel() } label: {
+                Text("notes.cancel").font(.headline).frame(maxWidth: .infinity, minHeight: 50)
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.7), lineWidth: 1.5))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 24)
+            Link(destination: URL(string: "tel:112")!) {
+                Text("pulse.sos.note").font(.caption).multilineTextAlignment(.center).opacity(0.85).padding(.horizontal, 28)
+            }
+            Spacer(minLength: 10)
+        }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(RadialGradient(colors: [Theme.hex(0xD0182F), Theme.hex(0x7A0716), Theme.hex(0x3A020A)], center: .center, startRadius: 20, endRadius: 520).ignoresSafeArea())
+        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
+            guard !sent else { return }
+            if left > 1 { left -= 1 } else { left = 0; send() }
+        }
+        .onAppear { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+    }
+
+    private func send() {
+        guard !sent else { return }
+        sent = true
+        onSend(NSLocalizedString(Self.reasons[reason], comment: ""))
     }
 }
