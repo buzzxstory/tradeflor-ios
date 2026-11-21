@@ -75,6 +75,10 @@ struct ChatView: View {
     @State private var showMute = false
     /// Shared Notes: the chat's notes, and a note opened from a meeting notes card
     @State private var showNotes = false
+    /// Stickers: Create sticker, and a pack opened from a sticker or Explore
+    @State private var showStickerMaker = false
+    @State private var viewingPack: StickerPackRef?
+    @ObservedObject private var stickers = StickerStore.shared
     @State private var openNote: OpenNote?
     @ObservedObject private var notesConfig = NotesConfig.shared
     @State private var muted = false
@@ -490,7 +494,8 @@ struct ChatView: View {
                     flash("chat.reply.notloaded")
                 }
             },
-            edit: canEdit(m) ? { startEdit(m) } : nil)
+            edit: canEdit(m) ? { startEdit(m) } : nil,
+            viewPack: { id in viewingPack = StickerPackRef(id: id) })
     }
 
     @ViewBuilder private func rowContent(_ m: Message, _ albums: Albums.Runs) -> some View {
@@ -517,6 +522,8 @@ struct ChatView: View {
         Group {
             if p.missing {
                 MissingMediaBubble()
+            } else if let ref = p.sticker {
+                PendingStickerBubble(token: token, account: me, ref: ref, date: p.date, failed: p.failed)
             } else if let img = p.image {
                 // the picture at once, dimmed, with a ring and an X until it is sent (website bcfeb0a)
                 PhotoBubble(mine: true, date: p.date, state: p.failed ? .failed : .sending, caption: "", size: img.size) {
@@ -827,6 +834,17 @@ struct ChatView: View {
             NotesHub(token: token, me: me, conversationID: chat.conversation_id, isGroup: isGroup, isAdmin: isAdmin, people: notePeople)
                 .modifier(ScreenGuardCover(id: chat.conversation_id, on: noScreenshots))
                 .tfColorScheme()
+        }
+        .sheet(isPresented: $showStickerMaker) {
+            StickerMakerSheet(token: token) { _ in }.tfColorScheme()
+        }
+        .sheet(item: $viewingPack) { p in
+            StickerPackSheet(token: token, account: me, packID: p.id,
+                             onSend: canPost ? { s, pack in Task { await sendSticker(s, pack: pack) } } : nil)
+                .tfColorScheme()
+        }
+        .overlay(alignment: .bottom) {
+            StickerToastView().padding(.bottom, composerHeight + 14).animation(.easeOut(duration: 0.2), value: stickers.toast)
         }
         .fullScreenCover(item: $openNote) { o in
             NoteEditorScreen(token: token, me: me, noteID: o.id, initial: o.initial, people: notePeople, isGroup: isGroup)
@@ -1423,8 +1441,12 @@ struct ChatView: View {
                 GeometryReader { geo in
                     ZStack(alignment: .bottom) {
                         Color.black.opacity(0.001).onTapGesture { showEmoji = false }
-                        EmojiPanel(bodyHeight: max(150, min(300, geo.size.height - composerHeight - 150)),
-                                   onPick: { e in draft += e }, onClose: { showEmoji = false })
+                        EmojiStickerPanel(token: token, account: me, bodyHeight: max(150, min(300, geo.size.height - composerHeight - 150)),
+                                          onEmoji: { e in draft += e },
+                                          onSticker: { s, pack in Task { await sendSticker(s, pack: pack) } },
+                                          onCreate: { showStickerMaker = true },
+                                          onViewPack: { id in viewingPack = StickerPackRef(id: id) },
+                                          onClose: { showEmoji = false })
                             .padding(.horizontal, 8)
                             .padding(.bottom, composerHeight + 6)
                     }
@@ -2212,6 +2234,20 @@ struct ChatView: View {
         await deliver(p)
     }
 
+    /// A sticker from the keyboard or a pack: the ordinary send (same line, same key rules); the keyboard stays open.
+    private func sendSticker(_ s: Sticker, pack: String?) async {
+        guard canPost else { flash("chat.action.failed"); return }
+        if isGroup && !isAdmin && !groupCanSendMedia { flashText(NSLocalizedString("stk.err.media.off", comment: "")); return }
+        unreadMarkID = nil
+        var p = PendingMessage(id: UUID().uuidString.lowercased(), body: (s.emoji.map { $0 + " " } ?? "") + "Sticker", date: Date())
+        p.sticker = s.ref
+        p.stickerPack = pack
+        p.replyTo = replyingTo?.id ?? ""
+        replyingTo = nil
+        pending.append(p)
+        await deliver(p)
+    }
+
     // MARK: message actions
 
     @ViewBuilder private func messageContent(_ m: Message) -> some View {
@@ -2237,6 +2273,10 @@ struct ChatView: View {
                 LinkPreviewCard(token: token, url: url)
             }
             .frame(maxWidth: .infinity, alignment: m.sender_id == me ? .trailing : .leading)
+        } else if let ref = m.stickerRef, !m.isDeleted {
+            StickerBubble(token: token, account: me, ref: ref, mine: m.sender_id == me, date: m.date,
+                          state: m.sender_id == me ? receipt(m) : nil,
+                          senderName: m.sender_id == me ? NSLocalizedString("chat.you", comment: "") : (isGroup ? memberNames[m.sender_id] : chat.title))
         } else if m.kind == "meeting_notes", let card = MeetingNotesCard.parse(m.signal), !m.isDeleted {
             MeetingNotesCardView(token: token, card: card, mine: m.sender_id == me, date: m.date) { openNote = OpenNote(id: card.note_id) }
         } else if m.kind == "notice" {
@@ -2623,6 +2663,9 @@ struct ChatView: View {
                 uploads[p.id] = t
                 defer { uploads[p.id] = nil }
                 m = try await t.value
+            } else if let sticker = p.sticker {
+                m = try await APIClient.shared.sendSticker(token: token, conversationID: chat.conversation_id, stickerID: sticker.stickerId,
+                                                           packID: p.stickerPack, key: p.id, replyTo: p.replyTo)
             } else {
                 let mentions = isGroup ? MentionsBuilder.build(p.body, members: members) : []
                 if mentions.isEmpty {
@@ -3163,6 +3206,9 @@ struct PendingMessage: Identifiable, Equatable {
     var noteName = ""
     /// The server refused it for good (kept in the saved outbox as such).
     var refused = false
+    /// A sticker (sent with its id and the shared pack it came from; `body` is only what an old app would show).
+    var sticker: StickerRef? = nil
+    var stickerPack: String? = nil
     /// A photo, video or document whose file is no longer on this phone (cleaned up, storage freed): it cannot be sent. It shows
     /// as a note with "Tap to remove" instead of vanishing without a word.
     var missing = false

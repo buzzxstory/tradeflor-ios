@@ -443,6 +443,8 @@ struct MenuRowButtonStyle: ButtonStyle {
 /// Press and hold → the menu. Without a host (not wired), the system context menu `fallback` is used instead.
 struct MessageMenuTrigger<Fallback: View>: ViewModifier {
     let enabled: Bool
+    /// a tap opens the menu too (a sticker)
+    var tapOpens = false
     let menu: () -> MessageMenuContent
     @ViewBuilder let fallback: () -> Fallback
     @Environment(\.tfMessageMenu) private var presenter
@@ -454,6 +456,7 @@ struct MessageMenuTrigger<Fallback: View>: ViewModifier {
                 .background(MenuProbeView(probe: probe))
                 .highPriorityGesture(LongPressGesture(minimumDuration: 0.35, maximumDistance: 10)
                     .onEnded { _ in openMenu(presenter) }, including: enabled ? .all : .subviews)
+                .simultaneousGesture(TapGesture().onEnded { if tapOpens { openMenu(presenter) } }, including: tapOpens && enabled ? .all : .subviews)
                 .accessibilityAction(named: Text("chat.more")) { openMenu(presenter) }
         } else {
             content.contextMenu { if enabled { fallback() } }

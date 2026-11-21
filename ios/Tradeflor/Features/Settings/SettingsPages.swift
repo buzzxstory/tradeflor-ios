@@ -1619,6 +1619,20 @@ struct AboutPage: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.vertical, 10)
+                SDivider()
+                // Clear sticker cache: the sticker pictures kept on this phone (they load again when shown); Favorites stay
+                Button {
+                    StickerCache.shared.clearAll()
+                    note = NSLocalizedString("stk.cache.cleared", comment: "")
+                } label: {
+                    HStack {
+                        Text("stk.cache.clear").font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
+                        Spacer()
+                        Image(systemName: "trash").foregroundStyle(Theme.faint)
+                    }
+                    .frame(minHeight: 44).padding(.horizontal, 14).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
             if let note { Text(note).font(.system(size: 12)).foregroundStyle(Theme.accent) }
         }

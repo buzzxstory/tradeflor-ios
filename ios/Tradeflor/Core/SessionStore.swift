@@ -162,6 +162,7 @@ final class SessionStore: ObservableObject {
         NoteStore.shared.forget() // my note belongs to this account
         ScreenGuard.shared.releaseAll()
         NoteFileStore.forgetAll() // unsent Shared Notes changes of this account
+        StickerStore.forget() // the sticker library, its last answer and every sticker picture
         NotesConfig.shared.forget()
         LiveConnection.shared.forgetPresence() // who was online, last seen, hidden presence (audit IOS-PRES-7)
         // attachments opened for Quick Look or sharing (decrypted copies, also from locked chats)

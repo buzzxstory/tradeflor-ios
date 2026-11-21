@@ -277,6 +277,7 @@ struct RootView: View {
             DeliveryStats.shared.attach(live, me: s.userID)
             FlashHub.shared.attach(live: live, token: s.token)
             NotesConfig.shared.load(token: s.token) // Shared Notes on or off for this account
+            StickerStore.shared.attach(token: s.token, account: s.userID) // stickers on or off, and this account's library
         } else {
             FlashHub.shared.detach()
             PushManager.shared.stop()

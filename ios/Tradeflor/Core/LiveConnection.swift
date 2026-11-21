@@ -80,6 +80,8 @@ final class LiveConnection: ObservableObject {
     let notesChanged = PassthroughSubject<(conversation: String, note: String), Never>()
     /// The phone has a network path now (NWPathMonitor): an open note says Offline at once and resends when it comes back.
     @Published private(set) var networkUp = true
+    /// Stickers: this account's sticker library changed (on another device, or a pack's maker changed it): reload it.
+    let stickersChanged = PassthroughSubject<Void, Never>()
 
     private var token: String?
     private var task: URLSessionWebSocketTask?
@@ -390,6 +392,7 @@ final class LiveConnection: ObservableObject {
         }
         if env.type == "sessions" { sessionsChanged.send(()); return }
         if env.type == "note.change" { noteFrames.send(data); return }
+        if env.type == "stickers" { stickersChanged.send(()); return }
         if env.type == "notes.changed" {
             let d = ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] as? [String: Any]) ?? [:]
             if let c = (d["conversation_id"] as? String) ?? env.conversation_id { notesChanged.send((c, (d["note_id"] as? String) ?? "")) }

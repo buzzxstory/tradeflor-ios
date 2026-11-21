@@ -28,6 +28,9 @@ enum OutboxStore {
         /// A group text's @mentions, built when it was saved (optional: entries saved before this field still load, and
         /// OutboxFlusher builds them itself when they are missing).
         var mentions: [Mention]?
+        /// A sticker (its reference as JSON, and the shared pack it came from): sent as a sticker, never as text.
+        var sticker: String?
+        var stickerPack: String?
     }
 
     /// One @mention kept with a group text (server Mentions: {user_id, username}).
@@ -91,7 +94,9 @@ enum OutboxStore {
                          isVideo: p.file != nil ? p.video != nil : nil, docName: p.docName.isEmpty ? nil : p.docName,
                          docMime: p.docMime.isEmpty ? nil : p.docMime, poster: p.poster,
                          failed: p.refused ? true : nil, noteName: p.noteName.isEmpty ? nil : p.noteName,
-                         mentions: mentions)
+                         mentions: p.sticker == nil ? mentions : nil,
+                         sticker: p.sticker.flatMap { try? JSONEncoder().encode($0) }.flatMap { String(data: $0, encoding: .utf8) },
+                         stickerPack: p.stickerPack)
         }
         queue.async {
             let first = waiting[url] == nil
@@ -141,6 +146,9 @@ enum OutboxStore {
         let replyTo: String
         /// The @mentions kept with a group text; nil when it was saved without them (built by OutboxFlusher then).
         let mentions: [Mention]?
+        /// A sticker waiting: sent as a sticker (its id and pack), never as its text.
+        var stickerID: String? = nil
+        var stickerPack: String? = nil
     }
 
     /// Any JSON value, read without its content: a photo's or poster's base64 is not decoded just to learn it is there.
@@ -163,6 +171,8 @@ enum OutboxStore {
         var docName: String?
         var failed: Bool?
         var mentions: [Mention]?
+        var sticker: String?
+        var stickerPack: String?
     }
 
     /// Every text / voice message of this account still waiting (not the ones the server refused, not photos / videos /
@@ -181,7 +191,8 @@ enum OutboxStore {
                 for e in entries where e.failed != true && e.fileName == nil && e.jpeg == nil && e.docName == nil && e.isVideo != true {
                     out.append(QueuedLine(conversation: conv, id: e.id, body: e.body, date: e.date, audio: e.audio,
                                           durationMs: e.durationMs, waveform: e.waveform, replyTo: e.replyTo,
-                                          mentions: e.mentions))
+                                          mentions: e.mentions, stickerID: StickerRef.parse(e.sticker)?.stickerId,
+                                          stickerPack: e.stickerPack))
                 }
             }
             return out
@@ -259,6 +270,8 @@ enum OutboxStore {
             p.durationMs = e.durationMs
             p.waveform = e.waveform
             p.replyTo = e.replyTo
+            p.sticker = StickerRef.parse(e.sticker)
+            p.stickerPack = e.stickerPack
             return p
         }
     }

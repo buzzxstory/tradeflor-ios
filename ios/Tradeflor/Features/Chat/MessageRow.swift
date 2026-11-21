@@ -54,6 +54,8 @@ struct MessageRowActions {
     var openReply: (() -> Void)?
     /// Edit (my own text message, within 15 minutes); nil when it can't be edited.
     var edit: (() -> Void)?
+    /// A sticker from a shared or official pack: View pack opens it.
+    var viewPack: ((String) -> Void)?
 }
 
 /// Wraps any message bubble with what all of them share: sender + role tag (groups), "Forwarded", the quoted
@@ -139,7 +141,8 @@ struct MessageRow<Content: View>: View {
             content()
                 .environment(\.tfBubbleHead, inside ? head : nil)
                 .environment(\.tfMediaForward, isMedia && !options.restricted && !options.selecting ? onForward : nil)
-                .modifier(MessageMenuTrigger(enabled: menuEnabled, menu: menuContent, fallback: { menu }))
+                // a sticker: a tap opens its menu at once (Add to Favorites is one step)
+                .modifier(MessageMenuTrigger(enabled: menuEnabled, tapOpens: message.kind == "sticker", menu: menuContent, fallback: { menu }))
                 .allowsHitTesting(!options.selecting)
                 .padding(.bottom, isMedia && hasReactions ? 12 : 0)
             HStack(spacing: 10) {
@@ -284,6 +287,7 @@ struct MessageRow<Content: View>: View {
     private func menuContent() -> MessageMenuContent {
         // the website's order (ChatScreen.tsx / GroupsView.tsx messageActions)
         var items = [MessageMenuItem("chat.reply", systemImage: "arrowshape.turn.up.left") { onReply() }]
+        items.append(contentsOf: Self.stickerItems(message, viewPack: actions.viewPack))
         if let edit = actions.edit {
             items.append(MessageMenuItem("chat.edit", systemImage: "pencil") { edit() })
         }
@@ -316,6 +320,26 @@ struct MessageRow<Content: View>: View {
                                   items: items, preview: AnyView(preview), mine: mine)
     }
 
+    /// A sticker's own entries: Add to Favorites or, when saved, Remove from Favorites (never both), and View pack when it
+    /// came from a shared or official pack. Read when the menu opens, so it follows a change made on another device.
+    static func stickerItems(_ m: Message, viewPack: ((String) -> Void)?) -> [MessageMenuItem] {
+        guard let ref = m.stickerRef, !m.isDeleted else { return [] }
+        let store = StickerStore.shared
+        guard store.enabled else { return [] }
+        var out: [MessageMenuItem] = []
+        if store.isFavorite(ref.stickerId) {
+            let s = store.lookup(ref.stickerId) ?? Sticker(ref: ref)
+            out.append(MessageMenuItem("stk.fav.remove", systemImage: "star.slash") { store.setFavorite(s, false) })
+        } else {
+            let s = store.lookup(ref.stickerId) ?? Sticker(ref: ref)
+            out.append(MessageMenuItem("stk.fav.add", systemImage: "star") { store.setFavorite(s, true) })
+        }
+        if let pack = ref.packId, let viewPack {
+            out.append(MessageMenuItem("stk.pack.view", systemImage: "square.stack") { viewPack(pack) })
+        }
+        return out
+    }
+
     /// The system context menu, used only when the screen has no menu host (`.messageMenuHost()`).
     @ViewBuilder private var menu: some View {
         ControlGroup {
@@ -326,6 +350,9 @@ struct MessageRow<Content: View>: View {
         .tfReactionRow()
         Button { actions.moreReactions() } label: { Label("chat.more.reactions", systemImage: "face.smiling") }
         Button { onReply() } label: { Label("chat.reply", systemImage: "arrowshape.turn.up.left") }
+        ForEach(Self.stickerItems(message, viewPack: actions.viewPack)) { item in
+            Button { item.action() } label: { Label(item.title, systemImage: item.systemImage) }
+        }
         if message.kind == "text" && !options.restricted {
             Button { onCopy() } label: { Label("chat.copy.text", systemImage: "doc.on.doc") }
         }

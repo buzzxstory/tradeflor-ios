@@ -100,6 +100,9 @@ final class OutboxFlusher {
                     if let audio = line.audio, let ms = line.durationMs {
                         _ = try await APIClient.shared.sendVoice(token: tok, conversationID: conv, audio: audio, durationMs: ms,
                                                                  waveform: line.waveform, key: line.id)
+                    } else if let sticker = line.stickerID {
+                        _ = try await APIClient.shared.sendSticker(token: tok, conversationID: conv, stickerID: sticker,
+                                                                   packID: line.stickerPack, key: line.id, replyTo: line.replyTo)
                     } else {
                         var mentions: [[String: Any]] = []
                         if conv.hasPrefix("grp_"), line.body.contains("@") {
