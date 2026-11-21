@@ -424,7 +424,12 @@ jobs:
           XB=$(plutil -extract CFBundleVersion raw "$APP/PlugIns/TradeflorNotify.appex/Info.plist")
           echo "app $V ($B), extension $XV ($XB)"
           [ "$B" = "$BUILD" ] && [ "$XB" = "$BUILD" ] && [ "$V" = "$XV" ] || { echo "::error::version or build number of the app and its extension differ"; exit 1; }
-          codesign -d --entitlements - "$APP" 2>/dev/null | grep -A1 aps-environment | grep -q production || { echo "::error::aps-environment is not production"; exit 1; }
+          # the entitlements as XML (newer codesign prints its own layout otherwise), read with plutil
+          codesign -d --entitlements :- "$APP" > "$RUNNER_TEMP_DIR/app-ent.plist" 2>/dev/null || true
+          APS=$(plutil -extract aps-environment raw "$RUNNER_TEMP_DIR/app-ent.plist" 2>/dev/null || echo "")
+          rm -f "$RUNNER_TEMP_DIR/app-ent.plist"
+          [ "$APS" = "production" ] || { echo "::error::aps-environment is '$APS', not production"; exit 1; }
+          echo "push entitlement: $APS"
           rm -rf verify
 
           # upload (App Store Connect API key)
