@@ -61,10 +61,19 @@ struct TradeFlorView: View {
     /// What the viewer pages through: my status first, then the people's.
     private var viewerGroups: [StatusGroup] { (mine.map { [$0] } ?? []) + people }
 
+    @AppStorage("tf.tradeflor.side") private var side = "home"
+    @ObservedObject private var pulse = PulseStore.shared
+
     var body: some View {
         NavigationStack {
+            if pulse.enabled && side == "pulse" {
+                PulseHomeView(token: token, me: myID, side: $side)
+                    .background(Theme.soul.ignoresSafeArea())
+                    .toolbar(.hidden, for: .navigationBar)
+            } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    PulseSideSwitch(side: $side).padding(.bottom, pulse.enabled ? 12 : 0)
                     header.padding(.top, 2).padding(.bottom, 12)
                     SearchPill(placeholder: "tf.search", text: $query).padding(.bottom, 12)
                     nextSlot.padding(.bottom, 10)
@@ -101,6 +110,7 @@ struct TradeFlorView: View {
                 }
             )
             .toolbar(.hidden, for: .navigationBar)
+            }
         }
         .task {
             // a tab entered again within 20 s is not read again (as Chats and Groups); the first read always happens

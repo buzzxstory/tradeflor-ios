@@ -95,6 +95,7 @@ final class SessionStore: ObservableObject {
             // live location shares run from this phone end first (they kept showing in the chats until they expired, and
             // the phone kept its location on for a session that no longer existed)
             await LocationSharer.shared.stopAll(token: token)
+            await PulseStore.shared.signOut(token: token) // Pulse sharing stops everywhere (POST /pulse/stop-all) and measuring stops
             await APIClient.shared.relockChats(token: token)
             await PushManager.shared.unregisterNow() // no push for this phone after the session ends
             await APIClient.shared.logout(token: token)
@@ -163,6 +164,8 @@ final class SessionStore: ObservableObject {
         ScreenGuard.shared.releaseAll()
         NoteFileStore.forgetAll() // unsent Shared Notes changes of this account
         StickerStore.forget() // the sticker library, its last answer and every sticker picture
+        PulseSharer.shared.forgetAll() // nothing keeps measuring for an account that is gone
+        PulseStore.shared.clear()
         NotesConfig.shared.forget()
         LiveConnection.shared.forgetPresence() // who was online, last seen, hidden presence (audit IOS-PRES-7)
         // attachments opened for Quick Look or sharing (decrypted copies, also from locked chats)

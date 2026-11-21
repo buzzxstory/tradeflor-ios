@@ -583,7 +583,10 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
         let info = response.notification.request.content.userInfo as? [String: Any] ?? [:]
         let action = response.actionIdentifier
         let text = (response as? UNTextInputNotificationResponse)?.userText
+        let identifier = response.notification.request.identifier
         Task { @MainActor in
+            // a Pulse notice (invitation, join request, new place, everyone here, alert): the tap opens Pulse / the meetup
+            if PulseRouting.open(identifier: identifier, info: info) { completionHandler(); return }
             // a Reply sent from the lock screen runs in the background: keep the app awake until it is sent
             // out of time before it is done: the task ends there (one never ended gets the app killed)
             let bg = BackgroundTaskBox()
@@ -628,5 +631,27 @@ enum NoticeID {
         if plain { return tag }
         let digest = SHA256.hash(data: Data(tag.utf8))
         return "n-" + digest.prefix(16).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// Pulse notices (server Tag "pulse-<circle>" or "pulse-alert-<id>", kind "pulse" / "pulse-alert"): a tap opens Pulse and,
+/// for a meetup, that meetup. No position is ever in a notification.
+enum PulseRouting {
+    @MainActor
+    static func open(identifier: String, info: [String: Any]) -> Bool {
+        let kind = ((info["tf"] as? [String: Any])?["kind"] as? String) ?? (info["kind"] as? String) ?? ""
+        guard identifier.hasPrefix("pulse-") || kind.hasPrefix("pulse") else { return false }
+        guard NotificationRouting.belongsToCurrentAccount(info, knownSubscriptionIDs: PushKeys.knownIDs()) else { return true }
+        UserDefaults.standard.set("pulse", forKey: "tf.tradeflor.side")
+        if let id = circle(identifier) { PulseStore.shared.openCircle = id }
+        TradeFlorView.go("tradeflor")
+        return true
+    }
+
+    /// "pulse-pc_123" -> "pc_123"; an alert's tag names no meetup.
+    static func circle(_ identifier: String) -> String? {
+        guard identifier.hasPrefix("pulse-"), !identifier.hasPrefix("pulse-alert-") else { return nil }
+        let id = String(identifier.dropFirst(6))
+        return id.isEmpty ? nil : id
     }
 }

@@ -35,6 +35,11 @@ final class DeepLinks: ObservableObject {
     }
 
     private func open(_ text: String) -> Bool {
+        // a Pulse Instant Circle code (https://app.tradeflor.com/?pulse=<code>): the join preview; joining never shares a location
+        if let c = URLComponents(string: text), let code = c.queryItems?.first(where: { $0.name == "pulse" })?.value, !code.isEmpty {
+            PulseStore.shared.joinCode = PulseStore.PulseJoinCode(id: code)
+            return true
+        }
         guard let t = FlashTarget.parse(text) else { return false }
         pending = Pending(target: t)
         return true

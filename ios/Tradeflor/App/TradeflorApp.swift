@@ -34,6 +34,7 @@ struct TradeflorApp: App {
 
 struct RootView: View {
     @EnvironmentObject private var store: SessionStore
+    @ObservedObject private var pulse = PulseStore.shared
     /// Used for its events and calls only (nothing it publishes is shown here), so it is not observed: a contact coming
     /// online no longer works out the whole root again. The App still hands it to every screen (environmentObject).
     private let live = LiveConnection.shared
@@ -111,6 +112,11 @@ struct RootView: View {
         // Tradeflor links tapped inside the app open here instead of the browser
         .environment(\.openURL, OpenURLAction { url in DeepLinks.shared.handle(url) ? .handled : .systemAction })
         .fullScreenCover(item: $links.pending) { p in DeepLinkSheet(target: p.target).environmentObject(store) }
+        // Pulse: a safety alert sent to me shows over everything until "I've seen it"; a Pulse code opened by a link
+        .fullScreenCover(item: $pulse.incomingAlert) { a in
+            PulseAlertScreen(token: store.session?.token ?? "", alert: a) { pulse.incomingAlert = nil }
+        }
+        .sheet(item: $pulse.joinCode) { c in PulseJoinSheet(token: store.session?.token ?? "", code: c.id).tfColorScheme() }
         // someone scanned my connect code: Connection Request (Accept / Decline) wherever I am
         .sheet(item: Binding(get: { links.pending == nil ? flash.request(for: nil) : nil },
                              set: { if $0 == nil, let r = flash.request { flash.answered(r.id) } })) { r in
@@ -278,6 +284,7 @@ struct RootView: View {
             FlashHub.shared.attach(live: live, token: s.token)
             NotesConfig.shared.load(token: s.token) // Shared Notes on or off for this account
             StickerStore.shared.attach(token: s.token, account: s.userID) // stickers on or off, and this account's library
+            PulseStore.shared.attach(token: s.token, me: s.userID) // Pulse on or off, and this account's meetups
         } else {
             FlashHub.shared.detach()
             PushManager.shared.stop()

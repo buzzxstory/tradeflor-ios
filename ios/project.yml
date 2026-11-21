@@ -18,6 +18,10 @@ settings:
     # The one server the app talks to. Same production API the website uses.
     TF_API_BASE: "https://app.tradeflor.com/api"
 packages:
+  # Pulse's map (MapLibre Native for iOS), pinned exactly (PULSE_IOS_HANDOFF.md section 2)
+  MapLibre:
+    url: https://github.com/maplibre/maplibre-gl-native-distribution
+    exactVersion: 6.31.0
   WebRTC:
     url: https://github.com/stasel/WebRTC
     exactVersion: 125.0.0
@@ -33,6 +37,7 @@ targets:
         buildPhase: resources
     dependencies:
       - package: WebRTC
+      - package: MapLibre
       # the Notification Service Extension (sender and text in alerts, as WhatsApp). The signed CI build drops it when its
       # profile secret (IOS_NSE_PROFILE_BASE64) is not set yet.
       - target: TradeflorNotify
@@ -64,7 +69,7 @@ targets:
         NSPhotoLibraryUsageDescription: Tradeflor opens your photo library so you can send photos and videos and post statuses.
         NSPhotoLibraryAddUsageDescription: Tradeflor saves photos and videos you choose to keep into your library.
         NSFaceIDUsageDescription: Tradeflor uses Face ID to unlock your locked chats.
-        NSLocationWhenInUseUsageDescription: Tradeflor shares your live location in a chat only when you choose to, for the time you pick, also while the app is in the background.
+        NSLocationWhenInUseUsageDescription: Tradeflor shares your live location in a chat or a Pulse meetup only when you choose to, with those people only, for the time you pick, also while the app is in the background.
         # audio: a call's sound and voice-note playback with the screen locked; location: a live-location share keeps going
         # for the time picked; voip: PushKit calls. No remote-notification: nothing handles a silent push (audit IOS-APL-4).
         UIBackgroundModes: [audio, location, voip]
