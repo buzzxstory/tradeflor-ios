@@ -166,6 +166,7 @@ final class SessionStore: ObservableObject {
         StickerStore.forget() // the sticker library, its last answer and every sticker picture
         PulseSharer.shared.forgetAll() // nothing keeps measuring for an account that is gone
         PulseStore.shared.clear()
+        SOSCenter.shared.clear()
         NotesConfig.shared.forget()
         LiveConnection.shared.forgetPresence() // who was online, last seen, hidden presence (audit IOS-PRES-7)
         // attachments opened for Quick Look or sharing (decrypted copies, also from locked chats)

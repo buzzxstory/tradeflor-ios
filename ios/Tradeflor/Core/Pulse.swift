@@ -625,11 +625,13 @@ final class PulseStore: ObservableObject {
         case "invited", "circle", "arrived", "request":
             reloadSoon()
         case "alert":
-            if let a = d["alert"], let raw = try? JSONSerialization.data(withJSONObject: a),
+            // an SOS goes to SOSCenter (its own emergency screen); the other safety alerts keep this one
+            if let a = d["alert"] as? [String: Any], let raw = try? JSONSerialization.data(withJSONObject: a),
                let alert = try? JSONDecoder().decode(PulseAlert.self, from: raw) {
-                incomingAlert = alert
+                if (a["kind"] as? String) != "sos" { incomingAlert = alert }
                 UINotificationFeedbackGenerator().notificationOccurred(.warning)
             }
+            reloadSoon()
         default: break
         }
         frames.send(d)

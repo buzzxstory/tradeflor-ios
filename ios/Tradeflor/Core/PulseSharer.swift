@@ -22,6 +22,10 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published private(set) var shares: [String: Share] = [:]
     @Published private(set) var lastFix: CLLocation?
     @Published private(set) var reducedAccuracy = false
+    /// Stopped on this device, the server has not confirmed yet (offline): retried every 5 s; never resumed meanwhile and no
+    /// position is kept for later.
+    @Published private(set) var stopPending: Set<String> = []
+    private var stopRetry: [String: Task<Void, Never>] = [:]
 
     private let manager = CLLocationManager()
     private var permissionWaiters: [CheckedContinuation<CLAuthorizationStatus, Never>] = []
@@ -46,6 +50,11 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// given, `noFix` when no position came, `server` when the consent was refused; nothing is shared then.
     func start(circle: String, minutes: Int, dest: CLLocationCoordinate2D?) async throws {
         // 1-2. the system permission (asked only now, after the person tapped Share)
+        // a stop the server has not confirmed comes first: sharing never resumes while it is pending
+        if stopPending.contains(circle) {
+            await confirmStop(circle)
+            if stopPending.contains(circle) { throw ShareError.server(0) }
+        }
         let status = await permission()
         guard status == .authorizedWhenInUse || status == .authorizedAlways else { throw ShareError.denied }
         reducedAccuracy = manager.accuracyAuthorization == .reducedAccuracy
@@ -68,17 +77,47 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     }
 
     /// Stop Sharing: the server deletes my position at once (never rate limited); measuring stops here first.
+    /// Without an answer: "Stopped on this device. Waiting for the server to confirm..." and retried until it answers.
     func stop(_ circle: String) async {
         stopLocally(circle)
-        let tok = token
-        try? await APIClient.shared.pulseDelete(token: tok, path: "pulse/circles/\(APIClient.pSeg(circle))/share")
+        stopPending.insert(circle)
+        await confirmStop(circle)
     }
 
-    /// Stop sharing everywhere.
+    private func confirmStop(_ circle: String) async {
+        stopRetry[circle]?.cancel()
+        stopRetry[circle] = nil
+        let tok = token
+        guard !tok.isEmpty else { stopPending.remove(circle); return }
+        do {
+            try await APIClient.shared.pulseDelete(token: tok, path: "pulse/circles/\(APIClient.pSeg(circle))/share")
+            stopPending.remove(circle)
+        } catch let e as PulseHTTPError where [404, 409, 410].contains(e.status) {
+            stopPending.remove(circle) // the meetup is over or gone: nothing left to revoke
+        } catch is PulseHTTPError {
+            guard stopPending.contains(circle) else { return }
+            stopRetry[circle] = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if !Task.isCancelled { await self?.confirmStop(circle) }
+            }
+        } catch {
+            stopPending.remove(circle) // signed out
+        }
+    }
+
+    /// Stop sharing everywhere (offline: each meetup is stopped one by one as soon as the server answers).
     func stopAll() async {
+        let ids = Array(shares.keys)
         shares = [:]
         updateMeasuring()
-        _ = try? await APIClient.shared.pulseCall("pulse/stop-all", method: "POST", token: token)
+        do {
+            _ = try await APIClient.shared.pulseCall("pulse/stop-all", method: "POST", token: token)
+        } catch is PulseHTTPError {
+            for id in ids {
+                stopPending.insert(id)
+                await confirmStop(id)
+            }
+        } catch {}
     }
 
     /// The server or the circle ended it (409/410/404, removed, ended, my own sharing:false): measuring stops, no call.
@@ -91,6 +130,9 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// Sign-out: nothing keeps measuring.
     func forgetAll() {
         shares = [:]
+        for t in stopRetry.values { t.cancel() }
+        stopRetry = [:]
+        stopPending = []
         updateMeasuring()
         lastFix = nil
     }

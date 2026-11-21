@@ -642,9 +642,21 @@ enum PulseRouting {
         let kind = ((info["tf"] as? [String: Any])?["kind"] as? String) ?? (info["kind"] as? String) ?? ""
         guard identifier.hasPrefix("pulse-") || kind.hasPrefix("pulse") else { return false }
         guard NotificationRouting.belongsToCurrentAccount(info, knownSubscriptionIDs: PushKeys.knownIDs()) else { return true }
+        // an SOS: its emergency screen (found again through GET /pulse/sos), on whatever tab is open
+        if identifier.hasPrefix("pulse-alert-") || kind == "pulse-alert" {
+            SOSCenter.shared.openFromPush(alert(identifier))
+            return true
+        }
         if let id = circle(identifier) { PulseStore.shared.openCircle = id }
         TradeFlorView.go("tradeflor")
         return true
+    }
+
+    /// "pulse-alert-pa_1" -> "pa_1".
+    static func alert(_ identifier: String) -> String? {
+        guard identifier.hasPrefix("pulse-alert-") else { return nil }
+        let id = String(identifier.dropFirst(12))
+        return id.isEmpty ? nil : id
     }
 
     /// "pulse-pc_123" -> "pc_123"; an alert's tag names no meetup.
