@@ -75,6 +75,8 @@ final class NoteSession {
     private var watchTimer: AnyObject?
     private var retryTimer: AnyObject?
     private var retryMs = 1500
+    /// a request is on its way now (a network that comes back never sends the same batch a second time alongside it)
+    private var sending = false
     private var disposed = false
     let client = NoteRules.newItemID("dev")
     private let key: String
@@ -111,11 +113,13 @@ final class NoteSession {
     func view() -> View {
         let now = d.now()
         let active = editors.filter { $0.key != myId && now - $0.value < 15_000 }.map(\.key).sorted()
+        let pending = queue.count + (inflight?.count ?? 0) + textPendingIds().count
+        // never "Saved" while anything is unsent (queued, in flight, or on-screen text the server does not have)
+        let shown: Status = status == .saved && pending > 0 ? .saving : status
         return View(note: note,
                     blocks: NoteRules.sortByPos(blocks.values.filter { !$0.deleted }, pos: \.pos, id: \.id, section: \.section),
                     tasks: NoteRules.sortByPos(tasks.values.filter { !$0.deleted }, pos: \.pos, id: \.id, section: { _ in "notes" }),
-                    status: status, notice: notice, activeEditors: active,
-                    pending: queue.count + (inflight?.count ?? 0) + textPendingIds().count)
+                    status: shown, notice: notice, activeEditors: active, pending: pending)
     }
 
     private func emit() { if !disposed { onChange?() } }
@@ -303,6 +307,27 @@ final class NoteSession {
         changed()
     }
 
+    /// The network went away or came back (NWPathMonitor). Gone with unsent changes: "Offline" at once. Back: the unanswered
+    /// batch goes again at once, unchanged (not after the retry timer), or what waits is sent.
+    func connectivity(_ up: Bool) {
+        guard !disposed, note != nil else { return }
+        if !up {
+            if hasPending() && status != .deleted && status != .readonly { status = .offline; emit() }
+            return
+        }
+        guard status == .offline, !sending else { return }
+        if let t = retryTimer { d.clearTimer(t) }
+        retryTimer = nil
+        retryMs = 1500
+        if inflight != nil {
+            Task { await self.sendInflight() }
+        } else if hasPending() {
+            status = .saving
+            emit()
+            scheduleFlush(0)
+        }
+    }
+
     /// Send now (closing the note, ending a call).
     func flushNow() async {
         if let t = flushTimer { d.clearTimer(t) }
@@ -381,7 +406,9 @@ final class NoteSession {
     }
 
     private func sendInflight() async {
-        guard let ops = inflight, !disposed else { return }
+        guard let ops = inflight, !disposed, !sending else { return }
+        sending = true
+        defer { sending = false }
         do {
             let res = try await d.sendOps(ops, client)
             if disposed { return }

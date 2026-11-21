@@ -25,6 +25,8 @@ final class NoteEditorModel: ObservableObject {
             .sink { [weak self] d in self?.session.onLive(d) }.store(in: &subs)
         LiveConnection.shared.opened.receive(on: RunLoop.main)
             .sink { [weak self] in guard let self else { return }; Task { await self.session.resync() } }.store(in: &subs)
+        LiveConnection.shared.$networkUp.dropFirst().removeDuplicates().receive(on: RunLoop.main)
+            .sink { [weak self] up in self?.session.connectivity(up) }.store(in: &subs)
     }
 
     /// The screen is redrawn once per run of the main loop, not once per change (typing stays light during a call).

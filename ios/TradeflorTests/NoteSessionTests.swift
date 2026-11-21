@@ -227,4 +227,54 @@ final class NoteSessionTests: XCTestCase {
         XCTAssertEqual(h.s.view().blocks[0].text, "Buy coffee now")
         h.s.dispose()
     }
+
+    func testNeverSavedWhileSomethingIsUnsent() async {
+        let h = Harness()
+        await h.s.start()
+        XCTAssertEqual(h.s.view().status, .saved)
+        h.s.setBlockText("blk1", "Buy coffee now")
+        XCTAssertEqual(h.s.view().status, .saving, "typed but not sent: never Saved")
+        await h.runTimers()
+        XCTAssertEqual(h.s.view().status, .saved)
+        h.s.dispose()
+    }
+
+    func testNetworkLossSaysOfflineAndComingBackResendsAtOnceUnchanged() async {
+        var offline = true
+        let h = Harness(fail: { offline })
+        await h.s.start()
+        h.s.setBlockText("blk1", "Buy coffee beans")
+        // the flush timer runs, the send fails; the retry timer waits (not run here)
+        let flush = h.timers.first { $0.ms == NoteSession.flushMS }!
+        h.timers.removeAll { $0 === flush }
+        await flush.f()
+        XCTAssertEqual(h.s.view().status, .offline)
+        h.s.connectivity(false)
+        XCTAssertEqual(h.s.view().status, .offline)
+        offline = false
+        h.s.connectivity(true)
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(h.sent.count, 2, "sent again at once, not after the retry timer")
+        XCTAssertEqual(h.sent[1], h.sent[0], "the same batch")
+        XCTAssertEqual(h.server, "Buy coffee beans")
+        XCTAssertEqual(h.s.view().status, .saved)
+        h.s.dispose()
+    }
+
+    func testMeetingCardCountsFollowTheNotebook() {
+        var t1 = NoteTask(id: "t1", pos: "a", title: "one"); t1.done = true
+        var t2 = NoteTask(id: "t2", pos: "b", title: "two"); t2.done = true
+        var gone = NoteTask(id: "t3", pos: "c", title: "x"); gone.deleted = true
+        let st = NoteState(note: SharedNote(id: "mt_c1", title: "Weekly"), blocks: [
+            NoteBlock(id: "b1", section: "notes", text: "hello"),
+            NoteBlock(id: "b2", section: "decisions", text: "ship it"),
+            NoteBlock(id: "b3", section: "notes", text: "  "),
+        ], tasks: [t1, t2, gone])
+        let c = MeetingNotesCard.Counts(st)
+        XCTAssertEqual(c.title, "Weekly")
+        XCTAssertEqual(c.tasks, 2)
+        XCTAssertEqual(c.tasksDone, 2, "every task ticked shows as done")
+        XCTAssertEqual(c.decisions, 1)
+        XCTAssertEqual(c.items, 2)
+    }
 }

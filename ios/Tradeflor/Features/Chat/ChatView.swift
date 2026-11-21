@@ -2238,7 +2238,7 @@ struct ChatView: View {
             }
             .frame(maxWidth: .infinity, alignment: m.sender_id == me ? .trailing : .leading)
         } else if m.kind == "meeting_notes", let card = MeetingNotesCard.parse(m.signal), !m.isDeleted {
-            MeetingNotesCardView(card: card, mine: m.sender_id == me, date: m.date) { openNote = OpenNote(id: card.note_id) }
+            MeetingNotesCardView(token: token, card: card, mine: m.sender_id == me, date: m.date) { openNote = OpenNote(id: card.note_id) }
         } else if m.kind == "notice" {
             Text(noticeText(m)).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .padding(.horizontal, 12).padding(.vertical, 5).background(Theme.surface, in: Capsule())

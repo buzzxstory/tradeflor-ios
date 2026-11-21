@@ -77,7 +77,9 @@ final class LiveConnection: ObservableObject {
     let flash = PassthroughSubject<[String: Any], Never>()
     /// Shared Notes: a raw "note.change" frame (an open note reads its own) and "notes.changed" (a chat's list of notes).
     let noteFrames = PassthroughSubject<Data, Never>()
-    let notesChanged = PassthroughSubject<String, Never>()
+    let notesChanged = PassthroughSubject<(conversation: String, note: String), Never>()
+    /// The phone has a network path now (NWPathMonitor): an open note says Offline at once and resends when it comes back.
+    @Published private(set) var networkUp = true
 
     private var token: String?
     private var task: URLSessionWebSocketTask?
@@ -98,6 +100,7 @@ final class LiveConnection: ObservableObject {
                 let wasOffline = self.offline
                 let before = self.lastInterfaces
                 self.offline = !satisfied
+                if self.networkUp != satisfied { self.networkUp = satisfied }
                 self.lastInterfaces = kinds
                 if self.offline && !self.connected { self.steadyConnected = false }
                 guard satisfied, before != nil, self.token != nil else { return }
@@ -389,7 +392,7 @@ final class LiveConnection: ObservableObject {
         if env.type == "note.change" { noteFrames.send(data); return }
         if env.type == "notes.changed" {
             let d = ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] as? [String: Any]) ?? [:]
-            if let c = (d["conversation_id"] as? String) ?? env.conversation_id { notesChanged.send(c) }
+            if let c = (d["conversation_id"] as? String) ?? env.conversation_id { notesChanged.send((c, (d["note_id"] as? String) ?? "")) }
             return
         }
         if env.type == "note" {

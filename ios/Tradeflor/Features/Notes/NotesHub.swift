@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import UIKit
 
 /// Shared Notes feature switch (GET /notes/config): read once per sign-in; every entry point hides while it is off.
 @MainActor
@@ -7,20 +8,51 @@ final class NotesConfig: ObservableObject {
     static let shared = NotesConfig()
     @Published private(set) var enabled = false
     private var askedFor = ""
+    private var subs = Set<AnyCancellable>()
+    private var poll: Task<Void, Never>?
+
+    private init() {
+        // asked again after a reconnect and on coming back to the app (a server updated meanwhile turns notes on without a restart)
+        LiveConnection.shared.opened.receive(on: RunLoop.main).sink { [weak self] in self?.ask() }.store(in: &subs)
+        NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification).receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.ask() }.store(in: &subs)
+    }
 
     func load(token: String) {
         guard !token.isEmpty, askedFor != token else { return }
         askedFor = token
+        ask()
+    }
+
+    private func ask() {
+        let token = askedFor
+        guard !token.isEmpty else { return }
         Task {
-            let on = await APIClient.shared.notesEnabled(token: token)
-            if askedFor == token { enabled = on }
+            let answer = await APIClient.shared.notesEnabled(token: token)
+            guard askedFor == token else { return }
+            if let on = answer, enabled != on { enabled = on }
+            keepAsking()
+        }
+    }
+
+    /// while off: asked again every 2 minutes
+    private func keepAsking() {
+        poll?.cancel()
+        poll = nil
+        guard !enabled, !askedFor.isEmpty else { return }
+        poll = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 120_000_000_000)
+            if !Task.isCancelled { self?.ask() }
         }
     }
 
     nonisolated func forget() {
         Task { @MainActor in
-            NotesConfig.shared.enabled = false
-            NotesConfig.shared.askedFor = ""
+            let c = NotesConfig.shared
+            c.enabled = false
+            c.askedFor = ""
+            c.poll?.cancel()
+            c.poll = nil
         }
     }
 }
@@ -107,7 +139,7 @@ struct NotesHub: View {
         .task { await reload() }
         .onChange(of: filter) { _ in Task { await reload() } }
         .onChange(of: query) { _ in scheduleReload() }
-        .onReceive(LiveConnection.shared.notesChanged.filter { $0 == conversationID }.receive(on: RunLoop.main)) { _ in scheduleReload() }
+        .onReceive(LiveConnection.shared.notesChanged.filter { $0.conversation == conversationID }.receive(on: RunLoop.main)) { _ in scheduleReload() }
         .alert(Text("notes.new"), isPresented: $creating) {
             TextField(NSLocalizedString("notes.title.placeholder", comment: ""), text: $newTitle)
             Button("notes.create") { Task { await create() } }

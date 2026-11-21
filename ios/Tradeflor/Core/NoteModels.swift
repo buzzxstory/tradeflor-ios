@@ -256,6 +256,28 @@ struct MeetingNotesCard: Decodable, Equatable {
         edited_at = c.v(.edited_at, 0); contributors = c.v(.contributors, 0)
     }
 
+    /// What the card counts (from the payload, or from the notebook as it is now).
+    struct Counts: Equatable {
+        var title: String?
+        var items: Int
+        var tasks: Int
+        var tasksDone: Int
+        var decisions: Int
+
+        init(title: String?, items: Int, tasks: Int, tasksDone: Int, decisions: Int) {
+            self.title = title; self.items = items; self.tasks = tasks; self.tasksDone = tasksDone; self.decisions = decisions
+        }
+
+        init(_ st: NoteState) {
+            let blocks = st.blocks.filter { !$0.deleted && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            let tasks = st.tasks.filter { !$0.deleted }
+            self.init(title: st.note.title, items: blocks.count, tasks: tasks.count, tasksDone: tasks.filter(\.done).count,
+                      decisions: blocks.filter { $0.section == "decisions" }.count)
+        }
+    }
+
+    var counts: Counts { Counts(title: title, items: items, tasks: tasks, tasksDone: tasks_done, decisions: decisions) }
+
     /// The card payload of a meeting_notes message, or nil.
     static func parse(_ signal: String?) -> MeetingNotesCard? {
         guard let s = signal, !s.isEmpty, let card = try? JSONDecoder().decode(MeetingNotesCard.self, from: Data(s.utf8)),
@@ -282,10 +304,17 @@ extension APIClient {
 
     private static func seg(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_"))) ?? s }
 
-    func notesEnabled(token: String) async -> Bool {
+    /// nil = no answer (offline, a server error): what was known stays; 404 = a server without notes (off).
+    func notesEnabled(token: String) async -> Bool? {
         struct C: Decodable { let enabled: Bool? }
-        guard let d = try? await notesCall("notes/config", method: "GET", token: token) else { return false }
-        return (try? JSONDecoder().decode(C.self, from: d))?.enabled ?? false
+        do {
+            let d = try await notesCall("notes/config", method: "GET", token: token)
+            return (try? JSONDecoder().decode(C.self, from: d))?.enabled ?? false
+        } catch let e as NoteHTTPError where e.status == 404 {
+            return false
+        } catch {
+            return nil
+        }
     }
 
     func listNotes(token: String, conversationID: String, filter: String = "", q: String = "") async throws -> [SharedNote] {

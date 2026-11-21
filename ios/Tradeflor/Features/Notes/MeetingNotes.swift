@@ -1,15 +1,23 @@
 import SwiftUI
+import UIKit
+import Combine
 
 /// The chat card of a call's published notebook (IOS-NOTES-008): "Meeting notes", the title (or "Call notes"/"Video call notes"),
 /// the length, the counts, and Open notes. Message kind "meeting_notes", payload in message.signal; it cannot be forwarded.
 struct MeetingNotesCardView: View {
+    let token: String
     let card: MeetingNotesCard
     let mine: Bool
     let date: Date?
     let onOpen: () -> Void
+    /// the notebook as it is now (the payload is only what it was when the call ended): ticking tasks later shows here
+    @State private var live: MeetingNotesCard.Counts?
+    @State private var refresh: Task<Void, Never>?
+
+    private var counts: MeetingNotesCard.Counts { live ?? card.counts }
 
     private var title: String {
-        if let t = card.title, !t.trimmingCharacters(in: .whitespaces).isEmpty { return t }
+        if let t = counts.title, !t.trimmingCharacters(in: .whitespaces).isEmpty { return t }
         return NSLocalizedString(card.video == true ? "notes.card.video" : "notes.card.call", comment: "")
     }
 
@@ -23,10 +31,10 @@ struct MeetingNotesCardView: View {
                     .frame(maxWidth: .infinity, alignment: NoteText.isRTL(title) ? .trailing : .leading)
                 HStack(spacing: 10) {
                     if card.duration_ms > 0 { Label(NoteRules.meetingDuration(card.duration_ms), systemImage: card.video == true ? "video" : "phone") }
-                    if card.tasks > 0 {
-                        Label(String(format: NSLocalizedString("notes.progress", comment: ""), card.tasks_done, card.tasks), systemImage: "checklist")
+                    if counts.tasks > 0 {
+                        Label(String(format: NSLocalizedString("notes.progress", comment: ""), counts.tasksDone, counts.tasks), systemImage: "checklist")
                     }
-                    if card.decisions > 0 { Label("\(card.decisions)", systemImage: "checkmark.seal") }
+                    if counts.decisions > 0 { Label("\(counts.decisions)", systemImage: "checkmark.seal") }
                 }
                 .font(.caption).foregroundStyle(Theme.muted)
                 Button(action: onOpen) {
@@ -44,6 +52,23 @@ struct MeetingNotesCardView: View {
             .accessibilityElement(children: .contain)
             if !mine { Spacer(minLength: 40) }
         }
+        .task(id: card.note_id) { await load() }
+        .onReceive(LiveConnection.shared.notesChanged.filter { $0.note == card.note_id }.receive(on: RunLoop.main)) { _ in later() }
+        .onReceive(LiveConnection.shared.opened.receive(on: RunLoop.main)) { later() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)) { _ in later() }
+    }
+
+    private func later() {
+        refresh?.cancel()
+        refresh = Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if !Task.isCancelled { await load() }
+        }
+    }
+
+    private func load() async {
+        guard !token.isEmpty, let st = try? await APIClient.shared.getNote(token: token, noteID: card.note_id) else { return }
+        live = MeetingNotesCard.Counts(st)
     }
 }
 
