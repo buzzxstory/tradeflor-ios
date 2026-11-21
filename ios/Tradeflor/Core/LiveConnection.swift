@@ -75,6 +75,9 @@ final class LiveConnection: ObservableObject {
     /// Scan & Connect (event type "flash"): the raw `data` (action claimed / accepted / declined / decided, session_id, guest, peer).
     /// A notification only: whoever listens re-reads GET /connect/sessions/{id} or /connect/pending.
     let flash = PassthroughSubject<[String: Any], Never>()
+    /// Shared Notes: a raw "note.change" frame (an open note reads its own) and "notes.changed" (a chat's list of notes).
+    let noteFrames = PassthroughSubject<Data, Never>()
+    let notesChanged = PassthroughSubject<String, Never>()
 
     private var token: String?
     private var task: URLSessionWebSocketTask?
@@ -383,6 +386,12 @@ final class LiveConnection: ObservableObject {
             return
         }
         if env.type == "sessions" { sessionsChanged.send(()); return }
+        if env.type == "note.change" { noteFrames.send(data); return }
+        if env.type == "notes.changed" {
+            let d = ((try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] as? [String: Any]) ?? [:]
+            if let c = (d["conversation_id"] as? String) ?? env.conversation_id { notesChanged.send(c) }
+            return
+        }
         if env.type == "note" {
             // someone's note over their picture changed (mine on another device: the full note; theirs: the public part or
             // null): whoever shows it reads it from the notice (PROFILE_NOTE_CONTRACT.md)

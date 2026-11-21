@@ -276,6 +276,7 @@ struct RootView: View {
             OutboxFlusher.shared.attach(live: live, token: s.token, userID: s.userID)
             DeliveryStats.shared.attach(live, me: s.userID)
             FlashHub.shared.attach(live: live, token: s.token)
+            NotesConfig.shared.load(token: s.token) // Shared Notes on or off for this account
         } else {
             FlashHub.shared.detach()
             PushManager.shared.stop()

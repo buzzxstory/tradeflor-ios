@@ -171,7 +171,11 @@ struct VideoCallScreen: View {
             .shadow(color: .black.opacity(0.5), radius: 4)
             .accessibilityElement(children: .combine)
             Spacer(minLength: 8)
-            Color.clear.frame(width: 44, height: 44)
+            CallNotebookButton(calls: calls, video: true) {
+                Image(systemName: "note.text").font(.system(size: 17, weight: .semibold))
+                    .frame(width: 44, height: 44).background(Color.black.opacity(0.4), in: Circle())
+            }
+            .frame(width: 44, height: 44)
         }
         .padding(.horizontal, 16).padding(.top, 8)
     }

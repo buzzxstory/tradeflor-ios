@@ -72,6 +72,12 @@ final class CallManager: NSObject, ObservableObject {
     private var conversationID: String?
     /// The chat this call belongs to (the call screen's "Message" button).
     var conversation: String? { conversationID }
+    /// What the Meeting Notebook needs (Shared Notes, IOS-NOTES-006): only while the call is connecting or active. Reading it
+    /// touches nothing of the call (audio, CallKit, video).
+    var notebookContext: (token: String, me: String, callID: String)? {
+        guard let callID, !token.isEmpty, phase == .connecting || phase == .active else { return nil }
+        return (token, me, callID)
+    }
     private var role: Role = .caller
     private var acknowledged = false
     private var uuid = UUID()

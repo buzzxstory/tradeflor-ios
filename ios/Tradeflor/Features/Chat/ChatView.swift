@@ -73,6 +73,10 @@ struct ChatView: View {
     @State private var showPhotoPicker = false
     @State private var showDocPicker = false
     @State private var showMute = false
+    /// Shared Notes: the chat's notes, and a note opened from a meeting notes card
+    @State private var showNotes = false
+    @State private var openNote: OpenNote?
+    @ObservedObject private var notesConfig = NotesConfig.shared
     @State private var muted = false
     @State private var restricted = false
     @State private var myRole = "member"
@@ -819,6 +823,16 @@ struct ChatView: View {
             }
         }
         .fullScreenCover(isPresented: $showSchedule) { ScheduleSheet(chat: chat, initialText: draft).tfColorScheme() }
+        .fullScreenCover(isPresented: $showNotes) {
+            NotesHub(token: token, me: me, conversationID: chat.conversation_id, isGroup: isGroup, isAdmin: isAdmin, people: notePeople)
+                .modifier(ScreenGuardCover(id: chat.conversation_id, on: noScreenshots))
+                .tfColorScheme()
+        }
+        .fullScreenCover(item: $openNote) { o in
+            NoteEditorScreen(token: token, me: me, noteID: o.id, initial: o.initial, people: notePeople, isGroup: isGroup)
+                .modifier(ScreenGuardCover(id: chat.conversation_id, on: noScreenshots))
+                .tfColorScheme()
+        }
         .fullScreenCover(item: $profileFor) { p in MemberProfileSheet(member: p).environmentObject(store).tfColorScheme() }
         .fullScreenCover(isPresented: $addingGroupStatus) {
             StatusCreatorSheet(onPosted: { Task { await loadGroupStatus() } }, groupID: chat.conversation_id, groupName: chat.title)
@@ -1324,6 +1338,14 @@ struct ChatView: View {
         }
     }
 
+    /// The people a note can name: me and the other person, or the group's members.
+    private var notePeople: [NotePerson] {
+        if isGroup { return members.map { NotePerson(id: $0.user_id, name: $0.user_id == me ? NSLocalizedString("chat.you", comment: "") : $0.title) } }
+        var p = [NotePerson(id: me, name: NSLocalizedString("chat.you", comment: ""))]
+        if !chat.peer_id.isEmpty { p.append(NotePerson(id: chat.peer_id, name: chat.title)) }
+        return p
+    }
+
     private var headerMenuItems: [ChatMenuItem] {
         var items: [ChatMenuItem] = []
         let muteItem = muted
@@ -1332,10 +1354,12 @@ struct ChatView: View {
         let scheduledItem = ChatMenuItem("chat.scheduled", systemImage: "calendar") { showSchedule = true }
         let searchItem = ChatMenuItem("chat.search", systemImage: "magnifyingglass") { searchOpen = true; searchText = "" }
         let selectItem = ChatMenuItem("menu.select", systemImage: "checkmark.square") { selecting = true; selected = [] }
+        let notesItem: ChatMenuItem? = notesConfig.enabled ? ChatMenuItem("notes.title", systemImage: "note.text") { showNotes = true } : nil
         if isGroup {
             items.append(ChatMenuItem("group.info", systemImage: "info.circle") { showInfo = true })
             items.append(searchItem)
             items.append(selectItem)
+            if let notesItem { items.append(notesItem) }
             if groupStatus != nil { items.append(ChatMenuItem("gst.watch", systemImage: "circle.dashed") { watchingGroupStatus = true }) }
             if isAdmin { items.append(ChatMenuItem("gst.add", systemImage: "plus.circle.dashed") { addingGroupStatus = true }) }
             items.append(muteItem)
@@ -1351,6 +1375,7 @@ struct ChatView: View {
             items.append(ChatMenuItem("menu.contact", systemImage: "info.circle") { showInfo = true })
             items.append(searchItem)
             items.append(selectItem)
+            if let notesItem { items.append(notesItem) }
             items.append(muteItem)
             items.append(ChatMenuItem("info.disappear", systemImage: "timer") { showInfo = true })
             items.append(ChatMenuItem("ci.theme", systemImage: "paintpalette") { showInfo = true })
@@ -2212,6 +2237,8 @@ struct ChatView: View {
                 LinkPreviewCard(token: token, url: url)
             }
             .frame(maxWidth: .infinity, alignment: m.sender_id == me ? .trailing : .leading)
+        } else if m.kind == "meeting_notes", let card = MeetingNotesCard.parse(m.signal), !m.isDeleted {
+            MeetingNotesCardView(card: card, mine: m.sender_id == me, date: m.date) { openNote = OpenNote(id: card.note_id) }
         } else if m.kind == "notice" {
             Text(noticeText(m)).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .padding(.horizontal, 12).padding(.vertical, 5).background(Theme.surface, in: Capsule())

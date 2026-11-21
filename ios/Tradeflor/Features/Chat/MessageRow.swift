@@ -300,7 +300,7 @@ struct MessageRow<Content: View>: View {
             items.append(MessageMenuItem("chat.save.as", systemImage: "arrow.down.to.line") { save() })
         }
         items.append(MessageMenuItem("chat.copy.link", systemImage: "link") { actions.copyLink() })
-        if !options.restricted {
+        if !options.restricted && message.kind != "meeting_notes" { // a meeting notes card cannot be forwarded (server 403)
             items.append(MessageMenuItem("chat.forward", systemImage: "arrowshape.turn.up.right") { onForward() })
         }
         items.append(MessageMenuItem("chat.delete", systemImage: "trash", destructive: true) { onDelete(false) })
@@ -336,7 +336,7 @@ struct MessageRow<Content: View>: View {
         if let save = actions.save, !options.restricted, !message.isDeleted {
             Button { save() } label: { Label("chat.save.as", systemImage: "square.and.arrow.down") }
         }
-        if !options.restricted {
+        if !options.restricted && message.kind != "meeting_notes" {
             Button { onForward() } label: { Label("chat.forward", systemImage: "arrowshape.turn.up.right") }
         }
         if options.canPin {

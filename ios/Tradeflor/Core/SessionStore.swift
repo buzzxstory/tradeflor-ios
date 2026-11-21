@@ -161,6 +161,8 @@ final class SessionStore: ObservableObject {
         MediaLog.clear() // the status video log names this account's statuses (audit IOS-LC-2)
         NoteStore.shared.forget() // my note belongs to this account
         ScreenGuard.shared.releaseAll()
+        NoteFileStore.forgetAll() // unsent Shared Notes changes of this account
+        NotesConfig.shared.forget()
         LiveConnection.shared.forgetPresence() // who was online, last seen, hidden presence (audit IOS-PRES-7)
         // attachments opened for Quick Look or sharing (decrypted copies, also from locked chats)
         try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("tf-files", isDirectory: true))

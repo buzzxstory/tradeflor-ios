@@ -223,6 +223,12 @@ struct CallScreen: View {
                         .disabled(calls.phase != .active)
                 }
             }
+            CallNotebookButton(calls: calls, video: false) {
+                Label("notes.notebook", systemImage: "note.text").font(.system(size: 15, weight: .semibold))
+                    .padding(.horizontal, 18).frame(minHeight: 44)
+                    .background(Color.white.opacity(0.14), in: Capsule())
+                    .foregroundStyle(.white)
+            }
             labelled("call.hangup") {
                 CallRoundButton(icon: "phone.down.fill", color: Theme.hex(0xF0525B), size: 64, label: "call.hangup") {
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
