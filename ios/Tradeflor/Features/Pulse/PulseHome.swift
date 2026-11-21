@@ -125,7 +125,7 @@ struct PulseHomeView: View {
 
     private var hero: some View {
         ZStack(alignment: .topTrailing) {
-            radar.frame(width: 170, height: 170).offset(x: 40, y: -30).opacity(0.55).allowsHitTesting(false)
+            radar.frame(width: 170, height: 170).offset(x: 64, y: -34).opacity(0.35).allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     HStack(spacing: 5) {
@@ -676,49 +676,38 @@ struct PulseCreateView: View {
     }
 }
 
-/// The brand's slanted badge (sidebar .tf-hdr__badge) with "MEETUP": a parallelogram (14 pt slant, 34 pt high), a 2 pt
-/// gradient frame, a dark inside, spaced white-to-ice letters, a cyan glow and a light sweep every 5.5 s.
+/// The MEETUP pill next to the wordmark (web 36558896): fully rounded, filled with the cyan gradient, an inner top highlight,
+/// a soft glow and a thin light ring; a pin and "MEETUP" in Montserrat 800, dark; a white shine every 5.5 s.
 struct MeetupBadge: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    struct Slant: Shape {
-        var slant: CGFloat = 14
-        func path(in r: CGRect) -> Path {
-            var p = Path()
-            p.move(to: CGPoint(x: r.minX + slant, y: r.minY))
-            p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
-            p.addLine(to: CGPoint(x: r.maxX - slant, y: r.maxY))
-            p.addLine(to: CGPoint(x: r.minX, y: r.maxY))
-            p.closeSubpath()
-            return p
-        }
-    }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 5.5)
-            let sweep = min(1, t / 0.9) // the sweep crosses in 0.9 s, then rests
-            Text(verbatim: "MEETUP")
-                .font(.system(size: 15, weight: .heavy))
-                .tracking(4.8)
-                .foregroundStyle(LinearGradient(colors: [.white, Theme.hex(0xBFF9FF)], startPoint: .top, endPoint: .bottom))
-                .padding(.leading, 22).padding(.trailing, 17)
-                .frame(height: 34)
-                .background(LinearGradient(colors: [Theme.hex(0x0C2934), Theme.hex(0x05141A)], startPoint: .top, endPoint: .bottom), in: Slant())
-                .overlay {
-                    if !reduceMotion && sweep < 1 {
-                        GeometryReader { g in
-                            LinearGradient(colors: [.clear, Color.white.opacity(0.35), .clear], startPoint: .leading, endPoint: .trailing)
-                                .frame(width: 40)
-                                .offset(x: -40 + (g.size.width + 40) * sweep)
-                        }
-                        .clipShape(Slant())
-                        .allowsHitTesting(false)
+            let sweep = min(1, t / 0.9)
+            HStack(spacing: 5) {
+                Image(systemName: "mappin").font(.system(size: 15, weight: .bold))
+                Text(verbatim: "MEETUP").font(PulseFont.brand(12.5)).tracking(3)
+            }
+            .foregroundStyle(Theme.hex(0x00242B))
+            .padding(.horizontal, 13)
+            .frame(height: 30)
+            .background(LinearGradient(colors: [Theme.hex(0x8FFBFF), Theme.hex(0x2EE6F0), Theme.hex(0x0FB8D6), Theme.hex(0x0A9FE0)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing), in: Capsule())
+            .overlay(Capsule().stroke(LinearGradient(colors: [Color.white.opacity(0.55), .clear], startPoint: .top, endPoint: .center), lineWidth: 1).padding(1))
+            .overlay {
+                if !reduceMotion && sweep < 1 {
+                    GeometryReader { g in
+                        LinearGradient(colors: [.clear, Color.white.opacity(0.6), .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: 36)
+                            .offset(x: -36 + (g.size.width + 36) * sweep)
                     }
+                    .clipShape(Capsule())
+                    .allowsHitTesting(false)
                 }
-                .overlay(Slant().stroke(LinearGradient(colors: [Theme.hex(0x0A9FE0), Theme.hex(0x19E3F5), Theme.hex(0x7FF6FF), Theme.hex(0x19E3F5), Theme.hex(0x0A9FE0)],
-                                                       startPoint: .leading, endPoint: .trailing), lineWidth: 2))
-                .shadow(color: Theme.hex(0x19E3F5, 0.55), radius: 10)
+            }
+            .overlay(Capsule().stroke(Color(red: 127 / 255, green: 250 / 255, blue: 1, opacity: 0.35), lineWidth: 1))
+            .shadow(color: Theme.hex(0x2EE6F0, 0.5), radius: 10)
         }
         .fixedSize()
         .accessibilityLabel(Text(verbatim: "Meetup"))
