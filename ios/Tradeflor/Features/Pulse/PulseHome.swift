@@ -145,12 +145,19 @@ struct PulseHomeView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                HStack(spacing: 0) {
-                    Text(verbatim: "TradeFlor ").foregroundStyle(PulseInk.ink)
-                    Text(verbatim: "Pulse").foregroundStyle(LinearGradient(colors: [Color(red: 0.6, green: 0.97, blue: 1), PulseInk.cyan], startPoint: .top, endPoint: .bottom))
+                // the brand lockup: Trade (white) Flor (the sidebar's turquoise) and the slanted MEETUP badge
+                HStack(spacing: 10) {
+                    HStack(spacing: 0) {
+                        Text(verbatim: "Trade").foregroundStyle(Theme.hex(0xF7FBFD))
+                        Text(verbatim: "Flor").foregroundStyle(LinearGradient(colors: [Theme.hex(0x7FF8FF), Theme.hex(0x2AE8F8), Theme.hex(0x14D2F2)],
+                                                                         startPoint: .top, endPoint: .bottom))
+                    }
+                    .font(.system(size: 29, weight: .heavy))
+                    .kerning(-1)
+                    MeetupBadge()
                 }
-                .font(.system(size: 30, weight: .black))
                 .lineLimit(1).minimumScaleFactor(0.8)
+                .accessibilityElement(children: .combine)
                 Text("pulse.home.line").font(.subheadline).foregroundStyle(PulseInk.muted).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
                     Button { creating = true } label: {
@@ -645,5 +652,54 @@ struct PulseCreateView: View {
         } catch {
             self.error = NSLocalizedString("pulse.err.other", comment: "")
         }
+    }
+}
+
+/// The brand's slanted badge (sidebar .tf-hdr__badge) with "MEETUP": a parallelogram (14 pt slant, 34 pt high), a 2 pt
+/// gradient frame, a dark inside, spaced white-to-ice letters, a cyan glow and a light sweep every 5.5 s.
+struct MeetupBadge: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    struct Slant: Shape {
+        var slant: CGFloat = 14
+        func path(in r: CGRect) -> Path {
+            var p = Path()
+            p.move(to: CGPoint(x: r.minX + slant, y: r.minY))
+            p.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+            p.addLine(to: CGPoint(x: r.maxX - slant, y: r.maxY))
+            p.addLine(to: CGPoint(x: r.minX, y: r.maxY))
+            p.closeSubpath()
+            return p
+        }
+    }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 5.5)
+            let sweep = min(1, t / 0.9) // the sweep crosses in 0.9 s, then rests
+            Text(verbatim: "MEETUP")
+                .font(.system(size: 15, weight: .heavy))
+                .tracking(4.8)
+                .foregroundStyle(LinearGradient(colors: [.white, Theme.hex(0xBFF9FF)], startPoint: .top, endPoint: .bottom))
+                .padding(.leading, 22).padding(.trailing, 17)
+                .frame(height: 34)
+                .background(LinearGradient(colors: [Theme.hex(0x0C2934), Theme.hex(0x05141A)], startPoint: .top, endPoint: .bottom), in: Slant())
+                .overlay {
+                    if !reduceMotion && sweep < 1 {
+                        GeometryReader { g in
+                            LinearGradient(colors: [.clear, Color.white.opacity(0.35), .clear], startPoint: .leading, endPoint: .trailing)
+                                .frame(width: 40)
+                                .offset(x: -40 + (g.size.width + 40) * sweep)
+                        }
+                        .clipShape(Slant())
+                        .allowsHitTesting(false)
+                    }
+                }
+                .overlay(Slant().stroke(LinearGradient(colors: [Theme.hex(0x0A9FE0), Theme.hex(0x19E3F5), Theme.hex(0x7FF6FF), Theme.hex(0x19E3F5), Theme.hex(0x0A9FE0)],
+                                                       startPoint: .leading, endPoint: .trailing), lineWidth: 2))
+                .shadow(color: Theme.hex(0x19E3F5, 0.55), radius: 10)
+        }
+        .fixedSize()
+        .accessibilityLabel(Text(verbatim: "Meetup"))
     }
 }
