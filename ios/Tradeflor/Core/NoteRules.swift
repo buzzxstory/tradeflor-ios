@@ -103,13 +103,13 @@ enum NoteRules {
 
     static let sectionOrder = ["notes", "decisions", "followup"]
 
-    static func sectionRank(_ s: String?) -> Int { sectionOrder.firstIndex(of: s ?? "notes") ?? 0 }
+    static func sectionRank(_ s: String) -> Int { sectionOrder.firstIndex(of: s) ?? 0 }
 
     /// Byte-wise compare (as the server compares positions).
     static func bytesLess(_ a: String, _ b: String) -> Bool { Array(a.utf8).lexicographicallyPrecedes(Array(b.utf8)) }
 
     /// Items in display order: by section, then position (byte order), then id.
-    static func sortByPos<T>(_ items: [T], pos: (T) -> String, id: (T) -> String, section: (T) -> String?) -> [T] {
+    static func sortByPos<T>(_ items: [T], pos: (T) -> String, id: (T) -> String, section: (T) -> String) -> [T] {
         items.sorted { a, b in
             let sa = sectionRank(section(a)), sb = sectionRank(section(b))
             if sa != sb { return sa < sb }

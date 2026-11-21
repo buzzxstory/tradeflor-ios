@@ -25,7 +25,7 @@ final class NoteRulesTests: XCTestCase {
     func testPositionsCountCodePoints() {
         XCTAssertEqual(R.cpLen("👋"), 1)
         XCTAssertEqual(R.applySplice("a👋b", 1, 2, "x"), "axb")
-        XCTAssertEqual(R.diffSplice("a👋b", "a👋🙂b"), .init(from: 2, to: 2, insert: "🙂"))
+        XCTAssertEqual(R.diffSplice("a👋b", "a👋🙂b"), NoteRules.TextSplice(from: 2, to: 2, insert: "🙂"))
         // an Arabic letter with a mark is two code points (one grapheme): the server counts two
         XCTAssertEqual(R.cpLen("بُ"), 2)
     }

@@ -103,6 +103,8 @@ struct CallNotebookButton<L: View>: View {
 private extension View {
     /// iOS 16.4+: the call's picture behind a half-height notebook still takes taps.
     @ViewBuilder func tfNotebookBackground(_ on: Bool) -> some View {
-        if #available(iOS 16.4, *), on { self.presentationBackgroundInteraction(.enabled(upThrough: .medium)) } else { self }
+        if on {
+            if #available(iOS 16.4, *) { self.presentationBackgroundInteraction(.enabled(upThrough: .medium)) } else { self }
+        } else { self }
     }
 }
