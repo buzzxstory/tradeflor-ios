@@ -783,59 +783,86 @@ struct PulseMeetupScreen: View {
         await load()
     }
 
+    /// Find My Friend (web, owner "organize it"): per friend, the face, the name and a big distance away; two chips (the age
+    /// and the accuracy); Directions and Meet halfway. Nothing else.
     private var findSheet: some View {
-        NavigationStack {
-            List {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("pulse.findfriend").font(PulseFont.display(19, 800)).foregroundStyle(PulseInk.ink)
                 let sharing = members.filter { $0.user_id != me && locations[$0.user_id] != nil }
-                if sharing.isEmpty { Text("pulse.find.nobody").foregroundStyle(Theme.muted) }
-                ForEach(sharing) { m in
-                    let loc = locations[m.user_id]!
-                    let stale = PulseRules.freshness(loc.measured_at, now: nowMs) == .stale
-                    VStack(alignment: .leading, spacing: 6) {
-                        Button {
-                            selected = m.user_id
-                            camera = PulseCamera(mode: .follow(m.user_id), nonce: camera.nonce + 1)
-                            sheet = nil
-                        } label: {
-                            HStack {
-                                Avatar(token: token, userID: m.user_id, avatarID: people[m.user_id]?.avatar_id, title: name(m.user_id), size: 36)
-                                Text(verbatim: name(m.user_id)).font(.headline)
-                            }
-                        }
-                        Text(verbatim: String(format: NSLocalizedString("pulse.find.age", comment: ""), PulseRules.agoText(loc.measured_at, now: nowMs), Int(loc.accuracy ?? 0)))
-                            .font(.caption).foregroundStyle(Theme.muted)
-                        if stale { Text("pulse.find.stale").font(.caption).foregroundStyle(Theme.gold) }
-                        if let mine = sharer.lastFix, sharingHere {
-                            Text(verbatim: String(format: NSLocalizedString("pulse.find.fromyou", comment: ""),
-                                                  PulseRules.distanceText(PulseRules.distanceM(mine.coordinate.latitude, mine.coordinate.longitude, loc.lat, loc.lon))))
-                                .font(.caption).foregroundStyle(Theme.muted)
-                        }
-                        Text("pulse.find.indoors").font(.caption2).foregroundStyle(Theme.faint)
-                        HStack {
-                            Button("pulse.find.directions") {
-                                if let u = URL(string: "http://maps.apple.com/?daddr=\(loc.lat),\(loc.lon)") { UIApplication.shared.open(u) }
-                            }
-                            Spacer()
-                            if let mine = sharer.lastFix, sharingHere {
-                                Button("pulse.find.halfway") {
-                                    Task {
-                                        _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "proposals",
-                                                                                 body: ["name": NSLocalizedString("pulse.halfway", comment: ""),
-                                                                                        "lat": (mine.coordinate.latitude + loc.lat) / 2, "lon": (mine.coordinate.longitude + loc.lon) / 2])
-                                        sheet = nil
-                                        await load()
-                                    }
-                                }
-                            }
-                        }
-                        .font(.footnote.weight(.semibold)).buttonStyle(.borderless)
+                if sharing.isEmpty { Text("pulse.find.nobody").font(PulseFont.text(14)).foregroundStyle(PulseInk.muted) }
+                ForEach(sharing) { m in friendCard(m, locations[m.user_id]!) }
+            }
+            .padding(20)
+        }
+    }
+
+    private func friendCard(_ m: PulseMember, _ loc: PulseLocation) -> some View {
+        let stale = PulseRules.freshness(loc.measured_at, now: nowMs) == .stale
+        let mine = sharingHere ? sharer.lastFix : nil
+        let away = mine.map { PulseRules.distanceM($0.coordinate.latitude, $0.coordinate.longitude, loc.lat, loc.lon) }
+        let acc = loc.accuracy ?? 0
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Avatar(token: token, userID: m.user_id, avatarID: people[m.user_id]?.avatar_id, title: name(m.user_id), size: 46)
+                    .overlay(Circle().stroke(PulseInk.cyan, lineWidth: 2.5))
+                Text(verbatim: name(m.user_id)).font(PulseFont.display(17, 800)).foregroundStyle(PulseInk.ink).lineLimit(1)
+                Spacer(minLength: 6)
+                if let away {
+                    VStack(alignment: .trailing, spacing: 0) {
+                        Text(verbatim: PulseRules.distanceText(away)).font(.system(size: 24, weight: .bold).monospacedDigit())
+                            .foregroundStyle(LinearGradient(colors: [Theme.hex(0x7FFAFF), PulseInk.cyan], startPoint: .top, endPoint: .bottom))
+                        Text("pulse.find.away").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PulseInk.muted)
                     }
-                    .padding(.vertical, 4)
                 }
             }
-            .navigationTitle(Text("pulse.findfriend"))
-            .navigationBarTitleDisplayMode(.inline)
+            HStack(spacing: 8) {
+                findChip("clock", PulseRules.agoText(loc.measured_at, now: nowMs), stale ? PulseInk.amber : PulseInk.muted)
+                findChip("location", loc.approximate ? String(format: NSLocalizedString("pulse.find.approx", comment: ""), PulseRules.distanceText(acc))
+                                                     : "±" + PulseRules.distanceText(acc), loc.approximate ? PulseInk.amber : PulseInk.muted)
+            }
+            HStack(spacing: 10) {
+                Button {
+                    if let u = URL(string: "http://maps.apple.com/?daddr=\(loc.lat),\(loc.lon)") { UIApplication.shared.open(u) }
+                } label: {
+                    Label("pulse.find.directions2", systemImage: "map").font(PulseFont.display(14, 800)).frame(maxWidth: .infinity, minHeight: 44)
+                        .overlay(Capsule().stroke(PulseInk.cyan.opacity(0.6), lineWidth: 1.2)).foregroundStyle(PulseInk.ink)
+                }
+                Button {
+                    selected = m.user_id
+                    camera = PulseCamera(mode: .follow(m.user_id), nonce: camera.nonce + 1)
+                    Task {
+                        var fix = sharer.lastFix
+                        if fix == nil { fix = await sharer.readOnce() }
+                        guard let mine = fix else { flash = NSLocalizedString("pulse.find.needyou", comment: ""); return }
+                        _ = try? await APIClient.shared.pulsePost(token: token, circle: circleID, "proposals",
+                                                                 body: ["name": NSLocalizedString("pulse.halfway", comment: ""),
+                                                                        "lat": (mine.coordinate.latitude + loc.lat) / 2, "lon": (mine.coordinate.longitude + loc.lon) / 2])
+                        sheet = nil
+                        await load()
+                    }
+                } label: {
+                    Label("pulse.find.halfway2", systemImage: "person.2.fill").font(PulseFont.display(14, 800)).frame(maxWidth: .infinity, minHeight: 44)
+                        .background(PulseInk.gradient, in: Capsule()).foregroundStyle(Theme.hex(0x04222C))
+                }
+            }
+            .buttonStyle(.plain)
         }
+        .padding(14)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            selected = m.user_id
+            camera = PulseCamera(mode: .follow(m.user_id), nonce: camera.nonce + 1)
+            sheet = nil
+        }
+    }
+
+    private func findChip(_ icon: String, _ text: String, _ c: Color) -> some View {
+        Label(text, systemImage: icon).font(PulseFont.text(12, 600)).foregroundStyle(c)
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(c.opacity(0.12), in: Capsule())
     }
 
     private var moreSheet: some View {

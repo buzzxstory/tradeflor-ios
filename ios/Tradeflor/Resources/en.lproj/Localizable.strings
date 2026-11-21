@@ -2623,3 +2623,8 @@
 "pulse.how.2.sub" = "Each person chooses to share, for how long, and can stop anytime.";
 "pulse.how.3" = "See everyone arrive";
 "pulse.how.3.sub" = "Live on the map, with arrival alerts. It all ends by itself.";
+"pulse.find.away" = "AWAY";
+"pulse.find.approx" = "Approx. ±%@";
+"pulse.find.directions2" = "Directions";
+"pulse.find.halfway2" = "Meet halfway";
+"pulse.find.needyou" = "Your position is needed to suggest halfway.";
