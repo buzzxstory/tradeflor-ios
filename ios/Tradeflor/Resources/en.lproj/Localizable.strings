@@ -2757,3 +2757,11 @@
 "pulse.more.leave.sub" = "Your location stops at once";
 "pulse.find.notsharing" = "%@ isn't sharing location";
 "pulse.find.notsharing.sub" = "Their position appears here as soon as they share.";
+
+/* SOS countdown, organized (web d68efdfc) */
+"sos.alerting.one" = "Alerting 1 person in this meetup";
+"sos.alerting.n" = "Alerting %d people in this meetup";
+"sos.what" = "What happened?";
+"sos.attach2" = "Attach my location";
+"sos.footer.1" = "Alerts your friends only — not emergency services.";
+"sos.footer.2" = "Delivery can't be guaranteed.";

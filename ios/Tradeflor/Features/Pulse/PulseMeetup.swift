@@ -1521,15 +1521,29 @@ struct PulseSOSCountdown: View {
     @State private var key = PulseSOSRules.newKey()
 
     private static let reasons = ["pulse.sos.r.help", "pulse.sos.r.accident", "pulse.sos.r.danger", "pulse.sos.r.medical"]
+    /// web d68efdfc: lifebuoy, car, warning triangle, square with a plus
+    private static let reasonIcons = ["lifepreserver", "car.fill", "exclamationmark.triangle.fill", "cross.case.fill"]
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: 12) {
                 dial
                 Text(LocalizedStringKey(paused ? "sos.paused" : "pulse.sos.sending")).font(PulseFont.display(26, 900))
                     .accessibilityAddTraits(.isHeader)
-                Text(verbatim: lead)
-                    .font(PulseFont.text(15)).multilineTextAlignment(.center).opacity(0.9).padding(.horizontal, 24)
+                if paused {
+                    Text(verbatim: lead)
+                        .font(PulseFont.text(15)).multilineTextAlignment(.center).opacity(0.9).padding(.horizontal, 24)
+                } else {
+                    // who is alerted, as a pill
+                    Label { Text(verbatim: lead) } icon: { Image(systemName: "person.2.fill").font(.system(size: 13, weight: .semibold)) }
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.hex(0xFFE3E6))
+                        .padding(.horizontal, 14).padding(.vertical, 6)
+                        .background(Color.white.opacity(0.1), in: Capsule())
+                }
+                Text("sos.what").font(.system(size: 11.5, weight: .heavy)).tracking(1.4).textCase(.uppercase)
+                    .foregroundStyle(Theme.hex(0xFFC2CA))
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.top, 4)
+                    .accessibilityAddTraits(.isHeader)
                 reasonGrid
                 attachRow
                 Button { send() } label: {
@@ -1552,7 +1566,16 @@ struct PulseSOSCountdown: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 24)
-                Text("sos.footer").font(.caption).multilineTextAlignment(.center).opacity(0.85).padding(.horizontal, 28)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "info.circle").font(.system(size: 14, weight: .semibold)).padding(.top, 1)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("sos.footer.1")
+                        Text("sos.footer.2")
+                    }
+                    Spacer(minLength: 0)
+                }
+                .font(.system(size: 12.5)).opacity(0.85).padding(.horizontal, 24)
+                .accessibilityElement(children: .combine)
             }
             .padding(.vertical, 30)
         }
@@ -1570,7 +1593,7 @@ struct PulseSOSCountdown: View {
 
     private var lead: String {
         if paused { return NSLocalizedString("sos.paused.sub", comment: "") }
-        return String(format: NSLocalizedString(others == 1 ? "sos.to.one" : "sos.to.n", comment: ""), others)
+        return String(format: NSLocalizedString(others == 1 ? "sos.alerting.one" : "sos.alerting.n", comment: ""), others)
     }
 
     private var dial: some View {
@@ -1589,9 +1612,16 @@ struct PulseSOSCountdown: View {
         LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
             ForEach(Self.reasons.indices, id: \.self) { i in
                 Button { reason = i } label: {
-                    Text(LocalizedStringKey(Self.reasons[i])).font(.footnote.weight(.bold)).frame(maxWidth: .infinity, minHeight: 44)
-                        .background(reason == i ? Color.white : Color.white.opacity(0.14), in: Capsule())
-                        .foregroundStyle(reason == i ? Theme.hex(0xB8102A) : .white)
+                    HStack(spacing: 9) {
+                        Image(systemName: Self.reasonIcons[i]).font(.system(size: 17, weight: .semibold)).frame(width: 22)
+                        Text(LocalizedStringKey(Self.reasons[i])).font(.system(size: 14, weight: .bold)).multilineTextAlignment(.leading)
+                            .lineLimit(2).minimumScaleFactor(0.85)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .background(reason == i ? Color.white : Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .foregroundStyle(reason == i ? Theme.hex(0xB8102A) : .white)
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(reason == i ? .isSelected : [])
@@ -1600,16 +1630,24 @@ struct PulseSOSCountdown: View {
         .padding(.horizontal, 24)
     }
 
+    /// The location as a switch row: a white chip with a pin, the title and its note, a switch (green when on).
     private var attachRow: some View {
         Toggle(isOn: $attach) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("sos.attach").font(.subheadline.weight(.bold))
-                Text("sos.attach.sub").font(.caption).opacity(0.8)
+            HStack(spacing: 12) {
+                Image(systemName: "mappin.and.ellipse").font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(attach ? Theme.hex(0xB8102A) : .white)
+                    .frame(width: 36, height: 36)
+                    .background(attach ? Color.white : Color.white.opacity(0.18), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("sos.attach2").font(.system(size: 14.5, weight: .heavy))
+                    Text("sos.attach.sub").font(.system(size: 12)).foregroundStyle(Theme.hex(0xFFCFD5))
+                }
             }
         }
-        .tint(PulseInk.green)
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .tint(Theme.hex(0x59F0A0))
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.2), lineWidth: 1))
         .padding(.horizontal, 24)
     }
 

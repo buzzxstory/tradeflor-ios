@@ -2757,3 +2757,11 @@
 "pulse.more.leave.sub" = "يتوقف موقعك فورًا";
 "pulse.find.notsharing" = "%@ لا يشارك موقعه";
 "pulse.find.notsharing.sub" = "سيظهر موقعه هنا بمجرد أن يشاركه.";
+
+/* SOS countdown, organized (web d68efdfc) */
+"sos.alerting.one" = "تنبيه شخص واحد في هذا اللقاء";
+"sos.alerting.n" = "تنبيه %d أشخاص في هذا اللقاء";
+"sos.what" = "ماذا حدث؟";
+"sos.attach2" = "إرفاق موقعي";
+"sos.footer.1" = "ينبّه أصدقاءك فقط — ليس خدمات الطوارئ.";
+"sos.footer.2" = "لا يمكن ضمان الوصول.";
