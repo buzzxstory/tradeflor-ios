@@ -67,4 +67,15 @@ final class CallVideoTests: XCTestCase {
         XCTAssertTrue(sdp.contains("H264"))
         XCTAssertTrue(sdp.contains("VP8"))
     }
+
+    /// Audit T4: a flip after the call ended (camera off) does nothing and starts no capture.
+    func testFlipAfterEndIsIgnored() async {
+        let v = video()
+        v.reset()
+        let g = v.generation
+        await v.flip()
+        XCTAssertFalse(v.cameraOn)
+        XCTAssertTrue(v.front, "nothing flipped")
+        XCTAssertEqual(v.generation, g, "no capture was started or stopped")
+    }
 }

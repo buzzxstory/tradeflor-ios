@@ -1374,6 +1374,8 @@ final class CallManager: NSObject, ObservableObject {
         if connectedAt == nil { connectedAt = Date() }
         CallTones.shared.connected()
         logAudio("connected")
+        // a video call: what the picture really does during its first 30 s (Console, category "video"; audit T2/T3)
+        if video.isVideo, let pc, let id = callID { video.logStatsForAWhile(pc, callID: id) }
         // the CallKit call this phone started (also when a glare merge made us the callee): connected, the system clock runs
         if startedHere { provider.reportOutgoingCall(with: uuid, connectedAt: connectedAt) }
     }

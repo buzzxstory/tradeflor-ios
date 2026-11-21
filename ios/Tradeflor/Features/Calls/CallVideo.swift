@@ -2,6 +2,11 @@ import AVFoundation
 import Combine
 import UIKit
 import WebRTC
+import os
+
+/// Video call diagnostics (Console: subsystem com.tradeflor.ios, category video): capture start / stop, and once a second
+/// for the first 30 s of a video call what the picture really does (audit T1-T3, T11: measured, not estimated).
+private let videoLog = Logger(subsystem: "com.tradeflor.ios", category: "video")
 
 /// The picture of a 1-to-1 call (VIDEO_CALL_PROTOCOL.md, IOS-VIDEO-001…008): the camera, its track and the other person's
 /// picture, on the same peer connection as the voice. CallManager owns the call and asks this object at fixed points:
@@ -144,6 +149,7 @@ final class CallVideo: ObservableObject {
         guard let i = Self.pickFormat(dims, hot: hot) else { return false }
         let fps = Int(min(hot ? 24 : 30, dims[i].maxFps))
         let gen = generation
+        videoLog.info("capture start \(dims[i].width)x\(dims[i].height)@\(fps) \(self.front ? "front" : "back", privacy: .public) (generation \(gen, privacy: .public))")
         return await withCheckedContinuation { cont in
             capturer.startCapture(with: dev, format: formats[i], fps: fps) { [weak self] err in
                 Task { @MainActor in
@@ -159,7 +165,36 @@ final class CallVideo: ObservableObject {
     /// Stops the capture at once: the green camera dot goes off.
     func stopCapture() {
         generation += 1
+        if capturer != nil { videoLog.info("capture stop (generation \(self.generation, privacy: .public))") }
         capturer?.stopCapture()
+    }
+
+    // MARK: diagnostics
+
+    /// Once a second for 30 s: my outbound picture (size, frames per second, why it is limited, which encoder) and the
+    /// incoming one (size, fps, frames decoded, which decoder). Read in Console, filter "video".
+    func logStatsForAWhile(_ pc: RTCPeerConnection, callID: String) {
+        Task { @MainActor [weak self, weak pc] in
+            for second in 1...30 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, let pc, self.isVideo else { return }
+                pc.statistics { report in
+                    var line = "call \(callID.prefix(8)) t=\(second)s"
+                    for s in report.statistics.values {
+                        let v = s.values
+                        func f(_ k: String) -> String { v[k].map { "\($0)" } ?? "-" }
+                        if s.type == "outbound-rtp", f("kind") == "video" {
+                            line += " out=" + f("frameWidth") + "x" + f("frameHeight") + "@" + f("framesPerSecond")
+                            line += " limit=" + f("qualityLimitationReason") + " enc=" + f("encoderImplementation")
+                        } else if s.type == "inbound-rtp", f("kind") == "video" {
+                            line += " in=" + f("frameWidth") + "x" + f("frameHeight") + "@" + f("framesPerSecond")
+                            line += " decoded=" + f("framesDecoded") + " dec=" + f("decoderImplementation")
+                        }
+                    }
+                    videoLog.info("\(line, privacy: .public)")
+                }
+            }
+        }
     }
 
     /// Flip: the other camera on the same track, nothing renegotiated.
