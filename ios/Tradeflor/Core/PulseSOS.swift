@@ -131,6 +131,8 @@ final class SOSCenter: ObservableObject {
     private var opened = Set<String>()
     private var subs = Set<AnyCancellable>()
     private var reloadTask: Task<Void, Never>?
+    /// A tapped SOS notice that started the app before the session was attached ("" = no id): opened after the first list.
+    private var pendingPush: String?
 
     private init() {
         LiveConnection.shared.opened.receive(on: RunLoop.main).sink { [weak self] in self?.reloadSoon() }.store(in: &subs)
@@ -141,7 +143,11 @@ final class SOSCenter: ObservableObject {
 
     func attach(token: String, me: String) {
         guard !token.isEmpty, token != self.token else { return }
-        if me != self.me { clear() }
+        if me != self.me {
+            let tapped = pendingPush // a notice tapped at launch belongs to the account being attached now
+            clear()
+            pendingPush = tapped
+        }
         self.token = token
         self.me = me
         reloadSoon()
@@ -152,6 +158,7 @@ final class SOSCenter: ObservableObject {
         token = ""; me = ""
         active = []; people = [:]; shown = nil; toast = nil
         delivered = []; seenSent = []; opened = []
+        pendingPush = nil
     }
 
     var incoming: [PulseEmergency] { active.filter { $0.user_id != me && $0.isActive } }
@@ -185,6 +192,10 @@ final class SOSCenter: ObservableObject {
                 open(e.id)
             }
         }
+        if let p = pendingPush {
+            pendingPush = nil
+            if !p.isEmpty, emergency(p) != nil { open(p) } else if let first = incoming.first { open(first.id) }
+        }
     }
 
     /// The app received this SOS (event, push or list): told once.
@@ -210,6 +221,7 @@ final class SOSCenter: ObservableObject {
 
     /// A push tapped (pulse-alert-<id>): find it and open it.
     func openFromPush(_ id: String?) {
+        guard !token.isEmpty else { pendingPush = id ?? ""; return }
         Task {
             await reload()
             if let id, emergency(id) != nil { open(id) } else if let first = incoming.first { open(first.id) }

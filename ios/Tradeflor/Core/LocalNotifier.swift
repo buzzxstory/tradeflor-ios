@@ -569,7 +569,13 @@ final class LocalNotifier: NSObject, ObservableObject, UNUserNotificationCenterD
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         // in front, a missed call is already on screen (the end-of-call card): only kept in Notification Center
-        if notification.request.content.userInfo["tf"] != nil {
+        let tf = notification.request.content.userInfo["tf"] as? [AnyHashable: Any]
+        if (tf?["kind"] as? String) == "pulse-alert" {
+            // an SOS in front: the emergency screen comes from GET /pulse/sos (also when the live connection was down);
+            // the notice stays in Notification Center
+            Task { @MainActor in SOSCenter.shared.reloadSoon() }
+            completionHandler([.list])
+        } else if notification.request.content.userInfo["tf"] != nil {
             completionHandler([]) // a remote push ("New message"): the app in front shows the real message itself
         } else if notification.request.content.categoryIdentifier == LocalNotifier.missedCallCategory {
             completionHandler([.list])
