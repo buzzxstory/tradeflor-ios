@@ -59,6 +59,7 @@ final class TouchGuardTests: XCTestCase {
             "MediaViewer.swift": 1,         // the video scrubber
             "StatusViewerScreen.swift": 1,  // press-and-hold pauses a status
             "OfficialAndCalendar.swift": 1, // the same hold in the Official viewer
+            "PulseMeetup.swift": 1,         // Pulse walkie-talkie hold, in the bottom bar outside the panel's list
         ]
         for s in try sources() {
             XCTAssertEqual(count("highPriorityGesture(DragGesture", in: s.text), 0,
