@@ -16,16 +16,27 @@ on:
     branches: [ios-app]
     paths: ["ios/**", ".github/workflows/ios.yml"]
   workflow_dispatch:
+    inputs:
+      testflight:
+        description: "Upload this build to App Store Connect (TestFlight) instead of the usual build"
+        type: boolean
+        default: false
+      version:
+        description: "TestFlight only: version shown (empty = the one in ios/project.yml), e.g. 1.0"
+        required: false
+        default: ""
 
+# a push cancels an older build of the same branch, never a TestFlight upload (its own group)
 concurrency:
-  group: ios-${{ github.ref }}
-  cancel-in-progress: true
+  group: ios-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.testflight && 'testflight' || 'build' }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.testflight) }}
 
 permissions:
   contents: read
 
 jobs:
   ios:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.testflight) }}
     runs-on: macos-15
     timeout-minutes: 60
     defaults:
@@ -237,3 +248,194 @@ jobs:
           path: ios/screenshots.tgz.enc
           if-no-files-found: ignore
           retention-days: 14
+
+  # Upload to App Store Connect (TestFlight): what Xcode's Product > Archive > Distribute App > App Store Connect does,
+  # without a Mac. Runs ONLY when started by hand with "testflight" ticked (Actions > iOS > Run workflow); a push never
+  # uploads anything to Apple. Secrets (read from secrets only; keychain, profiles and API key are deleted at the end):
+  #   IOS_P12_BASE64, IOS_P12_PASSWORD   the Apple Distribution certificate (the same one the Ad Hoc build uses)
+  #   IOS_APPSTORE_PROFILE_BASE64        base64 of the "App Store Connect" profile of com.tradeflor.ios
+  #   IOS_APPSTORE_NSE_PROFILE_BASE64    base64 of the "App Store Connect" profile of com.tradeflor.ios.NotificationService
+  #   ASC_KEY_P8_BASE64                  base64 of the App Store Connect API key file (AuthKey_XXXX.p8, role App Manager)
+  #   ASC_KEY_ID, ASC_ISSUER_ID          that key's Key ID and the team's Issuer ID
+  # The build number is the UTC time (YYMMDDHHMM): every upload is newer than the last, as Apple requires.
+  testflight:
+    if: github.event_name == 'workflow_dispatch' && inputs.testflight
+    runs-on: macos-15
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check secrets
+        env:
+          IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
+          IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+          IOS_APPSTORE_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_PROFILE_BASE64 }}
+          IOS_APPSTORE_NSE_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_NSE_PROFILE_BASE64 }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          missing=""
+          for n in IOS_P12_BASE64 IOS_P12_PASSWORD IOS_APPSTORE_PROFILE_BASE64 IOS_APPSTORE_NSE_PROFILE_BASE64 ASC_KEY_P8_BASE64 ASC_KEY_ID ASC_ISSUER_ID; do
+            if [ -z "${!n}" ]; then missing="$missing $n"; fi
+          done
+          if [ -n "$missing" ]; then echo "::error::missing repository secrets:$missing"; exit 1; fi
+          echo "all secrets present"
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+          xcodebuild -version
+
+      - name: Archive, export and upload to App Store Connect
+        env:
+          IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
+          IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+          IOS_APPSTORE_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_PROFILE_BASE64 }}
+          IOS_APPSTORE_NSE_PROFILE_BASE64: ${{ secrets.IOS_APPSTORE_NSE_PROFILE_BASE64 }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          VERSION_INPUT: ${{ inputs.version }}
+          TEAM_ID: Y77J267QX7
+          RUNNER_TEMP_DIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          KC="$RUNNER_TEMP_DIR/tf-store.keychain-db"
+          KCPASS="$(openssl rand -hex 24)"
+          P12="$RUNNER_TEMP_DIR/dist.p12"
+          PROF="$RUNNER_TEMP_DIR/store.mobileprovision"
+          NSEPROF="$RUNNER_TEMP_DIR/store-nse.mobileprovision"
+          KEYDIR="$HOME/.appstoreconnect/private_keys"
+          PROFDIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          cleanup() {
+            security delete-keychain "$KC" >/dev/null 2>&1 || true
+            rm -f "$P12" "$PROF" "$NSEPROF" "$KEYDIR/AuthKey_$ASC_KEY_ID.p8"
+            rm -f "$PROFDIR"/*.mobileprovision 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          # version and build number
+          BUILD="$(date -u +%y%m%d%H%M)"
+          VERSION_ARG=""
+          if [ -n "$VERSION_INPUT" ]; then
+            echo "$VERSION_INPUT" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$' || { echo "::error::version must look like 1.0 or 1.0.1"; exit 1; }
+            VERSION_ARG="MARKETING_VERSION=$VERSION_INPUT"
+          fi
+          echo "build number $BUILD ${VERSION_INPUT:+version $VERSION_INPUT}"
+
+          # the App Store icon may not have transparency (Apple refuses the upload)
+          for f in Tradeflor/Resources/Assets.xcassets/AppIcon.appiconset/*.png; do
+            if [ "$(sips -g hasAlpha "$f" | awk '/hasAlpha/ {print $2}')" = "yes" ]; then echo "::error::$f has transparency"; exit 1; fi
+          done
+
+          # certificate (as the Ad Hoc build imports it)
+          echo "$IOS_P12_BASE64" | base64 --decode > "$P12"
+          security create-keychain -p "$KCPASS" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPASS" "$KC"
+          if ! security import "$P12" -k "$KC" -P "$IOS_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security 2>import.err; then
+            echo "::warning::direct .p12 import failed; retrying through OpenSSL 3"
+            brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3 >/dev/null
+            OSSL="$(brew --prefix openssl@3)/bin/openssl"
+            export TF_P12_PW="$IOS_P12_PASSWORD"
+            "$OSSL" pkcs12 -in "$P12" -passin env:TF_P12_PW -nodes -out "$RUNNER_TEMP_DIR/dist.pem" || { echo "::error::the .p12 password (IOS_P12_PASSWORD) does not open the .p12 (IOS_P12_BASE64)"; exit 1; }
+            "$OSSL" pkcs12 -export -legacy -in "$RUNNER_TEMP_DIR/dist.pem" -passout env:TF_P12_PW -out "$RUNNER_TEMP_DIR/dist-legacy.p12"
+            rm -f "$RUNNER_TEMP_DIR/dist.pem"
+            security import "$RUNNER_TEMP_DIR/dist-legacy.p12" -k "$KC" -P "$IOS_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+            rm -f "$RUNNER_TEMP_DIR/dist-legacy.p12"
+          fi
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPASS" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+
+          # profiles: each must be an App Store profile (no device list, not a development one) of the right identifier
+          mkdir -p "$PROFDIR"
+          echo "$IOS_APPSTORE_PROFILE_BASE64" | base64 --decode > "$PROF"
+          echo "$IOS_APPSTORE_NSE_PROFILE_BASE64" | base64 --decode > "$NSEPROF"
+          check_profile() { # file, expected identifier suffix, secret name
+            local plist="$RUNNER_TEMP_DIR/p.plist"
+            security cms -D -i "$1" > "$plist" || { echo "::error::$3 is not a provisioning profile" >&2; exit 1; }
+            local appid; appid=$(plutil -extract Entitlements.application-identifier raw "$plist")
+            case "$appid" in *".$2") ;; *) echo "::error::$3 is for $appid, not $2" >&2; exit 1;; esac
+            if plutil -extract ProvisionedDevices raw "$plist" >/dev/null 2>&1; then
+              echo "::error::$3 is an Ad Hoc or development profile (it lists devices). Create one of type App Store Connect." >&2; exit 1
+            fi
+            if [ "$(plutil -extract Entitlements.get-task-allow raw "$plist" 2>/dev/null || echo false)" = "true" ]; then
+              echo "::error::$3 is a development profile. Create one of type App Store Connect." >&2; exit 1
+            fi
+            cp "$1" "$PROFDIR/$(plutil -extract UUID raw "$plist").mobileprovision"
+            plutil -extract Name raw "$plist"
+            rm -f "$plist"
+          }
+          NAME=$(check_profile "$PROF" com.tradeflor.ios IOS_APPSTORE_PROFILE_BASE64)
+          NSENAME=$(check_profile "$NSEPROF" com.tradeflor.ios.NotificationService IOS_APPSTORE_NSE_PROFILE_BASE64)
+          echo "profiles: $NAME / $NSENAME"
+          security cms -D -i "$PROF" | plutil -extract Entitlements.aps-environment raw - >/dev/null 2>&1 \
+            || { echo "::error::the app's App Store profile has no Push Notifications"; exit 1; }
+
+          cat > ExportStore.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>export</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key><dict>
+              <key>com.tradeflor.ios</key><string>$NAME</string>
+              <key>com.tradeflor.ios.NotificationService</key><string>$NSENAME</string>
+            </dict>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+            <key>uploadSymbols</key><true/>
+          </dict></plist>
+          PLIST
+
+          xcodebuild archive \
+            -project Tradeflor.xcodeproj -scheme Tradeflor -configuration Release \
+            -sdk iphoneos -destination "generic/platform=iOS" -archivePath build/Tradeflor.xcarchive \
+            -derivedDataPath build \
+            CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$TEAM_ID" \
+            TF_APP_PROFILE="$NAME" TF_NSE_PROFILE="$NSENAME" \
+            TF_APP_ENTITLEMENTS=Entitlements/Tradeflor.entitlements TF_NSE_ENTITLEMENTS=Entitlements/TradeflorNotify.entitlements \
+            CODE_SIGN_IDENTITY="Apple Distribution" CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES \
+            CURRENT_PROJECT_VERSION="$BUILD" $VERSION_ARG \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KC" | tee build-store.log | grep -E "error:|\*\* ARCHIVE" || true
+          grep -q "\*\* ARCHIVE SUCCEEDED \*\*" build-store.log
+          xcodebuild -exportArchive -archivePath build/Tradeflor.xcarchive -exportPath build/store \
+            -exportOptionsPlist ExportStore.plist | tee export-store.log | grep -E "error:|\*\* EXPORT" || true
+          grep -q "\*\* EXPORT SUCCEEDED \*\*" export-store.log
+          IPA=build/store/Tradeflor.ipa
+          test -f "$IPA"
+
+          # verify what goes to Apple
+          rm -rf verify && mkdir verify && (cd verify && unzip -q "../$IPA")
+          APP=verify/Payload/Tradeflor.app
+          codesign --verify --deep --strict "$APP" && echo "codesign ok"
+          if strings "$APP/Tradeflor" | grep -q TF_CI_PASSWORD; then echo "::error::CI hook leaked into Release"; exit 1; fi
+          test -d "$APP/PlugIns/TradeflorNotify.appex"
+          V=$(plutil -extract CFBundleShortVersionString raw "$APP/Info.plist")
+          B=$(plutil -extract CFBundleVersion raw "$APP/Info.plist")
+          XV=$(plutil -extract CFBundleShortVersionString raw "$APP/PlugIns/TradeflorNotify.appex/Info.plist")
+          XB=$(plutil -extract CFBundleVersion raw "$APP/PlugIns/TradeflorNotify.appex/Info.plist")
+          echo "app $V ($B), extension $XV ($XB)"
+          [ "$B" = "$BUILD" ] && [ "$XB" = "$BUILD" ] && [ "$V" = "$XV" ] || { echo "::error::version or build number of the app and its extension differ"; exit 1; }
+          codesign -d --entitlements - "$APP" 2>/dev/null | grep -A1 aps-environment | grep -q production || { echo "::error::aps-environment is not production"; exit 1; }
+          rm -rf verify
+
+          # upload (App Store Connect API key)
+          mkdir -p "$KEYDIR"
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$KEYDIR/AuthKey_$ASC_KEY_ID.p8"
+          grep -q "BEGIN PRIVATE KEY" "$KEYDIR/AuthKey_$ASC_KEY_ID.p8" || { echo "::error::ASC_KEY_P8_BASE64 is not the base64 of a .p8 key file"; exit 1; }
+          set +e
+          xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" 2>&1 | tee upload.log
+          RC=${PIPESTATUS[0]}
+          set -e
+          if [ "$RC" != "0" ] || grep -qiE "ERROR ITMS|Failed to upload|error:" upload.log; then
+            echo "::error::App Store Connect refused the upload (see the lines above)"; exit 1
+          fi
+          echo "::notice::Uploaded Tradeflor $V ($B) to App Store Connect. It appears in TestFlight after Apple processes it (about 10-30 min)."
