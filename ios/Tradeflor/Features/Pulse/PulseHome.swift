@@ -158,7 +158,14 @@ struct PulseHomeView: View {
                 }
                 .lineLimit(1).minimumScaleFactor(0.8)
                 .accessibilityElement(children: .combine)
-                Text("pulse.home.line").font(PulseFont.text(15)).foregroundStyle(PulseInk.muted).fixedSize(horizontal: false, vertical: true)
+                // one tagline (web 42d5bedd): "Plan it. Pin it. Meet up live." with the last part in the cyan gradient
+                HStack(spacing: 5) {
+                    Text("pulse.home.tag1").font(PulseFont.display(18, 700)).foregroundStyle(Theme.hex(0xDFF4F8))
+                    Text("pulse.home.tag2").font(PulseFont.display(18, 800))
+                        .foregroundStyle(LinearGradient(colors: [Theme.hex(0x7FFAFF), Theme.hex(0x19D9E3), Theme.hex(0x0AA8D8)], startPoint: .leading, endPoint: .trailing))
+                }
+                .lineLimit(1).minimumScaleFactor(0.75)
+                .accessibilityElement(children: .combine)
                 HStack(spacing: 10) {
                     Button { creating = true } label: {
                         Label("pulse.home.create", systemImage: "plus").font(PulseFont.display(15, 800)).frame(maxWidth: .infinity, minHeight: 46)
