@@ -115,11 +115,11 @@ struct PulseHomeView: View {
         }
         .sheet(isPresented: $capsules) { PulseCapsuleList(token: token, me: me).tfColorScheme() }
         .sheet(item: $sharingFor) { c in
-            PulseShareSheet(circle: c, others: max(0, (pulse.circles.first { $0.id == c.id }?.going ?? 1) - 1)) { _ in
+            PulseShareSheet(circle: c, others: max(0, (pulse.circles.first { $0.id == c.id }?.going ?? 1) - 1), token: token, me: me) { _ in
                 sharingFor = nil
                 open = PulseOpen(id: c.id)
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.large])
         }
     }
 
@@ -217,41 +217,123 @@ struct PulseHomeView: View {
     }
 }
 
-/// "Share your live location": who sees it, until when, nothing kept. The order is the sharer's: permission, first fix,
-/// consent, positions.
+/// "Share your live location": a radar with my face and the friends who will see me, three duration tiles (1 hour by default),
+/// one Start sharing button and three promises. Nothing is shared before Start sharing; the order (permission, first fix,
+/// consent, positions) is the sharer's.
 struct PulseShareSheet: View {
     let circle: PulseCircle
     let others: Int
+    var faces: [String] = []
+    var people: [String: PulsePerson] = [:]
+    var token = ""
+    var me = ""
     let onDone: (Bool) -> Void
+    @State private var minutes = 60
     @State private var busy = false
     @State private var error: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var seeLine: String {
+        if faces.count == 1, let n = people[faces[0]]?.name, !n.isEmpty {
+            return String(format: NSLocalizedString("pulse.share.radar.one", comment: ""), n)
+        }
+        return String(format: NSLocalizedString("pulse.share.radar.n", comment: ""), max(others, faces.count))
+    }
+
+    private var endTime: String {
+        guard let e = circle.expires_at, e > 0 else { return "" }
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return f.string(from: Date(timeIntervalSince1970: Double(e) / 1000))
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("pulse.share.title").font(.title3.weight(.bold)).foregroundStyle(Theme.text)
-            VStack(alignment: .leading, spacing: 8) {
-                Label(String(format: NSLocalizedString("pulse.share.who", comment: ""), others), systemImage: "person.2")
-                Label("pulse.share.until", systemImage: "clock")
-                Label("pulse.share.kept", systemImage: "trash")
-            }
-            .font(.callout).foregroundStyle(Theme.muted)
-            ForEach([(15, "pulse.share.15"), (60, "pulse.share.60"), (0, "pulse.share.end")], id: \.0) { m in
-                Button { Task { await share(m.0) } } label: {
-                    Text(LocalizedStringKey(m.1)).font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 48)
-                        .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12)).foregroundStyle(Theme.onAccent)
+        ScrollView {
+            VStack(spacing: 16) {
+                radar.frame(height: 170)
+                Text(verbatim: seeLine).font(.headline).foregroundStyle(PulseInk.ink).multilineTextAlignment(.center)
+                HStack(spacing: 10) {
+                    tile(15, "15", "pulse.share.t15b", NSLocalizedString("pulse.share.t15c", comment: ""))
+                    tile(60, "1", "pulse.share.t60b", NSLocalizedString("pulse.share.t60c", comment: ""))
+                    tile(0, NSLocalizedString("pulse.share.tenda", comment: ""), "pulse.share.tendb",
+                         endTime.isEmpty ? "" : String(format: NSLocalizedString("pulse.share.tendc", comment: ""), endTime))
+                }
+                Button { Task { await share() } } label: {
+                    HStack(spacing: 8) {
+                        if busy { ProgressView().tint(Theme.hex(0x04222C)) } else { Image(systemName: "dot.radiowaves.left.and.right") }
+                        Text("pulse.share.start")
+                    }
+                    .font(.body.weight(.bold)).frame(maxWidth: .infinity, minHeight: 52)
+                    .background(PulseInk.gradient, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .foregroundStyle(Theme.hex(0x04222C))
                 }
                 .buttonStyle(.plain)
                 .disabled(busy)
+                if let error { Text(verbatim: error).font(.footnote).foregroundStyle(PulseInk.red).multilineTextAlignment(.center) }
+                VStack(spacing: 8) {
+                    promise("person.2.fill", "pulse.share.p1")
+                    promise("timer", "pulse.share.p2")
+                    promise("sparkles", "pulse.share.p3")
+                }
+                Button("notes.cancel") { onDone(false) }.foregroundStyle(PulseInk.muted).frame(minHeight: 44)
             }
-            if busy { ProgressView().frame(maxWidth: .infinity) }
-            if let error { Text(verbatim: error).font(.footnote).foregroundStyle(Theme.danger) }
-            Button("notes.cancel") { onDone(false) }.frame(maxWidth: .infinity, minHeight: 44)
+            .padding(20)
         }
-        .padding(20)
-        .background(Theme.soul.ignoresSafeArea())
+        .modifier(PulseSheetLook())
     }
 
-    private func share(_ minutes: Int) async {
+    private var radar: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: reduceMotion)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            ZStack {
+                ForEach(0..<3, id: \.self) { i in
+                    let phase = reduceMotion ? Double(i) / 3 : ((t / 2.4) + Double(i) / 3).truncatingRemainder(dividingBy: 1)
+                    Circle().stroke(PulseInk.cyan.opacity(0.5 * (1 - phase)), lineWidth: 1.5)
+                        .frame(width: 66 + 120 * phase, height: 66 + 120 * phase)
+                }
+                Ellipse().stroke(PulseInk.amber.opacity(0.18), style: StrokeStyle(lineWidth: 1, dash: [3, 4])).frame(width: 224, height: 92)
+                ForEach(Array(faces.prefix(6).enumerated()), id: \.offset) { i, id in
+                    let a = 2 * Double.pi * Double(i) / Double(max(1, min(6, faces.count))) - Double.pi / 2
+                    Avatar(token: token, userID: id, avatarID: people[id]?.avatar_id, title: people[id]?.name ?? "", size: 30)
+                        .overlay(Circle().stroke(PulseInk.amber, lineWidth: 2))
+                        .offset(x: 112 * cos(a), y: 46 * sin(a))
+                }
+                Avatar(token: token, userID: me, avatarID: nil, title: "", size: 66)
+                    .overlay(Circle().stroke(PulseInk.cyan, lineWidth: 3))
+                    .shadow(color: PulseInk.cyan.opacity(0.5), radius: 12)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .accessibilityHidden(true)
+    }
+
+    private func tile(_ m: Int, _ big: String, _ unit: String, _ sub: String) -> some View {
+        let on = minutes == m
+        return Button { minutes = m } label: {
+            VStack(spacing: 2) {
+                Text(verbatim: big).font(.system(size: big.count > 3 ? 17 : 24, weight: .heavy)).foregroundStyle(PulseInk.ink)
+                Text(LocalizedStringKey(unit)).font(.caption.weight(.semibold)).foregroundStyle(PulseInk.ink.opacity(0.85))
+                Text(verbatim: sub).font(.caption2).foregroundStyle(PulseInk.muted).lineLimit(1).minimumScaleFactor(0.7)
+            }
+            .frame(maxWidth: .infinity, minHeight: 86)
+            .background(on ? PulseInk.cyan.opacity(0.14) : Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(on ? PulseInk.cyan : Color.white.opacity(0.08), lineWidth: on ? 2 : 1))
+            .shadow(color: on ? PulseInk.cyan.opacity(0.45) : .clear, radius: 10)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(on ? [.isSelected] : [])
+    }
+
+    private func promise(_ icon: String, _ key: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).font(.system(size: 13, weight: .semibold)).foregroundStyle(PulseInk.cyan)
+                .frame(width: 30, height: 30).background(PulseInk.cyan.opacity(0.14), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            Text(LocalizedStringKey(key)).font(.footnote).foregroundStyle(PulseInk.ink.opacity(0.85))
+            Spacer()
+        }
+    }
+
+    private func share() async {
         busy = true
         defer { busy = false }
         do {
@@ -315,7 +397,7 @@ struct PulseCreateView: View {
                         PulseMapView(token: token, styleURL: pulse.config.style_url, people: [],
                                      dest: pin.map { PulseMapDest(coordinate: $0, name: place, icon: PulseRules.activityIcon[activity] ?? "📍") },
                                      camera: camera, selected: nil, compact: true, onTapMap: { c in pin = c },
-                                     onTapPlace: { name, c in pin = c; place = name })
+                                     onTapPlace: { name, c, _ in pin = c; place = name })
                             .frame(height: 200).clipShape(RoundedRectangle(cornerRadius: 12))
                         Button {
                             Task {

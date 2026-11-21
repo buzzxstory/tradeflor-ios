@@ -55,7 +55,7 @@ struct PulseMapView: UIViewRepresentable {
     var compact = false
     var onTapMap: ((CLLocationCoordinate2D) -> Void)?
     /// A café, restaurant, bar... tapped on the map (its name and where it is): offered as the meeting place.
-    var onTapPlace: ((String, CLLocationCoordinate2D) -> Void)?
+    var onTapPlace: ((String, CLLocationCoordinate2D, String?) -> Void)?
     var onSelect: ((String) -> Void)?
     var onUserMoved: (() -> Void)?
     var onTilesFailed: ((Bool) -> Void)?
@@ -95,6 +95,22 @@ struct PulseMapView: UIViewRepresentable {
     static var offlineStyle: URL? { Bundle.main.url(forResource: "pulse-offline-style", withExtension: "json") }
 
     static let poiLayer = "pulse-poi"
+
+    /// The badge group of an OpenMapTiles poi class (desktop pulsePoi.ts poiGroup), or nil.
+    static func poiGroupKey(_ cls: String?) -> String? {
+        switch cls ?? "" {
+        case "cafe": return "cafe"
+        case "restaurant": return "food"
+        case "fast_food": return "fast"
+        case "bar", "beer": return "bar"
+        case "ice_cream", "bakery": return "sweet"
+        default: return nil
+        }
+    }
+
+    static func color(_ v: UInt32) -> Color {
+        Color(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255, blue: Double(v & 0xFF) / 255)
+    }
 
     /// The place groups (desktop pulsePoi.ts POI_GROUPS): emoji and ring colour.
     static let poiGroups: [(key: String, emoji: String, ring: UInt32)] = [
@@ -160,7 +176,7 @@ struct PulseMapView: UIViewRepresentable {
                     let name = (a["name:latin"] as? String) ?? (a["name_en"] as? String) ?? (a["name"] as? String) ?? ""
                     if !name.isEmpty {
                         let c = (f as? MLNPointFeature)?.coordinate ?? map.convert(pt, toCoordinateFrom: map)
-                        onPlace(name, c)
+                        onPlace(name, c, a["class"] as? String)
                         return
                     }
                 }
