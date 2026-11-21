@@ -15,6 +15,10 @@ struct PulseMeetupScreen: View {
     @ObservedObject private var sharer = PulseSharer.shared
     @ObservedObject private var sos = SOSCenter.shared
     @State private var secondTicker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    /// When this screen last heard anything new (a load, a position over the live connection), on this phone's clock: with
+    /// nothing for 15 s it asks the server again, so a socket that died quietly never freezes the map (live-line audit).
+    @State private var lastNews: Int64 = 0
+    @State private var safetyLoading = false
 
     @State private var view: PulseView?
     @State private var invitation: PulseInvitation?
@@ -90,6 +94,11 @@ struct PulseMeetupScreen: View {
         .onReceive(secondTicker) { d in
             now = d
             flashBubble = flashBubble.filter { $0.value.until > d }
+            safetyReload()
+        }
+        // back in front: what happened meanwhile (the socket may have stayed up and still missed frames)
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            Task { await load() }
         }
         // a frame for this meetup (an alert carries its meetup inside it)
         .onReceive(pulse.frames.filter { [circleID] d in
@@ -1199,9 +1208,23 @@ struct PulseMeetupScreen: View {
 
     // MARK: data
 
+    /// Nothing new for 15 s with the app in front and the meetup open: ask the server (one request at a time).
+    private func safetyReload() {
+        let t = PulseRules.nowMs()
+        guard view != nil, !ended, !safetyLoading, UIApplication.shared.applicationState == .active,
+              PulseRules.needsSafetyReload(lastNewsMs: lastNews, now: t) else { return }
+        safetyLoading = true
+        lastNews = t
+        Task {
+            await load()
+            safetyLoading = false
+        }
+    }
+
     private func load() async {
         do {
             let d = try await APIClient.shared.pulseCircle(token: token, id: circleID)
+            lastNews = PulseRules.nowMs()
             people.merge(d.people ?? [:]) { _, n in n }
             pulse.noteName(d.people ?? [:])
             invitation = d.invitation
@@ -1235,6 +1258,7 @@ struct PulseMeetupScreen: View {
             guard let raw = d["loc"], let data = try? JSONSerialization.data(withJSONObject: raw),
                   let loc = try? JSONDecoder().decode(PulseLocation.self, from: data) else { return }
             if let old = locations[loc.user_id], old.measured_at >= loc.measured_at { return } // never older than what is shown
+            lastNews = PulseRules.nowMs()
             previous[loc.user_id] = locations[loc.user_id]
             locations[loc.user_id] = loc
             if firstDistance[loc.user_id] == nil, let dd = loc.distance_m { firstDistance[loc.user_id] = dd }

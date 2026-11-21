@@ -34,6 +34,8 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     /// Bumped by every Stop: a start() that was still asking when the person stopped does not switch sharing back on.
     private var stopEpoch = 0
     private var expiryTimer: Timer?
+    /// When Core Location last delivered a reading (the watchdog restarts the updates when they went quiet).
+    private var lastDelivery = Date.distantPast
     private var token: String { PulseStore.shared.token }
 
     var sharingCircles: [String] { Array(shares.keys) }
@@ -189,8 +191,12 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
         let id = UUID()
         return await withCheckedContinuation { c in
             fixWaiters[id] = c
-            manager.desiredAccuracy = kCLLocationAccuracyBest
-            manager.requestLocation()
+            // while sharing, the running updates bring the next reading within a second or two: a one-shot request then
+            // could end those updates once it is answered, and sharing would go quiet
+            if shares.isEmpty {
+                manager.desiredAccuracy = kCLLocationAccuracyBest
+                manager.requestLocation()
+            }
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 self?.finishWaiter(id)
@@ -223,6 +229,7 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let l = locations.last else { return }
         Task { @MainActor in
+            self.lastDelivery = Date()
             self.lastFix = l
             self.finishFixWaiters(l)
             for id in Array(self.shares.keys) { await self.consider(l, for: id) }
@@ -242,6 +249,8 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
         if let until = s.until, now >= until { stopLocally(circle); return } // the consent's time limit
         if now < s.holdUntil { return }
         guard l.horizontalAccuracy > 0, l.horizontalAccuracy <= 5000 else { return }
+        // a cached reading handed out again is not where the person is now (and the server refuses it after 2 minutes)
+        guard PulseRules.recentEnough(Int64(l.timestamp.timeIntervalSince1970 * 1000), now: now) else { return }
         let fix = PulseRules.Fix(lat: l.coordinate.latitude, lon: l.coordinate.longitude, accuracy: l.horizontalAccuracy,
                                  speed: l.speed >= 0 ? l.speed : nil, at: Int64(l.timestamp.timeIntervalSince1970 * 1000))
         let destD = s.dest.map { PulseRules.distanceM($0.latitude, $0.longitude, fix.lat, fix.lon) }
@@ -259,11 +268,13 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
             shares[circle]?.sending = false
         } catch let e as PulseHTTPError {
             shares[circle]?.sending = false
-            switch e.status {
-            case 404, 409, 410: stopLocally(circle) // not sharing any more, ended, gone
-            case 429: shares[circle]?.holdUntil = now + Int64((e.retryAfter ?? 5) * 1000)
-            default: break // 422 (too old), 400, offline: this fix is dropped
+            if PulseRules.refusalStopsSharing(status: e.status, text: e.text) {
+                stopLocally(circle) // not sharing any more, ended, gone
+            } else if e.status == 429 {
+                shares[circle]?.holdUntil = now + Int64((e.retryAfter ?? 5) * 1000)
             }
+            // else 409 "an older position arrived after a newer one", 422 (too old, implausible jump), 400, 5xx, offline:
+            // only this reading is dropped; the next one (a second later) is tried again
         } catch {
             shares[circle]?.sending = false
         }
@@ -288,8 +299,9 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
         }
         updateAccuracy()
         manager.startUpdatingLocation()
+        lastDelivery = Date()
         if expiryTimer == nil {
-            expiryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            expiryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.checkExpiry() }
             }
         }
@@ -298,17 +310,25 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
     private func checkExpiry() {
         let now = PulseRules.nowMs()
         for (id, s) in shares where (s.until ?? .max) <= now { stopLocally(id) }
-        // a still person stays "live" (audit 4): the distance filter gives no new reading when nobody moves, and the same
-        // reading again is never sent (shouldSend refuses a 0 ms gap), so a fresh one is measured
-        if let l = lastFix, -l.timestamp.timeIntervalSinceNow > 20 { manager.requestLocation() }
+        // a still person stays "live" (audit 4): readings come with no distance filter, so the cadence (25 s still) decides
+        // what is sent. Updates that went quiet anyway (no reading for 15 s) are restarted, which hands out a fresh reading;
+        // never requestLocation() here: answering it can end the running updates, and sharing went "Last seen 2 min ago".
+        guard !shares.isEmpty else { return }
+        if PulseRules.updatesWentQuiet(lastDeliveryAgoS: Date().timeIntervalSince(lastDelivery)) {
+            manager.stopUpdatingLocation()
+            manager.startUpdatingLocation()
+            lastDelivery = Date()
+        }
     }
 
     /// The finest accuracy any shared meetup needs now; Low Power Mode: the still settings at most.
     private func updateAccuracy() {
         guard !shares.isEmpty else { return }
+        // no distance filter: a still phone otherwise gets no reading at all and turns "Last seen"; what is sent is decided by
+        // PulseRules.shouldSend (25 s still, 10 s walking, 5 s driving, 4 s near the place)
+        manager.distanceFilter = kCLDistanceFilterNone
         if ProcessInfo.processInfo.isLowPowerModeEnabled {
             manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
-            manager.distanceFilter = 15
             return
         }
         var best: PulseRules.Motion = .still
@@ -322,10 +342,9 @@ final class PulseSharer: NSObject, ObservableObject, CLLocationManagerDelegate {
             }
         }
         switch best {
-        case .near: manager.desiredAccuracy = kCLLocationAccuracyBest; manager.distanceFilter = 5
-        case .driving: manager.desiredAccuracy = kCLLocationAccuracyBest; manager.distanceFilter = 20
-        case .walking: manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters; manager.distanceFilter = 10
-        case .still: manager.desiredAccuracy = kCLLocationAccuracyHundredMeters; manager.distanceFilter = 15
+        case .near, .driving: manager.desiredAccuracy = kCLLocationAccuracyBest
+        // still: GPS-grade too (a "hundred metres" request is served from Wi-Fi now and then, with readings far apart)
+        case .walking, .still: manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         }
     }
 }

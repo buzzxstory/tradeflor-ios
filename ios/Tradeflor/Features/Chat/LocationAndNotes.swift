@@ -25,7 +25,9 @@ final class LocationSharer: NSObject, ObservableObject, CLLocationManagerDelegat
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
-        manager.distanceFilter = 10
+        // no distance filter: with one, a phone that does not move gets no reading and the "once a minute anyway" below never
+        // comes, so the chat showed the share as old (live-line audit 2026-11-21); handle() decides what is sent
+        manager.distanceFilter = kCLDistanceFilterNone
     }
 
     func start(token: String, conversationID: String, minutes: Int) {

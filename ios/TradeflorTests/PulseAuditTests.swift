@@ -42,10 +42,12 @@ final class PulseAuditTests: XCTestCase {
         XCTAssertTrue(sharer.contains("< 120"), "older than 2 minutes = no position")
     }
 
-    /// 4: a still sharer measures again instead of sending the same reading (which shouldSend refuses).
+    /// 4: a still sharer keeps getting fresh readings instead of sending the same one (which shouldSend refuses): no distance
+    /// filter, and quiet updates are restarted (never requestLocation() while sharing, see PulseLiveTests).
     func testStillHeartbeatMeasuresAgain() throws {
         let s = try source("Tradeflor/Core/PulseSharer.swift")
-        XCTAssertTrue(s.contains("manager.requestLocation() }"))
+        XCTAssertTrue(s.contains("manager.distanceFilter = kCLDistanceFilterNone"))
+        XCTAssertTrue(s.contains("PulseRules.updatesWentQuiet("))
         let r = PulseRules.Fix(lat: 1, lon: 1, accuracy: 10, speed: 0, at: 1000)
         XCTAssertFalse(PulseRules.shouldSend(r, lastSent: r, destDistance: nil), "the same reading again is never sent")
     }

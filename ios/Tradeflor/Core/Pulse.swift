@@ -355,6 +355,31 @@ enum PulseRules {
         return fix.accuracy < last.accuracy * 0.5 && last.accuracy > 30
     }
 
+    // keeping a share live (the live-line audit of 2026-11-21)
+
+    /// A reading worth sending: measured in the last 60 s (Core Location can hand out a cached one; the server refuses
+    /// anything older than 2 minutes, and an old one would only show as "Last seen").
+    static func recentEnough(_ measuredAt: Int64, now: Int64) -> Bool { now - measuredAt <= 60_000 }
+
+    /// A refused position that means "you are not sharing here any more" (measuring stops) against one bad reading (the
+    /// next one is tried). 409 is both on the server: "not sharing" stops, "an older position arrived after a newer one"
+    /// does not (it stopped sharing on the phone while the server still showed it on).
+    static func refusalStopsSharing(status: Int, text: String) -> Bool {
+        switch status {
+        case 404, 410: return true
+        case 409: return !text.lowercased().contains("older position")
+        default: return false
+        }
+    }
+
+    /// No reading from Core Location for this long while sharing: the updates are restarted.
+    static func updatesWentQuiet(lastDeliveryAgoS: Double) -> Bool { lastDeliveryAgoS > 15 }
+
+    /// The open meetup asks the server again when no position came over the live connection for this long (a socket
+    /// that died quietly is only noticed by its next ping, up to 35 s later, and frames sent meanwhile are lost).
+    static let safetyReloadMs: Int64 = 15_000
+    static func needsSafetyReload(lastNewsMs: Int64, now: Int64) -> Bool { now - lastNewsMs >= safetyReloadMs }
+
     // motion on the map: between two real positions, never predicted
 
     static let maxGlideMs = 1500.0
