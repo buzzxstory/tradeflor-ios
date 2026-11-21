@@ -261,6 +261,35 @@ enum PulseRules {
         return String(format: NSLocalizedString(m < 10_000 ? "pulse.dist.km1" : "pulse.dist.km0", comment: ""), m / 1000)
     }
 
+    /// Accuracy as people read it (web accuracyText): "8 m", "350 m", "1.2 km", "5 km" (never "5.0 km").
+    static func accuracyText(_ m: Double) -> String {
+        guard m.isFinite, m > 0 else { return "?" }
+        if m < 1000 { return String(format: NSLocalizedString("pulse.dist.m", comment: ""), Int(m.rounded())) }
+        if m < 3000 { return String(format: NSLocalizedString("pulse.dist.km1", comment: ""), m / 1000) }
+        return String(format: NSLocalizedString("pulse.dist.km0", comment: ""), (m / 1000).rounded())
+    }
+
+    /// A distance means something only when the position is precise enough for it (web distanceKnown).
+    static func distanceKnown(_ d: Double?, accuracy: Double) -> Bool {
+        guard let d, d.isFinite, accuracy.isFinite, accuracy <= 1000 else { return false }
+        return accuracy < d || d <= 75 // close to the place: the arrival rules take over
+    }
+
+    /// The straight-line time in minutes (the same estimate as `eta`), nil without a distance.
+    static func etaMinutes(distance: Double?, speed: Double?) -> Double? {
+        guard let d = distance, d.isFinite else { return nil }
+        return d * detour / ((speed ?? 0) > 3 ? drive : walk) / 60
+    }
+
+    /// "26 s", "5 min", "1 h 4 min": an age without "ago" (the label under it says it).
+    static func ageShort(_ measuredAt: Int64, now: Int64) -> String {
+        let s = max(0, Int((Double(now - measuredAt) / 1000).rounded()))
+        if s < 60 { return String(format: NSLocalizedString("pulse.age.s", comment: ""), s) }
+        let m = Int((Double(s) / 60).rounded())
+        if m < 60 { return String(format: NSLocalizedString("pulse.age.m", comment: ""), m) }
+        return String(format: NSLocalizedString("pulse.age.hm", comment: ""), m / 60, m % 60)
+    }
+
     static let detour = 1.3
     static let walk = 1.35
     static let drive = 8.0

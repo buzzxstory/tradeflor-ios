@@ -289,7 +289,7 @@ struct PulseMeetupScreen: View {
                     }
                     VStack(alignment: .leading, spacing: 1) {
                         Text(verbatim: sharingCount == 0 ? NSLocalizedString("pulse.summary.nobody", comment: "")
-                             : String(format: NSLocalizedString("pulse.summary.n", comment: ""), sharingCount, going.count))
+                             : String(format: NSLocalizedString("pulse.summary.n", comment: ""), sharingCount, members.count))
                             .font(.footnote.weight(.bold)).foregroundStyle(PulseInk.ink)
                         Text(verbatim: String(format: NSLocalizedString("pulse.summary.sub", comment: ""), members.count))
                             .font(.caption2).foregroundStyle(PulseInk.muted)
@@ -340,47 +340,135 @@ struct PulseMeetupScreen: View {
 
     private var sharingCount: Int { members.filter { $0.sharing == true }.count }
 
-    /// A person as a card: the face (cyan + a blinking green dot while sharing, green when arrived, grey when off), 👑 for
-    /// the organizer, YOU for me, the line, a progress bar when the distance means something, and a pill on the right.
+    private enum RowState { case on, here, approx, stale, off }
+
+    /// What is true now for this person (web PersonRow): arrived, location off, an old position, a position too rough for
+    /// a distance, or live.
+    private func rowState(_ m: PulseMember, _ loc: PulseLocation?) -> RowState {
+        if m.arrived { return .here }
+        guard m.sharing == true else { return .off }
+        guard let loc else { return .on }
+        if PulseRules.freshness(loc.measured_at, now: nowMs) == .stale { return .stale }
+        let known = PulseRules.distanceKnown(loc.distance_m, accuracy: loc.accuracy ?? 0)
+        // without a place there is no distance to judge: only a rough position itself is "approximate"
+        if loc.approximate || (loc.distance_m != nil && !known) { return .approx }
+        return .on
+    }
+
+    private func rowColor(_ st: RowState) -> Color {
+        switch st {
+        case .on: return Theme.hex(0x7FF0B5)
+        case .here: return Theme.hex(0x59F0A0)
+        case .approx: return Theme.hex(0xFFD39A)
+        case .stale: return Theme.hex(0xFFB08A)
+        case .off: return Theme.hex(0x8FA9B1)
+        }
+    }
+
+    private func rowLine(_ m: PulseMember, _ loc: PulseLocation?, _ st: RowState) -> String {
+        switch st {
+        case .here: return NSLocalizedString(m.arrived_kind == "manual" ? "pulse.row.said" : "pulse.arrived", comment: "")
+        case .off: return NSLocalizedString(m.response == "maybe" ? "pulse.row.maybeoff" : "pulse.row.off", comment: "")
+        case .stale: return String(format: NSLocalizedString("pulse.row.lastseen", comment: ""), PulseRules.agoText(loc?.measured_at ?? nowMs, now: nowMs))
+        case .approx: return NSLocalizedString("pulse.row.approx", comment: "")
+        case .on:
+            guard let loc else { return NSLocalizedString("pulse.row.sharing", comment: "") }
+            let fresh = nowMs - loc.measured_at < 10_000
+            return String(format: NSLocalizedString("pulse.row.live", comment: ""),
+                          fresh ? NSLocalizedString("pulse.row.justnow", comment: "") : PulseRules.agoText(loc.measured_at, now: nowMs))
+        }
+    }
+
+    /// The one figure on the right and what it means; a straight-line time over 3 h says nothing, so the distance instead.
+    private func rowMetric(_ loc: PulseLocation?, _ st: RowState) -> (value: String, label: String)? {
+        switch st {
+        case .here: return (NSLocalizedString("pulse.m.here", comment: ""), NSLocalizedString("pulse.m.atplace", comment: ""))
+        case .approx: return ("±" + PulseRules.accuracyText(loc?.accuracy ?? 0), NSLocalizedString("pulse.m.accuracy", comment: ""))
+        case .stale: return (PulseRules.ageShort(loc?.measured_at ?? nowMs, now: nowMs), NSLocalizedString("pulse.m.ago", comment: ""))
+        case .off: return nil
+        case .on:
+            guard let loc, let d = loc.distance_m, PulseRules.distanceKnown(d, accuracy: loc.accuracy ?? 0) else { return nil }
+            if let mins = PulseRules.etaMinutes(distance: d, speed: loc.speed), mins <= 180,
+               let e = PulseRules.eta(distance: d, speed: loc.speed, arrived: false) {
+                return (e, String(format: NSLocalizedString("pulse.m.est", comment: ""), PulseRules.distanceText(d)))
+            }
+            return (PulseRules.distanceText(d), NSLocalizedString("pulse.m.toplace", comment: ""))
+        }
+    }
+
+    /// The person's own status as a quote ("“Parking now”"), nil without one.
+    private func statusQuote(_ m: PulseMember) -> String? {
+        guard let t = m.status?.text, !t.isEmpty else { return nil }
+        let emoji = m.status?.emoji.map { $0 + " " } ?? ""
+        return "“" + emoji + t + "”"
+    }
+
+    private func metricView(_ value: String, _ label: String, _ st: RowState) -> some View {
+        let style: AnyShapeStyle = st == .on
+            ? AnyShapeStyle(LinearGradient(colors: [Theme.hex(0x7FF6FF), Theme.hex(0x00D4DF)], startPoint: .leading, endPoint: .trailing))
+            : AnyShapeStyle(rowColor(st))
+        return VStack(alignment: .trailing, spacing: 2) {
+            Text(verbatim: value).font(PulseFont.display(17, 800)).monospacedDigit().lineLimit(1).foregroundStyle(style)
+            Text(verbatim: label).font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.hex(0x7FB5C2)).lineLimit(1)
+        }
+        .frame(minWidth: 64, maxWidth: 120, alignment: .trailing)
+    }
+
+    /// A person as a card (web 2e26b511): the face with a ring by state (turquoise live, green arrived, grey off) and a
+    /// green live dot; the name with YOU / HOST; one coloured state line; their own status as a quote; a thin bar only when
+    /// live with a known distance; one figure with its meaning on the right.
     private func participantRow(_ m: PulseMember) -> some View {
         let p = people[m.user_id]
         let loc = locations[m.user_id]
-        let stale = loc.map { PulseRules.freshness($0.measured_at, now: nowMs) == .stale } ?? false
-        let sharing = m.sharing == true && loc != nil
-        let ring: Color = m.arrived ? PulseInk.green : (sharing ? PulseInk.cyan : Color.white.opacity(0.2))
+        let st = rowState(m, loc)
+        let color = rowColor(st)
+        let ring: Color = st == .here ? PulseInk.green : (st == .off ? Color.white.opacity(0.22) : PulseInk.cyan)
+        let known = loc.map { PulseRules.distanceKnown($0.distance_m, accuracy: $0.accuracy ?? 0) } ?? false
         let pct = PulseRules.progress(first: firstDistance[m.user_id], now: loc?.distance_m, arrived: m.arrived)
-        let showBar = sharing && !stale && !m.arrived && (firstDistance[m.user_id] ?? 0) >= 150
         let blink = Int(now.timeIntervalSince1970) % 2 == 0
+        let status = statusQuote(m)
         return Button { if loc != nil { selected = m.user_id; camera = PulseCamera(mode: .follow(m.user_id), nonce: camera.nonce + 1) } } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 ZStack(alignment: .bottomTrailing) {
-                    Avatar(token: token, userID: m.user_id, avatarID: p?.avatar_id, title: p?.name ?? "", size: 40)
-                        .saturation(sharing || m.arrived ? 1 : 0)
+                    Avatar(token: token, userID: m.user_id, avatarID: p?.avatar_id, title: p?.name ?? "", size: 48)
+                        .saturation(st == .off ? 0 : 1)
                         .overlay(Circle().stroke(ring, lineWidth: 2.5))
-                    if sharing && !m.arrived {
-                        Circle().fill(PulseInk.green).frame(width: 9, height: 9).opacity(blink ? 1 : 0.35)
+                    if m.sharing == true && st != .off {
+                        Circle().fill(PulseInk.green).frame(width: 11, height: 11).opacity(blink ? 1 : 0.35)
                             .overlay(Circle().stroke(Theme.hex(0x061A24), lineWidth: 2))
                     }
                 }
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 4) {
-                        Text(verbatim: p?.name ?? name(m.user_id)).font(.subheadline.weight(.semibold)).foregroundStyle(PulseInk.ink).lineLimit(1)
-                        if m.role == "organizer" { Text(verbatim: "👑").font(.caption) }
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 5) {
+                        Text(verbatim: p?.name ?? name(m.user_id)).font(PulseFont.display(15.5, 800)).foregroundStyle(PulseInk.ink).lineLimit(1)
                         if m.user_id == me {
-                            Text("pulse.you").font(.system(size: 9, weight: .heavy)).foregroundStyle(PulseInk.cyan)
-                                .padding(.horizontal, 5).padding(.vertical, 1).background(PulseInk.cyan.opacity(0.16), in: Capsule())
+                            Text("pulse.you").font(.system(size: 9.5, weight: .black)).tracking(0.7).foregroundStyle(Theme.hex(0x04222C))
+                                .padding(.horizontal, 7).padding(.vertical, 2).background(PulseInk.cyan, in: Capsule())
+                        }
+                        if m.role == "organizer" {
+                            Text("pulse.host").font(.system(size: 9.5, weight: .black)).tracking(0.7).foregroundStyle(Theme.hex(0x3A2A00))
+                                .padding(.horizontal, 7).padding(.vertical, 2)
+                                .background(LinearGradient(colors: [Theme.hex(0xFFE08A), Theme.hex(0xF2B155)], startPoint: .topLeading, endPoint: .bottomTrailing), in: Capsule())
                         }
                     }
-                    Text(verbatim: m.status?.text.map { (m.status?.emoji.map { $0 + " " } ?? "") + $0 } ?? personLine(m, loc))
-                        .font(.caption).foregroundStyle(PulseInk.muted).lineLimit(1)
-                    if showBar { ProgressView(value: Double(pct), total: 100).tint(PulseInk.cyan) }
+                    HStack(spacing: 6) {
+                        Circle().fill(color).frame(width: 7, height: 7)
+                        Text(verbatim: rowLine(m, loc, st)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(color).lineLimit(1)
+                    }
+                    if let status {
+                        Text(verbatim: status).font(.system(size: 12.5).italic()).foregroundStyle(Theme.hex(0xCFE7EE)).lineLimit(1)
+                    }
+                    if st == .on && known {
+                        ProgressView(value: Double(max(pct, 4)), total: 100).tint(PulseInk.cyan).padding(.top, 2)
+                    }
                 }
                 Spacer(minLength: 4)
-                personPill(m, loc, stale: stale)
+                if let metric = rowMetric(loc, st) { metricView(metric.value, metric.label, st) }
             }
-            .padding(10)
-            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.white.opacity(0.06), lineWidth: 1))
+            .padding(.horizontal, 14).padding(.vertical, 12)
+            .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.white.opacity(0.06), lineWidth: 1))
+            .opacity(st == .off ? 0.85 : 1)
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -390,20 +478,6 @@ struct PulseMeetupScreen: View {
                 }
             }
         }
-    }
-
-    private func personPill(_ m: PulseMember, _ loc: PulseLocation?, stale: Bool) -> some View {
-        let (text, color): (String, Color) = {
-            if m.arrived { return (NSLocalizedString("pulse.pill.here", comment: ""), PulseInk.green) }
-            guard let loc else { return (NSLocalizedString("pulse.pill.off", comment: ""), PulseInk.muted) }
-            if stale { return (PulseRules.agoText(loc.measured_at, now: nowMs), PulseInk.muted) }
-            if loc.approximate { return (String(format: NSLocalizedString("pulse.pill.approx", comment: ""), PulseRules.distanceText(loc.accuracy ?? 0)), PulseInk.amber) }
-            if let e = PulseRules.eta(distance: loc.distance_m, speed: loc.speed, arrived: false) { return (e, PulseInk.cyan) }
-            return (loc.distance_m.map(PulseRules.distanceText) ?? NSLocalizedString("pulse.pill.live", comment: ""), PulseInk.cyan)
-        }()
-        return Text(verbatim: text).font(.system(size: 11, weight: .bold).monospacedDigit()).foregroundStyle(color)
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(color.opacity(0.14), in: Capsule())
     }
 
     @ViewBuilder private var activityList: some View {
@@ -793,8 +867,8 @@ struct PulseMeetupScreen: View {
         await load()
     }
 
-    /// Find My Friend (web, owner "organize it"): per friend, the face, the name and a big distance away; two chips (the age
-    /// and the accuracy); Directions and Meet halfway. Nothing else.
+    /// Find My Friend (web 208efd39): per friend, the face, the name and one coloured state line; Updated / Accuracy /
+    /// Distance as three labelled values; one plain sentence only when needed; Directions and Meet halfway.
     private var findSheet: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -812,24 +886,34 @@ struct PulseMeetupScreen: View {
         let mine = sharingHere ? sharer.lastFix : nil
         let away = mine.map { PulseRules.distanceM($0.coordinate.latitude, $0.coordinate.longitude, loc.lat, loc.lon) }
         let acc = loc.accuracy ?? 0
+        let known = away.map { PulseRules.distanceKnown($0, accuracy: max(acc, mine?.horizontalAccuracy ?? 0)) } ?? false
+        let state: (key: String, color: Color) = stale ? ("pulse.find.state.stale", Theme.hex(0xFFB08A))
+            : loc.approximate ? ("pulse.find.state.approx", Theme.hex(0xFFD39A)) : ("pulse.find.state.live", Theme.hex(0x7FF0B5))
+        let distance = known ? away.map(PulseRules.distanceText) ?? "—" : "—"
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
                 Avatar(token: token, userID: m.user_id, avatarID: people[m.user_id]?.avatar_id, title: name(m.user_id), size: 46)
                     .overlay(Circle().stroke(PulseInk.cyan, lineWidth: 2.5))
-                Text(verbatim: name(m.user_id)).font(PulseFont.display(17, 800)).foregroundStyle(PulseInk.ink).lineLimit(1)
-                Spacer(minLength: 6)
-                if let away {
-                    VStack(alignment: .trailing, spacing: 0) {
-                        Text(verbatim: PulseRules.distanceText(away)).font(.system(size: 24, weight: .bold).monospacedDigit())
-                            .foregroundStyle(LinearGradient(colors: [Theme.hex(0x7FFAFF), PulseInk.cyan], startPoint: .top, endPoint: .bottom))
-                        Text("pulse.find.away").font(.system(size: 9.5, weight: .heavy)).tracking(1).foregroundStyle(PulseInk.muted)
-                    }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: name(m.user_id)).font(PulseFont.display(17, 800)).foregroundStyle(PulseInk.ink).lineLimit(1)
+                    Text(LocalizedStringKey(state.key)).font(.system(size: 12.5, weight: .bold)).foregroundStyle(state.color)
                 }
+                Spacer(minLength: 0)
             }
-            HStack(spacing: 8) {
-                findChip("clock", PulseRules.agoText(loc.measured_at, now: nowMs), stale ? PulseInk.amber : PulseInk.muted)
-                findChip("location", loc.approximate ? String(format: NSLocalizedString("pulse.find.approx", comment: ""), PulseRules.distanceText(acc))
-                                                     : "±" + PulseRules.distanceText(acc), loc.approximate ? PulseInk.amber : PulseInk.muted)
+            HStack(spacing: 0) {
+                findStat("clock", "pulse.find.updated", PulseRules.agoText(loc.measured_at, now: nowMs), warn: stale)
+                Rectangle().fill(PulseInk.cyan.opacity(0.18)).frame(width: 1)
+                findStat("scope", "pulse.find.accuracy", "±" + PulseRules.accuracyText(acc), warn: loc.approximate)
+                Rectangle().fill(PulseInk.cyan.opacity(0.18)).frame(width: 1)
+                findStat("mappin", "pulse.find.distance", distance, warn: false)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            .background(PulseInk.cyan.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(PulseInk.cyan.opacity(0.2), lineWidth: 1))
+            if away == nil {
+                Text("pulse.find.hint.share").font(.system(size: 12.5)).foregroundStyle(Theme.hex(0xA9CDD6))
+            } else if !known {
+                Text("pulse.find.hint.hidden").font(.system(size: 12.5)).foregroundStyle(Theme.hex(0xA9CDD6))
             }
             HStack(spacing: 10) {
                 Button {
@@ -869,10 +953,20 @@ struct PulseMeetupScreen: View {
         }
     }
 
-    private func findChip(_ icon: String, _ text: String, _ c: Color) -> some View {
-        Label(text, systemImage: icon).font(PulseFont.text(12, 600)).foregroundStyle(c)
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(c.opacity(0.12), in: Capsule())
+    /// One of the three labelled values: a tiny uppercase label with its icon, the value under it.
+    private func findStat(_ icon: String, _ label: String, _ value: String, warn: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 10, weight: .bold))
+                Text(LocalizedStringKey(label)).textCase(.uppercase)
+            }
+            .font(.system(size: 10.5, weight: .heavy)).tracking(0.7).foregroundStyle(Theme.hex(0x7FB5C2)).lineLimit(1)
+            Text(verbatim: value).font(PulseFont.display(15, 800)).foregroundStyle(warn ? Theme.hex(0xFFD39A) : .white)
+                .lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 
     private var moreSheet: some View {

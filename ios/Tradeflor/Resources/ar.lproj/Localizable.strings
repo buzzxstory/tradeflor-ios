@@ -2518,7 +2518,7 @@
 "pulse.timer.starts" = "يبدأ بعد";
 "pulse.summary.nobody" = "لا أحد يشارك بعد";
 "pulse.summary.n" = "%d من %d يشاركون";
-"pulse.summary.sub" = "%d أشخاص · الأشخاص والنشاط";
+"pulse.summary.sub" = "%d أشخاص في هذا اللقاء";
 "pulse.tab.people" = "الأشخاص %d";
 "pulse.you" = "أنت";
 "pulse.pill.here" = "✓ هنا";
@@ -2709,3 +2709,31 @@
 "sos.rs.failed" = "فشل الإشعار";
 "sos.rs.blocked" = "لا يمكن تنبيهه";
 "sos.rs.waiting" = "بانتظار";
+
+/* Pulse people rows and Find My Friend (web 2e26b511, 208efd39) */
+"pulse.host" = "المضيف";
+"pulse.row.live" = "مباشر · %@";
+"pulse.row.justnow" = "الآن";
+"pulse.row.sharing" = "يشارك";
+"pulse.row.lastseen" = "آخر ظهور %@";
+"pulse.row.approx" = "موقع تقريبي";
+"pulse.row.off" = "الموقع متوقف";
+"pulse.row.maybeoff" = "ربما · الموقع متوقف";
+"pulse.row.said" = "قال «أنا هنا»";
+"pulse.m.here" = "هنا";
+"pulse.m.atplace" = "في المكان";
+"pulse.m.accuracy" = "الدقة";
+"pulse.m.ago" = "مضت";
+"pulse.m.est" = "%@ · تقديري";
+"pulse.m.toplace" = "إلى المكان";
+"pulse.age.s" = "%d ث";
+"pulse.age.m" = "%d د";
+"pulse.age.hm" = "%d س %d د";
+"pulse.find.state.live" = "موقع مباشر";
+"pulse.find.state.approx" = "موقع تقريبي";
+"pulse.find.state.stale" = "آخر موقع معروف";
+"pulse.find.updated" = "التحديث";
+"pulse.find.accuracy" = "الدقة";
+"pulse.find.distance" = "المسافة";
+"pulse.find.hint.share" = "شارك موقعك لترى المسافة بينكما.";
+"pulse.find.hint.hidden" = "المسافة مخفية: أحد الموقعين تقريبي فقط.";

@@ -2518,7 +2518,7 @@
 "pulse.timer.starts" = "STARTS IN";
 "pulse.summary.nobody" = "Nobody is sharing yet";
 "pulse.summary.n" = "%d of %d sharing";
-"pulse.summary.sub" = "%d people · people & activity";
+"pulse.summary.sub" = "%d people in this meetup";
 "pulse.tab.people" = "People %d";
 "pulse.you" = "YOU";
 "pulse.pill.here" = "✓ Here";
@@ -2709,3 +2709,31 @@
 "sos.rs.failed" = "Notification failed";
 "sos.rs.blocked" = "Can't be notified";
 "sos.rs.waiting" = "Waiting";
+
+/* Pulse people rows and Find My Friend (web 2e26b511, 208efd39) */
+"pulse.host" = "HOST";
+"pulse.row.live" = "Live · %@";
+"pulse.row.justnow" = "just now";
+"pulse.row.sharing" = "Sharing";
+"pulse.row.lastseen" = "Last seen %@";
+"pulse.row.approx" = "Approximate location";
+"pulse.row.off" = "Location off";
+"pulse.row.maybeoff" = "Maybe · location off";
+"pulse.row.said" = "Said “I'm here”";
+"pulse.m.here" = "Here";
+"pulse.m.atplace" = "at the place";
+"pulse.m.accuracy" = "accuracy";
+"pulse.m.ago" = "ago";
+"pulse.m.est" = "%@ · est.";
+"pulse.m.toplace" = "to the place";
+"pulse.age.s" = "%d s";
+"pulse.age.m" = "%d min";
+"pulse.age.hm" = "%d h %d min";
+"pulse.find.state.live" = "Live location";
+"pulse.find.state.approx" = "Approximate location";
+"pulse.find.state.stale" = "Last known position";
+"pulse.find.updated" = "Updated";
+"pulse.find.accuracy" = "Accuracy";
+"pulse.find.distance" = "Distance";
+"pulse.find.hint.share" = "Share your own location to see how far apart you are.";
+"pulse.find.hint.hidden" = "The distance is hidden: one of the positions is only approximate.";
